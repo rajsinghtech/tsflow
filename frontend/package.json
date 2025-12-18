@@ -29,7 +29,7 @@
     "d3": "^7.9.0",
     "date-fns": "^2.29.3",
     "elkjs": "^0.10.0",
-    "lucide-react": "^0.323.0",
+    "lucide-react": "^0.562.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-resizable-panels": "^3.0.5",
