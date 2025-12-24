@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -10,8 +11,25 @@ import (
 	tailscale "tailscale.com/client/tailscale/v2"
 )
 
+var deviceIDPattern = regexp.MustCompile(`^n[A-Za-z0-9_-]{10,50}$`)
+
 type Handlers struct {
 	tailscaleService *services.TailscaleService
+}
+
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+}
+
+func sanitizeError(err error) string {
+	// Don't expose internal error details in production
+	// This prevents leaking sensitive information about the system
+	errStr := err.Error()
+	if len(errStr) > 200 {
+		return "An error occurred while processing your request"
+	}
+	return "An error occurred while processing your request"
 }
 
 func NewHandlers(tailscaleService *services.TailscaleService) *Handlers {
@@ -29,12 +47,12 @@ func (h *Handlers) HealthCheck(c *gin.Context) {
 }
 
 func (h *Handlers) GetDevices(c *gin.Context) {
-	devices, err := h.tailscaleService.GetDevices()
+	devices, err := h.tailscaleService.GetDevices(c.Request.Context())
 	if err != nil {
 		log.Printf("ERROR GetDevices failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to fetch devices",
-			"message": err.Error(),
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "Failed to fetch devices",
+			Message: sanitizeError(err),
 		})
 		return
 	}
@@ -45,14 +63,14 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 
 func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	// Fetch VIP services
-	vipServices, servicesErr := h.tailscaleService.GetVIPServices()
+	vipServices, servicesErr := h.tailscaleService.GetVIPServices(c.Request.Context())
 	if servicesErr != nil {
 		log.Printf("WARNING GetVIPServices failed: %v", servicesErr)
 		vipServices = make(map[string]services.VIPServiceInfo)
 	}
-	
+
 	// Fetch static records
-	staticRecords, recordsErr := h.tailscaleService.GetStaticRecords()
+	staticRecords, recordsErr := h.tailscaleService.GetStaticRecords(c.Request.Context())
 	if recordsErr != nil {
 		log.Printf("WARNING GetStaticRecords failed: %v", recordsErr)
 		staticRecords = make(map[string]services.StaticRecordInfo)
@@ -113,7 +131,7 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 		// Use smaller chunks and fewer parallel requests for 30+ day queries
 		chunkSize := 24 * time.Hour // 1-day chunks to prevent timeouts
 		maxParallel := 2            // Reduce parallel requests to prevent memory issues
-		chunks, err := h.tailscaleService.GetNetworkLogsChunkedParallel(start, end, chunkSize, maxParallel)
+		chunks, err := h.tailscaleService.GetNetworkLogsChunkedParallel(c.Request.Context(), start, end, chunkSize, maxParallel)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "Failed to fetch network logs",
@@ -127,6 +145,11 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 		maxLogs := 10000 // Limit total logs to prevent memory issues
 		
 		for _, chunk := range chunks {
+			// Check if we've hit the limit before processing more chunks
+			if len(allLogs) >= maxLogs {
+				break
+			}
+
 			if logsArray, ok := chunk.([]interface{}); ok {
 				if len(allLogs)+len(logsArray) > maxLogs {
 					// Truncate if we're approaching the limit
@@ -150,30 +173,26 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 						}
 						allLogs = append(allLogs, logsArray...)
 					} else if logsArray, ok := logs.([]tailscale.NetworkFlowLog); ok {
-						// Convert []NetworkFlowLog to []interface{}
+						// Convert []NetworkFlowLog to []interface{} with bounds checking
 						for _, log := range logsArray {
+							if len(allLogs) >= maxLogs {
+								break
+							}
 							allLogs = append(allLogs, log)
 						}
+					} else {
+						log.Printf("Warning: unexpected logs type in chunk map: %T", logs)
 					}
+				} else {
+					log.Printf("Warning: chunk map missing 'logs' field")
 				}
+			} else {
+				log.Printf("Warning: unexpected chunk type: %T", chunk)
 			}
 		}
 		
-		// If we have too many logs, sample them to prevent response size issues
+		// allLogs is already limited to maxLogs (10000), so no additional sampling needed
 		finalLogs := allLogs
-		if len(allLogs) > 50000 {
-			// Sample every Nth log to get approximately 50,000 logs
-			sampleRate := len(allLogs) / 50000
-			if sampleRate < 1 {
-				sampleRate = 1
-			}
-			
-			sampledLogs := make([]interface{}, 0, 50000)
-			for i := 0; i < len(allLogs); i += sampleRate {
-				sampledLogs = append(sampledLogs, allLogs[i])
-			}
-			finalLogs = sampledLogs
-		}
 		
 		c.JSON(http.StatusOK, gin.H{
 			"logs": finalLogs,
@@ -183,13 +202,18 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 				"duration":    duration.String(),
 				"totalLogs":   len(allLogs),
 				"sampled":     len(finalLogs) < len(allLogs),
-				"sampleRate":  len(allLogs) / len(finalLogs),
+				"sampleRate":  func() float64 {
+				if len(allLogs) > 0 {
+					return float64(len(finalLogs)) / float64(len(allLogs))
+				}
+				return 1.0
+			}(),
 			},
 		})
 		return
 	}
 
-	logs, err := h.tailscaleService.GetNetworkLogs(start, end)
+	logs, err := h.tailscaleService.GetNetworkLogs(c.Request.Context(), start, end)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Failed to fetch network logs",
@@ -234,6 +258,14 @@ func (h *Handlers) GetDeviceFlows(c *gin.Context) {
 		return
 	}
 
+	if !deviceIDPattern.MatchString(deviceID) {
+		log.Printf("ERROR GetDeviceFlows: invalid device ID format: %s", deviceID)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid device ID format",
+		})
+		return
+	}
+
 	flows, err := h.tailscaleService.GetDeviceFlows(deviceID)
 	if err != nil {
 		log.Printf("ERROR GetDeviceFlows failed for device %s: %v", deviceID, err)
@@ -248,7 +280,7 @@ func (h *Handlers) GetDeviceFlows(c *gin.Context) {
 }
 
 func (h *Handlers) GetDNSNameservers(c *gin.Context) {
-	nameservers, err := h.tailscaleService.GetDNSNameservers()
+	nameservers, err := h.tailscaleService.GetDNSNameservers(c.Request.Context())
 	if err != nil {
 		log.Printf("ERROR GetDNSNameservers failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

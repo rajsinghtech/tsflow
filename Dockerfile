@@ -1,12 +1,12 @@
 # Multi-stage build for TSFlow
 
 # Frontend build stage
-FROM node:20-alpine AS frontend-build
+FROM node:20.17-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm install
 
 COPY frontend/ ./
 RUN npm run build
@@ -14,25 +14,32 @@ RUN npm run build
 # Backend build stage
 FROM golang:1.25-alpine AS backend-build
 
-WORKDIR /app/backend
+WORKDIR /app
 
 RUN apk add --no-cache git
 
-COPY backend/go.mod backend/go.sum ./
-RUN go mod download
+# Copy root go.mod for the embed package
+COPY go.mod ./
+COPY embed.go ./
 
-COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -o tsflow-backend ./main.go
+# Copy backend module
+COPY backend/ ./backend/
+
+# Copy built frontend for embedding
+COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+
+# Build from backend directory
+WORKDIR /app/backend
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o ../tsflow-backend ./main.go
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.20
 
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
-COPY --from=backend-build /app/backend/tsflow-backend ./
-COPY --from=frontend-build /app/frontend/dist ./dist
+COPY --from=backend-build /app/tsflow-backend ./
 
 # Set default environment to production
 ENV ENVIRONMENT=production

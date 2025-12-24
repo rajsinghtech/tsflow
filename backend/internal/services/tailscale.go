@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -86,18 +87,16 @@ func NewTailscaleService(cfg *config.Config) *TailscaleService {
 		ts.useOAuth = true
 	} else if cfg.TailscaleAPIKey != "" {
 		ts.apiKey = cfg.TailscaleAPIKey
-		ts.client = &http.Client{
-			Timeout: 30 * time.Minute, // Much longer timeout for large requests
-		}
+		// No global timeout - let request contexts control timeouts
+		ts.client = &http.Client{}
 		ts.tsClient = &tailscale.Client{
 			APIKey:  cfg.TailscaleAPIKey,
 			Tailnet: cfg.TailscaleTailnet,
 		}
 		ts.useOAuth = false
 	} else {
-		ts.client = &http.Client{
-			Timeout: 30 * time.Minute, // Much longer timeout for large requests
-		}
+		// No global timeout - let request contexts control timeouts
+		ts.client = &http.Client{}
 	}
 
 	return ts
@@ -168,7 +167,10 @@ func (ts *TailscaleService) doRequest(ctx context.Context, endpoint string) ([]b
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read error response body (status %d): %w", resp.StatusCode, err)
+		}
 		return nil, utils.HTTPError(resp.StatusCode, string(body))
 	}
 
@@ -184,12 +186,12 @@ func (ts *TailscaleService) isRetryableError(err error) bool {
 	return utils.IsRetryable(err)
 }
 
-func (ts *TailscaleService) GetDevices() (*DevicesResponse, error) {
+func (ts *TailscaleService) GetDevices(ctx context.Context) (*DevicesResponse, error) {
 	if ts.tsClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		
-		devices, err := ts.tsClient.Devices().List(ctx)
+
+		devices, err := ts.tsClient.Devices().List(timeoutCtx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get devices from tailscale client: %w", err)
 		}
@@ -205,7 +207,7 @@ func (ts *TailscaleService) GetDevices() (*DevicesResponse, error) {
 				OS:                     device.OS,
 				Addresses:              device.Addresses,
 				Online:                 !device.LastSeen.IsZero() && time.Since(device.LastSeen.Time) < 2*time.Minute,
-				LastSeen:               device.LastSeen.Time.Format(time.RFC3339),
+				LastSeen:               func() string { if device.LastSeen.IsZero() { return "" }; return device.LastSeen.Time.Format(time.RFC3339) }(),
 				Authorized:             device.Authorized,
 				KeyExpiryDisabled:      device.KeyExpiryDisabled,
 				Created:                device.Created.Time.Format(time.RFC3339),
@@ -226,10 +228,10 @@ func (ts *TailscaleService) GetDevices() (*DevicesResponse, error) {
 	// Fallback to old implementation
 	endpoint := fmt.Sprintf("/tailnet/%s/devices", ts.tailnet)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	body, err := ts.makeRequest(ctx, endpoint)
+	body, err := ts.makeRequest(timeoutCtx, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -242,19 +244,19 @@ func (ts *TailscaleService) GetDevices() (*DevicesResponse, error) {
 	return &response, nil
 }
 
-func (ts *TailscaleService) GetNetworkLogs(start, end string) (interface{}, error) {
+func (ts *TailscaleService) GetNetworkLogs(ctx context.Context, start, end string) (interface{}, error) {
 	// Parse time range to determine if we need chunking
 	startTime, err := time.Parse(time.RFC3339, start)
 	if err != nil {
 		return nil, fmt.Errorf("invalid start time: %w", err)
 	}
-	
+
 	endTime, err := time.Parse(time.RFC3339, end)
 	if err != nil {
 		return nil, fmt.Errorf("invalid end time: %w", err)
 	}
-	
-	
+
+
 	// For smaller ranges, use the original approach
 	if ts.tsClient != nil {
 		// Use much longer timeout for larger time ranges
@@ -262,24 +264,27 @@ func (ts *TailscaleService) GetNetworkLogs(start, end string) (interface{}, erro
 		if endTime.Sub(startTime) > 7*24*time.Hour {
 			timeoutDuration = 30 * time.Minute // Much longer timeout for 30+ day queries
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
+		timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 		defer cancel()
-		
+
 		var logs []tailscale.NetworkFlowLog
-		
-		err = ts.tsClient.Logging().GetNetworkFlowLogs(ctx, tailscale.NetworkFlowLogsRequest{
+		var mu sync.Mutex
+
+		err = ts.tsClient.Logging().GetNetworkFlowLogs(timeoutCtx, tailscale.NetworkFlowLogsRequest{
 			Start: startTime,
 			End:   endTime,
 		}, func(log tailscale.NetworkFlowLog) error {
+			mu.Lock()
 			logs = append(logs, log)
+			mu.Unlock()
 			return nil
 		})
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch network logs from tailscale client: %w", err)
 		}
-		
-		
+
+
 		return map[string]interface{}{
 			"logs": logs,
 		}, nil
@@ -297,10 +302,10 @@ func (ts *TailscaleService) GetNetworkLogs(start, end string) (interface{}, erro
 	if endTime.Sub(startTime) > 7*24*time.Hour {
 		timeoutDuration = 30 * time.Minute // Much longer timeout for 30+ day queries
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 	defer cancel()
 
-	body, err := ts.makeRequest(ctx, endpoint)
+	body, err := ts.makeRequest(timeoutCtx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch network logs: %w", err)
 	}
@@ -324,7 +329,7 @@ func (ts *TailscaleService) GetNetworkLogs(start, end string) (interface{}, erro
 }
 
 // GetNetworkLogsChunked retrieves network logs in chunks for large time ranges
-func (ts *TailscaleService) GetNetworkLogsChunked(start, end string, chunkSize time.Duration) ([]interface{}, error) {
+func (ts *TailscaleService) GetNetworkLogsChunked(ctx context.Context, start, end string, chunkSize time.Duration) ([]interface{}, error) {
 	startTime, err := time.Parse(time.RFC3339, start)
 	if err != nil {
 		return nil, fmt.Errorf("invalid start time: %w", err)
@@ -337,7 +342,7 @@ func (ts *TailscaleService) GetNetworkLogsChunked(start, end string, chunkSize t
 
 	// If the time range is small enough, use the regular method
 	if endTime.Sub(startTime) <= chunkSize {
-		result, err := ts.GetNetworkLogs(start, end)
+		result, err := ts.GetNetworkLogs(ctx, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -356,6 +361,7 @@ func (ts *TailscaleService) GetNetworkLogsChunked(start, end string, chunkSize t
 
 		// Fetch logs for this chunk
 		logs, err := ts.GetNetworkLogs(
+			ctx,
 			currentStart.Format(time.RFC3339),
 			currentEnd.Format(time.RFC3339),
 		)
@@ -376,10 +382,12 @@ func (ts *TailscaleService) GetNetworkLogsChunked(start, end string, chunkSize t
 }
 
 // GetNetworkLogsChunkedParallel retrieves network logs in parallel chunks for large time ranges
-func (ts *TailscaleService) GetNetworkLogsChunkedParallel(start, end string, chunkSize time.Duration, maxConcurrency int) ([]interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+func (ts *TailscaleService) GetNetworkLogsChunkedParallel(ctx context.Context, start, end string, chunkSize time.Duration, maxConcurrency int) ([]interface{}, error) {
+	// Use a longer timeout for chunked queries to accommodate large time ranges
+	// Each chunk may need up to 30 minutes, and with parallel execution we need headroom
+	timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
-	return ts.GetNetworkLogsChunkedParallelWithContext(ctx, start, end, chunkSize, maxConcurrency)
+	return ts.GetNetworkLogsChunkedParallelWithContext(timeoutCtx, start, end, chunkSize, maxConcurrency)
 }
 
 // GetNetworkLogsChunkedParallelWithContext retrieves network logs in parallel chunks with context support
@@ -409,7 +417,7 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 
 	// If only one chunk, use regular method
 	if len(chunks) <= 1 {
-		result, err := ts.GetNetworkLogs(start, end)
+		result, err := ts.GetNetworkLogs(ctx, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -437,10 +445,11 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 			// Recover from panics
 			defer func() {
 				if r := recover(); r != nil {
+					stack := debug.Stack()
 					resultsChan <- result{
 						index: index,
 						logs:  nil,
-						err:   fmt.Errorf("panic recovered: %v", r),
+						err:   fmt.Errorf("panic recovered: %v\nstack trace:\n%s", r, string(stack)),
 					}
 				}
 			}()
@@ -471,6 +480,7 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 			}
 
 			logs, err := ts.GetNetworkLogs(
+				ctx,
 				chunkStart.Format(time.RFC3339),
 				chunkEnd.Format(time.RFC3339),
 			)
@@ -510,16 +520,29 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 		}
 	}
 
-	// Filter out nil results and maintain order
+	// Collect all logs while maintaining chronological order
+	// Keep track of which chunks succeeded for better error reporting
 	var allLogs []interface{}
-	for _, logs := range results {
+	successCount := 0
+	for i, logs := range results {
 		if logs != nil {
 			allLogs = append(allLogs, logs)
+			successCount++
+		} else if hasError {
+			// Log which time period failed for debugging
+			if i < len(chunks) {
+				log.Printf("Warning: missing data for chunk %d (time range: %s to %s)",
+					i, chunks[i].start.Format(time.RFC3339), chunks[i].end.Format(time.RFC3339))
+			}
 		}
 	}
 
 	if hasError && len(allLogs) == 0 {
 		return nil, fmt.Errorf("failed to fetch any logs from parallel requests")
+	}
+
+	if hasError {
+		log.Printf("Warning: partial data returned - %d of %d chunks succeeded", successCount, len(chunks))
 	}
 
 	return allLogs, nil
@@ -528,7 +551,7 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 // GetNetworkMap retrieves the network map (simplified version)
 func (ts *TailscaleService) GetNetworkMap() (map[string]interface{}, error) {
 	// Get devices as the basis for network map
-	devices, err := ts.GetDevices()
+	devices, err := ts.GetDevices(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -577,12 +600,12 @@ func (ts *TailscaleService) GetDeviceFlows(deviceID string) (map[string]interfac
 }
 
 // GetDNSNameservers retrieves DNS config for the tailnet
-func (ts *TailscaleService) GetDNSNameservers() (map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (ts *TailscaleService) GetDNSNameservers(ctx context.Context) (map[string]interface{}, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// Get nameservers
-	nameserversBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/nameservers", ts.tailnet))
+	nameserversBody, err := ts.makeRequest(timeoutCtx, fmt.Sprintf("/tailnet/%s/dns/nameservers", ts.tailnet))
 	if err != nil {
 		return nil, err
 	}
@@ -593,10 +616,15 @@ func (ts *TailscaleService) GetDNSNameservers() (map[string]interface{}, error) 
 	}
 
 	// Get preferences
-	prefsBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/preferences", ts.tailnet))
-	if err == nil {
+	prefsBody, err := ts.makeRequest(timeoutCtx, fmt.Sprintf("/tailnet/%s/dns/preferences", ts.tailnet))
+	if err != nil {
+		// Preferences endpoint might not be available, continue with defaults
+		log.Printf("failed to fetch DNS preferences: %v", err)
+	} else {
 		var prefs map[string]interface{}
-		if json.Unmarshal(prefsBody, &prefs) == nil {
+		if err := json.Unmarshal(prefsBody, &prefs); err != nil {
+			log.Printf("failed to parse DNS preferences: %v", err)
+		} else {
 			result["magicDNS"] = prefs["magicDNS"]
 			if domains, ok := prefs["searchDomains"]; ok {
 				result["domains"] = domains
@@ -634,11 +662,12 @@ type StaticRecordInfo struct {
 }
 
 // GetVIPServices fetches all VIP services (virtual IP services) for the tailnet
-func (ts *TailscaleService) GetVIPServices() (map[string]VIPServiceInfo, error) {
-	ctx := context.Background()
+func (ts *TailscaleService) GetVIPServices(ctx context.Context) (map[string]VIPServiceInfo, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	endpoint := fmt.Sprintf("/tailnet/%s/services", url.PathEscape(ts.tailnet))
-	
-	body, err := ts.makeRequest(ctx, endpoint)
+
+	body, err := ts.makeRequest(timeoutCtx, endpoint)
 	if err != nil {
 		// VIP services might not be available for all tailnets
 		// Return empty map instead of error for graceful degradation
@@ -663,11 +692,12 @@ func (ts *TailscaleService) GetVIPServices() (map[string]VIPServiceInfo, error) 
 }
 
 // GetStaticRecords fetches all static DNS records for the tailnet
-func (ts *TailscaleService) GetStaticRecords() (map[string]StaticRecordInfo, error) {
-	ctx := context.Background()
+func (ts *TailscaleService) GetStaticRecords(ctx context.Context) (map[string]StaticRecordInfo, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	endpoint := fmt.Sprintf("/tailnet/%s/static-records", url.PathEscape(ts.tailnet))
-	
-	body, err := ts.makeRequest(ctx, endpoint)
+
+	body, err := ts.makeRequest(timeoutCtx, endpoint)
 	if err != nil {
 		// Static records might not be available for all tailnets
 		// Return empty map instead of error for graceful degradation

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Initialize theme before page renders to prevent FOUC
+			(function() {
+				const savedTheme = localStorage.getItem('theme');
+				const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+				if (savedTheme === 'dark' || (!savedTheme && systemPrefersDark)) {
+					document.documentElement.classList.add('dark');
+				}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
