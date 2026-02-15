@@ -15,7 +15,7 @@ COPY frontend/ ./
 RUN mkdir -p ../backend/frontend && npm run build
 
 # Backend build stage
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend-build
 
 ARG TARGETOS
 ARG TARGETARCH
