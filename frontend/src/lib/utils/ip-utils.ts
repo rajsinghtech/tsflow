@@ -1,5 +1,6 @@
 // Extract IP from address (remove port if present)
 export function extractIP(address: string): string {
+	if (!address) return '';
 	// Handle IPv6 addresses like [fd7a:115c:a1e0::9001:b818]:62574
 	if (address.startsWith('[') && address.includes(']:')) {
 		return address.substring(1, address.indexOf(']:'));
@@ -20,6 +21,7 @@ export function extractIP(address: string): string {
 
 // Extract port from address:port string
 export function extractPort(address: string): number | null {
+	if (!address) return null;
 	// Handle IPv6 addresses like [fd7a:115c:a1e0::9001:b818]:62574
 	if (address.startsWith('[') && address.includes(']:')) {
 		const portStr = address.split(']:')[1];

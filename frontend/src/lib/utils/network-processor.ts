@@ -20,6 +20,7 @@ interface ProcessedNetwork {
 
 // Check if a string looks like an IP address (vs a device ID)
 function isIPAddress(value: string): boolean {
+	if (!value) return false;
 	// IPv4: contains dots and numbers
 	if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(value)) return true;
 	// IPv6: contains colons but starts with [ or has many colons
@@ -144,6 +145,10 @@ export function processNetworkLogs(
 		];
 
 		allTraffic.forEach((traffic) => {
+			// Skip entries with missing src or dst (e.g. some exitTraffic entries
+			// from the Tailscale API omit the src field)
+			if (!traffic.src || !traffic.dst) return;
+
 			// Handle both IP:port format (live) and device ID format (historical)
 			const srcIP = resolveToIP(traffic.src, devices);
 			const dstIP = resolveToIP(traffic.dst, devices);
