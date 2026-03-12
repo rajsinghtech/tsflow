@@ -20,6 +20,7 @@ interface ProcessedNetwork {
 
 // Check if a string looks like an IP address (vs a device ID)
 function isIPAddress(value: string): boolean {
+	//Guard against null values
 	if (!value) return false;
 	// IPv4: contains dots and numbers
 	if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(value)) return true;
