@@ -10,7 +10,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
 	modernc.org/sqlite v1.46.2
-	tailscale.com/client/tailscale/v2 v2.8.0
+	tailscale.com/client/tailscale/v2 v2.9.0
 )
 
 require (
