@@ -177,7 +177,7 @@
 						{/if}
 					</div>
 				{/each}
-				<div class="pt-1 text-[10px] text-muted-foreground/60">{groupedMatches.length} unique rules ({$queryResult.matches.length} total)</div>
+				<div class="pt-1 text-[10px] text-muted-foreground/60">{groupedMatches.length} unique rules ({$queryResult?.matches.length ?? 0} total)</div>
 			</div>
 		{:else if $queryResult}
 			<div class="text-xs text-muted-foreground">No matches found.</div>
