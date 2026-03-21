@@ -143,7 +143,7 @@
 		</div>
 
 		{#if groupedMatches.length > 0}
-			<div class="max-h-[50vh] space-y-1 overflow-y-auto pt-1">
+			<div class="space-y-1 pt-1">
 				{#each groupedMatches as gm}
 					<div class="rounded bg-secondary/50 px-2 py-1.5 text-xs">
 						<div class="flex items-start gap-1">
@@ -177,7 +177,7 @@
 						{/if}
 					</div>
 				{/each}
-				<div class="sticky bottom-0 bg-card/80 pt-1 text-[10px] text-muted-foreground/60">{groupedMatches.length} unique rules ({$queryResult.matches.length} total)</div>
+				<div class="pt-1 text-[10px] text-muted-foreground/60">{groupedMatches.length} unique rules ({$queryResult.matches.length} total)</div>
 			</div>
 		{:else if $queryResult}
 			<div class="text-xs text-muted-foreground">No matches found.</div>

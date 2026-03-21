@@ -30,7 +30,7 @@
 </script>
 
 <div
-	class="min-w-[100px] whitespace-nowrap border-2 px-3 py-1.5 text-xs font-medium transition-opacity duration-200 select-none"
+	class="max-w-[200px] min-w-[60px] overflow-hidden border-2 px-3 py-1.5 text-xs font-medium transition-opacity duration-200 select-none"
 	class:opacity-20={isDimmed}
 	class:ring-2={isHighlighted && $hasQuery}
 	class:ring-white={isHighlighted && $hasQuery}
@@ -43,6 +43,6 @@
 	title={data.rawSelector ?? data.label}
 >
 	<Handle type="target" position={Position.Top} class="!opacity-0" />
-	<span>{data.label}</span>
+	<span class="block truncate">{data.label}</span>
 	<Handle type="source" position={Position.Bottom} class="!opacity-0" />
 </div>

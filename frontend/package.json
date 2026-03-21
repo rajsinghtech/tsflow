@@ -22,9 +22,14 @@
     "vite": "^7.0.0"
   },
   "dependencies": {
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.40.0",
     "@xyflow/svelte": "^1.0.0",
     "bits-ui": "^2.0.0",
     "clsx": "^2.1.1",
+    "codemirror": "^6.0.2",
     "d3-force": "^3.0.0",
     "date-fns": "^4.1.0",
     "elkjs": "^0.11.0",

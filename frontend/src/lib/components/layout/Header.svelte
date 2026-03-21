@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Layers } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield } from 'lucide-svelte';
 	import { page } from '$app/stores';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, themeStore, statsSummary, topTalkers } from '$lib/stores';
-	import { viewMode, type ViewMode } from '$lib/stores/policy-traffic-store';
 	import { policyGraph } from '$lib/stores/policy-store';
 	import { formatBytes } from '$lib/utils';
 	import type { ThemeMode } from '$lib/stores';
@@ -108,23 +107,11 @@
 			<a
 				href="/"
 				class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
-				class:bg-secondary={currentPath === '/' && $viewMode === 'traffic'}
-				onclick={() => viewMode.set('traffic')}
+				class:bg-secondary={currentPath === '/'}
 			>
 				<Network class="h-4 w-4" />
 				<span class="hidden sm:inline">Traffic</span>
 			</a>
-			{#if $policyGraph}
-				<a
-					href="/"
-					class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
-					class:bg-secondary={currentPath === '/' && $viewMode === 'combined'}
-					onclick={(e) => { if (currentPath === '/') e.preventDefault(); viewMode.set('combined'); }}
-				>
-					<Layers class="h-4 w-4" />
-					<span class="hidden sm:inline">Combined</span>
-				</a>
-			{/if}
 			<a
 				href="/policy"
 				class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
