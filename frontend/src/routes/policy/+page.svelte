@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { Loader2, AlertCircle, FileCode, SlidersHorizontal } from 'lucide-svelte';
+	import { Loader2, AlertCircle, FileCode, SlidersHorizontal, PanelRightClose, PanelRightOpen } from 'lucide-svelte';
 	import Header from '$lib/components/layout/Header.svelte';
 	import PolicyGraph from '$lib/components/policy/PolicyGraph.svelte';
 	import PolicyEditor from '$lib/components/policy/PolicyEditor.svelte';
@@ -36,8 +36,9 @@
 	const xyEdges = $derived(policyEdgesToXYFlow($filteredGraph.edges));
 
 	// Split pane state
-	let splitPercent = $state(50);
+	let splitPercent = $state(35);
 	let isResizing = $state(false);
+	let showEditor = $state(true);
 
 	function handleResizeStart(e: PointerEvent) {
 		isResizing = true;
@@ -145,17 +146,32 @@
 			{/if}
 		</div>
 
-		<!-- Resize handle -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div
-			class="w-1 cursor-col-resize {isResizing ? 'bg-primary' : 'bg-border hover:bg-primary/50'}"
-			onpointerdown={handleResizeStart}
-			aria-hidden="true"
-		></div>
+		{#if showEditor}
+			<!-- Resize handle -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class="w-1 cursor-col-resize {isResizing ? 'bg-primary' : 'bg-border hover:bg-primary/50'}"
+				onpointerdown={handleResizeStart}
+				aria-hidden="true"
+			></div>
 
-		<!-- Right: Code Editor -->
-		<div class="flex flex-col overflow-hidden" style="width: {splitPercent}%">
-			<PolicyEditor />
-		</div>
+			<!-- Right: Code Editor -->
+			<div class="flex flex-col overflow-hidden" style="width: {splitPercent}%">
+				<PolicyEditor />
+			</div>
+		{/if}
+
+		<!-- Editor toggle button (bottom-right of graph) -->
+		<button
+			onclick={() => showEditor = !showEditor}
+			class="absolute bottom-10 right-2 z-10 rounded-md border border-border bg-card/90 p-1.5 shadow-sm hover:bg-secondary"
+			title="{showEditor ? 'Hide' : 'Show'} editor"
+		>
+			{#if showEditor}
+				<PanelRightClose class="h-4 w-4 text-muted-foreground" />
+			{:else}
+				<PanelRightOpen class="h-4 w-4 text-muted-foreground" />
+			{/if}
+		</button>
 	</div>
 </div>

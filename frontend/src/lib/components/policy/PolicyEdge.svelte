@@ -54,7 +54,7 @@
 			markerHeight="6"
 			orient="auto-start-reverse"
 		>
-			<path d="M 0 0 L 10 5 L 0 10 z" fill={color} opacity={isDimmed ? 0.1 : baseOpacity} />
+			<path d="M 0 0 L 10 5 L 0 10 z" fill={color} opacity={isDimmed ? 0.1 : isHighlighted && $hasQuery ? 1 : baseOpacity} />
 		</marker>
 	</defs>
 </svg>
@@ -62,6 +62,6 @@
 <BaseEdge
 	{id}
 	path={edgePath}
-	style="stroke: {color}; stroke-width: {width}px; stroke-dasharray: {dasharray}; opacity: {isDimmed ? 0.1 : baseOpacity}; transition: opacity 0.2s; {isRelation ? '' : `marker-end: url(#${markerId});`}"
+	style="stroke: {color}; stroke-width: {isHighlighted && $hasQuery ? width + 1 : width}px; stroke-dasharray: {dasharray}; opacity: {isDimmed ? 0.1 : isHighlighted && $hasQuery ? 1 : baseOpacity}; transition: opacity 0.2s, stroke-width 0.2s; {isRelation ? '' : `marker-end: url(#${markerId});`}"
 />
 
