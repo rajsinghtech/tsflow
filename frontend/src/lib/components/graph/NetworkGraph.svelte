@@ -18,31 +18,47 @@
 	import type { NetworkNode as NetworkNodeType, NetworkLink } from '$lib/types';
 	import NetworkNode from './NetworkNode.svelte';
 
+	import type { PolicyOverlayEdge } from '$lib/stores/policy-traffic-store';
+
 	interface Props {
 		nodes: NetworkNodeType[];
 		edges: NetworkLink[];
+		policyOverlayEdges?: PolicyOverlayEdge[];
+		unmatchedTrafficEdgeIds?: Set<string>;
 	}
 
-	let { nodes, edges }: Props = $props();
+	let { nodes, edges, policyOverlayEdges = [], unmatchedTrafficEdgeIds = new Set() }: Props = $props();
 
 	const nodeTypes = {
 		network: NetworkNode as unknown as typeof NetworkNode
+	};
+
+	// Edge colors for policy overlay
+	const POLICY_EDGE_COLORS: Record<string, string> = {
+		grant: '#0d9488',
+		acl: '#0284c7',
+		ssh: '#b45309'
 	};
 
 	// Get edge style based on traffic type and selection state
 	function getEdgeStyle(edge: NetworkLink, dimmed: boolean = false): string {
 		let strokeColor = 'var(--color-muted-foreground)';
 
-		switch (edge.trafficType) {
-			case 'virtual':
-				strokeColor = 'var(--color-traffic-virtual)';
-				break;
-			case 'subnet':
-				strokeColor = 'var(--color-traffic-subnet)';
-				break;
-			case 'physical':
-				strokeColor = 'var(--color-traffic-physical)';
-				break;
+		// In combined mode, highlight unmatched traffic in red
+		if (unmatchedTrafficEdgeIds.has(edge.id)) {
+			strokeColor = '#ef4444';
+		} else {
+			switch (edge.trafficType) {
+				case 'virtual':
+					strokeColor = 'var(--color-traffic-virtual)';
+					break;
+				case 'subnet':
+					strokeColor = 'var(--color-traffic-subnet)';
+					break;
+				case 'physical':
+					strokeColor = 'var(--color-traffic-physical)';
+					break;
+			}
 		}
 
 		// Width based on traffic volume
@@ -295,7 +311,23 @@
 			);
 
 			flowNodesStore.set(layoutedNodes);
-			flowEdgesStore.set(layoutedEdges);
+
+			// Append policy overlay edges in combined mode
+			const allEdges = [...layoutedEdges];
+			if (policyOverlayEdges.length > 0) {
+				for (const oe of policyOverlayEdges) {
+					if (oe.hasTraffic) continue; // Skip edges that already have traffic (they're already shown)
+					allEdges.push({
+						id: oe.id,
+						source: oe.source,
+						target: oe.target,
+						type: 'default',
+						animated: false,
+						style: `stroke: ${POLICY_EDGE_COLORS[oe.edgeType] ?? '#9ca3af'}; stroke-width: 1.5px; stroke-dasharray: 6 3; opacity: 0.3;`
+					});
+				}
+			}
+			flowEdgesStore.set(allEdges);
 		} catch (error) {
 			console.error('Layout failed:', error);
 			// Fallback: just set nodes with grid positions

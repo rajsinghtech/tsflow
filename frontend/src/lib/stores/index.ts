@@ -28,6 +28,7 @@ export {
 	startAutoRefresh,
 	stopAutoRefresh
 } from './network-store';
+export { policyGraph, filteredGraph, parseSummary, fetchError, renderPolicy, runQuery, clearQuery, fetchAndRenderPolicy } from './policy-store';
 export {
 	loadStats,
 	retryLoadStats,

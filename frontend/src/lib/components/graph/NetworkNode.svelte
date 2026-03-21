@@ -3,6 +3,7 @@
 	import { Server, Globe, Network, Radio, Cloud } from 'lucide-svelte';
 	import { formatBytes } from '$lib/utils';
 	import { highlightedNodeIds, hasSelection } from '$lib/stores/ui-store';
+	import { policyGroupMap, devicePolicyContext } from '$lib/stores/policy-traffic-store';
 	import type { NetworkNode } from '$lib/types';
 
 	interface Props {
@@ -54,6 +55,40 @@
 			.map((t: string) => t.replace('tag:', ''))
 			.slice(0, 3)
 	);
+
+	// Policy context for this node: groups, tag owners, autogroups
+	const policyBadges = $derived.by(() => {
+		const badges: { label: string; type: 'group' | 'tagOwner' | 'autogroup' }[] = [];
+		const gm = $policyGroupMap;
+		const dc = $devicePolicyContext;
+
+		// 1. Groups via user membership (from policy group definitions)
+		if (data.user) {
+			for (const g of gm.get(data.user) ?? []) {
+				badges.push({ label: g.replace('group:', ''), type: 'group' });
+			}
+		}
+
+		// 2. Enriched context from device data (groups, tag owners, autogroups)
+		// Match by IP addresses
+		for (const ip of data.ips ?? []) {
+			const ctx = dc.get(ip);
+			if (!ctx) continue;
+			for (const g of ctx.groups) {
+				if (!badges.some((b) => b.label === g.replace('group:', ''))) {
+					badges.push({ label: g.replace('group:', ''), type: 'group' });
+				}
+			}
+			for (const owner of ctx.tagOwners) {
+				const label = owner.replace('group:', '').replace('autogroup:', '');
+				if (!badges.some((b) => b.label === label)) {
+					badges.push({ label, type: 'tagOwner' });
+				}
+			}
+		}
+
+		return badges.slice(0, 4);
+	});
 
 	// Process ports - only show destination/service ports (not ephemeral source ports)
 	const displayPorts = $derived.by(() => {
@@ -183,6 +218,27 @@
 					<span class="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
 						{tag}
 					</span>
+				{/each}
+			</div>
+		{/if}
+
+		<!-- Policy Context Badges -->
+		{#if policyBadges.length > 0}
+			<div class="flex flex-wrap gap-1">
+				{#each policyBadges as badge}
+					{#if badge.type === 'group'}
+						<span class="rounded-full border border-green-500/30 bg-green-500/15 px-2 py-0.5 text-xs text-green-400">
+							{badge.label}
+						</span>
+					{:else if badge.type === 'tagOwner'}
+						<span class="rounded-full border border-purple-500/30 bg-purple-500/15 px-2 py-0.5 text-xs text-purple-400">
+							{badge.label}
+						</span>
+					{:else}
+						<span class="rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2 py-0.5 text-xs text-cyan-400">
+							{badge.label}
+						</span>
+					{/if}
 				{/each}
 			</div>
 		{/if}

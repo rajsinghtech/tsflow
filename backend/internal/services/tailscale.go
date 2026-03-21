@@ -229,6 +229,24 @@ func (ts *TailscaleService) GetDevices() (*DevicesResponse, error) {
 	return &response, nil
 }
 
+func (ts *TailscaleService) GetUsers() ([]byte, error) {
+	endpoint := fmt.Sprintf("/tailnet/%s/users", ts.tailnet)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return ts.makeRequest(ctx, endpoint)
+}
+
+func (ts *TailscaleService) GetPolicy() ([]byte, error) {
+	endpoint := fmt.Sprintf("/tailnet/%s/acl", ts.tailnet)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return ts.makeRequest(ctx, endpoint)
+}
+
 func (ts *TailscaleService) GetNetworkLogs(start, end string) (any, error) {
 	// Parse time range to determine if we need chunking
 	startTime, err := time.Parse(time.RFC3339, start)

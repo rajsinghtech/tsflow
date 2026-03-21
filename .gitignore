@@ -94,3 +94,6 @@ checksums.txt
 
 # Git worktrees
 .worktrees/
+
+# Slop
+.superpowers/

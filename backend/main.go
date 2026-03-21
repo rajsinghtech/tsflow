@@ -192,6 +192,10 @@ func main() {
 			stats.GET("/node/:id", statsCache, handlerService.GetNodeDetailStats)
 		}
 
+		// Policy endpoints
+		api.GET("/policy", liveCache, handlerService.GetPolicy)
+		api.GET("/users", liveCache, handlerService.GetUsers)
+
 		// Status endpoints - no cache
 		noCache := middleware.CacheMiddleware(middleware.NoCacheConfig())
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)

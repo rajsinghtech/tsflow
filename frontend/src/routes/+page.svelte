@@ -6,9 +6,11 @@
 	import LogViewer from '$lib/components/logs/LogViewer.svelte';
 	import PortDetails from '$lib/components/logs/PortDetails.svelte';
 	import BandwidthChart from '$lib/components/charts/BandwidthChart.svelte';
+	import EdgePolicyInfo from '$lib/components/logs/EdgePolicyInfo.svelte';
 	import Header from '$lib/components/layout/Header.svelte';
 	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, filteredNodes, filteredEdges } from '$lib/stores/network-store';
 	import { uiStore } from '$lib/stores/ui-store';
+	import { viewMode, policyOverlayEdges, unmatchedTrafficEdges } from '$lib/stores/policy-traffic-store';
 
 	onMount(() => {
 		loadNetworkData();
@@ -115,6 +117,24 @@
 
 		<!-- Graph Area -->
 		<main id="main-content" class="relative flex flex-1 flex-col overflow-hidden">
+			<!-- Combined mode banner -->
+			{#if $viewMode === 'combined'}
+				<div class="flex items-center justify-center gap-4 border-b border-border bg-card/80 px-3 py-1.5 text-xs">
+					<span class="flex items-center gap-1.5">
+						<span class="h-2 w-6 rounded-full" style="background: var(--color-traffic-virtual)"></span>
+						Observed traffic
+					</span>
+					<span class="flex items-center gap-1.5">
+						<span class="h-0.5 w-6 rounded-full" style="background: #0d9488; opacity: 0.4"></span>
+						Policy allowed (no traffic)
+					</span>
+					<span class="flex items-center gap-1.5">
+						<span class="h-2 w-6 rounded-full bg-red-500"></span>
+						No matching rule
+					</span>
+					<button onclick={() => viewMode.set('traffic')} class="ml-2 text-muted-foreground hover:text-foreground">Exit combined</button>
+				</div>
+			{/if}
 			<!-- Loading State -->
 			{#if $uiStore.isLoading && $filteredNodes.length === 0}
 				<div class="flex flex-1 flex-col items-center justify-center gap-4">
@@ -150,7 +170,12 @@
 			<!-- Graph -->
 			{:else}
 				<div class="flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">
-					<NetworkGraph nodes={$filteredNodes} edges={$filteredEdges} />
+					<NetworkGraph
+						nodes={$filteredNodes}
+						edges={$filteredEdges}
+						policyOverlayEdges={$viewMode === 'combined' ? $policyOverlayEdges : []}
+						unmatchedTrafficEdgeIds={$viewMode === 'combined' ? $unmatchedTrafficEdges : new Set()}
+					/>
 				</div>
 			{/if}
 
@@ -158,6 +183,7 @@
 			{#if $uiStore.showLogViewer}
 				<BandwidthChart />
 				<PortDetails />
+				<EdgePolicyInfo />
 
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<!-- Resize Handle - taller touch target on mobile -->
