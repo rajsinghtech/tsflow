@@ -36,6 +36,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-w -s" -trimpath -o tsflow .
 
+# Create data directory owned by nonroot user (65532)
+RUN mkdir -p /data && chown 65532:65532 /data
+
 # Runtime stage - minimal distroless image
 FROM gcr.io/distroless/static:nonroot
 
@@ -43,7 +46,8 @@ WORKDIR /app
 
 COPY --from=backend-build /app/backend/tsflow .
 
-# Create data directory for SQLite
+# Data directory for SQLite, pre-created with nonroot ownership
+COPY --from=backend-build --chown=65532:65532 /data /app/data
 VOLUME /app/data
 
 ENV ENVIRONMENT=production
