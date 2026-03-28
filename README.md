@@ -82,6 +82,39 @@ TSFlow supports OAuth (recommended) or API key authentication.
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
 
+#### tsnet Serve Mode
+
+TSFlow can embed a Tailscale node and serve itself directly on your tailnet, eliminating the need for a separate Tailscale sidecar container.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TSFLOW_SERVE` | Enable tsnet serve mode | `false` |
+| `TSFLOW_HOSTNAME` | MagicDNS hostname on the tailnet | `tsflow` |
+| `TSFLOW_TAGS` | Comma-separated ACL tags (e.g. `tag:tsflow`) | - |
+| `TSFLOW_FUNNEL` | Expose via Tailscale Funnel | `false` |
+| `TSFLOW_STATE_DIR` | tsnet state persistence directory | `./data/tsnet-state` |
+
+**Requirements:**
+- OAuth credentials (API keys are not supported in tsnet mode)
+- ACL tags must be allowed for the OAuth client to register nodes
+- For Funnel, the ACL must grant funnel access to the tag
+
+**Example:**
+
+```bash
+docker run -d \
+  --name tsflow \
+  -v tsflow_data:/app/data \
+  -e TAILSCALE_OAUTH_CLIENT_ID=your-client-id \
+  -e TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret \
+  -e TSFLOW_SERVE=true \
+  -e TSFLOW_HOSTNAME=tsflow \
+  -e TSFLOW_TAGS=tag:tsflow \
+  ghcr.io/rajsinghtech/tsflow:latest
+```
+
+TSFlow will be accessible at `https://tsflow.<your-tailnet>.ts.net` with automatic HTTPS certificates.
+
 #### Data Storage & Polling
 
 | Variable | Description | Default |

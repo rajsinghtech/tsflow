@@ -21,6 +21,8 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
 	"github.com/rajsinghtech/tsflow/backend/internal/middleware"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
+	"github.com/rajsinghtech/tsflow/backend/internal/tsnetserve"
+	"net/http"
 )
 
 // customLoggingMiddleware provides structured request logging for production
@@ -240,21 +242,54 @@ func main() {
 		log.Printf("Authentication: API Key")
 	}
 
-	log.Printf("Server ready at http://0.0.0.0:%s", port)
+	if cfg.TsnetServe {
+		log.Printf("Mode: tsnet (embedded Tailscale node)")
+		log.Printf("Hostname: %s", cfg.TsnetHostname)
+		if len(cfg.TsnetTags) > 0 {
+			log.Printf("Tags: %v", cfg.TsnetTags)
+		}
+		log.Printf("Funnel: %v", cfg.TsnetFunnel)
+	} else {
+		log.Printf("Server ready at http://0.0.0.0:%s", port)
+	}
 	log.Printf("=== Server Started Successfully ===")
 
 	// Graceful shutdown handling
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		if err := router.Run("0.0.0.0:" + port); err != nil {
-			log.Fatalf("FATAL Failed to start server: %v", err)
+	if cfg.TsnetServe {
+		tsnetCtx, tsnetCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		tsnetSrv, err := tsnetserve.New(tsnetCtx, cfg)
+		tsnetCancel()
+		if err != nil {
+			log.Fatalf("Failed to start tsnet server: %v", err)
 		}
-	}()
 
-	<-quit
-	log.Println("Shutting down server...")
+		httpSrv := &http.Server{Handler: router}
+		go func() {
+			if err := httpSrv.Serve(tsnetSrv.Listener()); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("FATAL tsnet serve failed: %v", err)
+			}
+		}()
+
+		<-quit
+		log.Println("Shutting down server...")
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		httpSrv.Shutdown(shutdownCtx)
+		tsnetSrv.Close()
+	} else {
+		go func() {
+			if err := router.Run("0.0.0.0:" + port); err != nil {
+				log.Fatalf("FATAL Failed to start server: %v", err)
+			}
+		}()
+
+		<-quit
+		log.Println("Shutting down server...")
+	}
 
 	// Stop the poller gracefully
 	poller.Stop()

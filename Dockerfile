@@ -36,8 +36,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-w -s" -trimpath -o tsflow .
 
-# Create data directory owned by nonroot user (65532)
-RUN mkdir -p /data && chown 65532:65532 /data
+# Create data directory (including tsnet state) owned by nonroot user (65532)
+RUN mkdir -p /data/tsnet-state && chown -R 65532:65532 /data
 
 # Runtime stage - minimal distroless image
 FROM gcr.io/distroless/static:nonroot

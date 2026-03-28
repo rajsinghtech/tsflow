@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -18,6 +19,12 @@ type Config struct {
 	Port                       string
 	Environment                string
 	AllowedCORSOrigins         []string
+	// tsnet serve mode
+	TsnetServe    bool
+	TsnetHostname string
+	TsnetTags     []string
+	TsnetFunnel   bool
+	TsnetStateDir string
 }
 
 // Load loads configuration from environment variables
@@ -33,6 +40,11 @@ func Load() *Config {
 		Port:                       getEnvWithDefault("PORT", "8080"),
 		Environment:                getEnvWithDefault("ENVIRONMENT", "development"),
 		AllowedCORSOrigins:         parseCORSOrigins(getEnvWithFallback("ALLOWED_CORS_ORIGINS")),
+		TsnetServe:                 os.Getenv("TSFLOW_SERVE") == "true",
+		TsnetHostname:              getEnvWithDefault("TSFLOW_HOSTNAME", "tsflow"),
+		TsnetTags:                  parseTags(os.Getenv("TSFLOW_TAGS")),
+		TsnetFunnel:                os.Getenv("TSFLOW_FUNNEL") == "true",
+		TsnetStateDir:              getEnvWithDefault("TSFLOW_STATE_DIR", filepath.Join(".", "data", "tsnet-state")),
 	}
 }
 
@@ -47,6 +59,10 @@ func (c *Config) Validate() error {
 
 	if hasAPIKey && hasOAuth {
 		log.Println("Both API key and OAuth credentials provided. OAuth will take precedence.")
+	}
+
+	if c.TsnetServe && !hasOAuth {
+		return errors.New("TSFLOW_SERVE=true requires OAuth credentials (TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET)")
 	}
 
 	return nil
@@ -83,6 +99,18 @@ func parseScopes(scopesStr string) []string {
 		scopes[i] = strings.TrimSpace(scope)
 	}
 	return scopes
+}
+
+// parseTags parses a comma-separated string of ACL tags
+func parseTags(tagsStr string) []string {
+	if tagsStr == "" {
+		return nil
+	}
+	tags := strings.Split(tagsStr, ",")
+	for i, tag := range tags {
+		tags[i] = strings.TrimSpace(tag)
+	}
+	return tags
 }
 
 // parseCORSOrigins parses a comma-separated string of allowed CORS origins
