@@ -248,6 +248,11 @@ func main() {
 		if len(cfg.TsnetTags) > 0 {
 			log.Printf("Tags: %v", cfg.TsnetTags)
 		}
+		if cfg.TsnetClientID != "" {
+			log.Printf("tsnet auth: workload identity federation (TS_CLIENT_ID)")
+		} else {
+			log.Printf("tsnet auth: OAuth client secret")
+		}
 		log.Printf("Funnel: %v", cfg.TsnetFunnel)
 	} else {
 		log.Printf("Server ready at http://0.0.0.0:%s", port)
@@ -266,10 +271,16 @@ func main() {
 			log.Fatalf("Failed to start tsnet server: %v", err)
 		}
 
+		tlsSrv := &http.Server{Handler: router}
 		httpSrv := &http.Server{Handler: router}
 		go func() {
-			if err := httpSrv.Serve(tsnetSrv.Listener()); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("FATAL tsnet serve failed: %v", err)
+			if err := tlsSrv.Serve(tsnetSrv.TLSListener()); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("FATAL tsnet TLS serve failed: %v", err)
+			}
+		}()
+		go func() {
+			if err := httpSrv.Serve(tsnetSrv.HTTPListener()); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("FATAL tsnet HTTP serve failed: %v", err)
 			}
 		}()
 
@@ -278,6 +289,7 @@ func main() {
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
+		tlsSrv.Shutdown(shutdownCtx)
 		httpSrv.Shutdown(shutdownCtx)
 		tsnetSrv.Close()
 	} else {

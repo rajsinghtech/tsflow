@@ -12,8 +12,9 @@ import (
 )
 
 type Server struct {
-	tsServer *tsnet.Server
-	listener net.Listener
+	tsServer     *tsnet.Server
+	tlsListener  net.Listener
+	httpListener net.Listener
 }
 
 func New(ctx context.Context, cfg *config.Config) (*Server, error) {
@@ -24,25 +25,40 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	srv := &tsnet.Server{
 		Dir:           cfg.TsnetStateDir,
 		Hostname:      cfg.TsnetHostname,
-		ClientSecret:  cfg.TailscaleOAuthClientSecret,
 		Ephemeral:     true,
 		AdvertiseTags: cfg.TsnetTags,
+	}
+
+	if cfg.TsnetClientID != "" {
+		srv.ClientID = cfg.TsnetClientID
+		srv.IDToken = cfg.TsnetIDToken
+		srv.Audience = cfg.TsnetAudience
+	} else {
+		srv.ClientSecret = cfg.TailscaleOAuthClientSecret
 	}
 
 	if _, err := srv.Up(ctx); err != nil {
 		return nil, fmt.Errorf("tsnet up: %w", err)
 	}
 
-	var ln net.Listener
+	var tlsLn, httpLn net.Listener
 	var err error
+
 	if cfg.TsnetFunnel {
-		ln, err = srv.ListenFunnel("tcp", ":443")
+		tlsLn, err = srv.ListenFunnel("tcp", ":443")
 	} else {
-		ln, err = srv.ListenTLS("tcp", ":443")
+		tlsLn, err = srv.ListenTLS("tcp", ":443")
 	}
 	if err != nil {
 		srv.Close()
-		return nil, fmt.Errorf("tsnet listen: %w", err)
+		return nil, fmt.Errorf("tsnet listen TLS: %w", err)
+	}
+
+	httpLn, err = srv.Listen("tcp", ":80")
+	if err != nil {
+		tlsLn.Close()
+		srv.Close()
+		return nil, fmt.Errorf("tsnet listen HTTP: %w", err)
 	}
 
 	mode := "tailnet"
@@ -50,17 +66,21 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 		mode = "funnel"
 	}
 	if domains := srv.CertDomains(); len(domains) > 0 {
-		log.Printf("tsnet: serving via %s at https://%s", mode, domains[0])
+		log.Printf("tsnet: serving via %s at https://%s (443) and http://%s (80)", mode, domains[0], domains[0])
 	}
 
-	return &Server{tsServer: srv, listener: ln}, nil
+	return &Server{tsServer: srv, tlsListener: tlsLn, httpListener: httpLn}, nil
 }
 
-func (s *Server) Listener() net.Listener { return s.listener }
+func (s *Server) TLSListener() net.Listener  { return s.tlsListener }
+func (s *Server) HTTPListener() net.Listener { return s.httpListener }
 
 func (s *Server) Close() error {
-	if s.listener != nil {
-		s.listener.Close()
+	if s.httpListener != nil {
+		s.httpListener.Close()
+	}
+	if s.tlsListener != nil {
+		s.tlsListener.Close()
 	}
 	return s.tsServer.Close()
 }

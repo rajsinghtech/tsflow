@@ -25,6 +25,10 @@ type Config struct {
 	TsnetTags     []string
 	TsnetFunnel   bool
 	TsnetStateDir string
+	// tsnet workload identity federation
+	TsnetClientID string
+	TsnetIDToken  string
+	TsnetAudience string
 }
 
 // Load loads configuration from environment variables
@@ -45,6 +49,9 @@ func Load() *Config {
 		TsnetTags:                  parseTags(os.Getenv("TSFLOW_TAGS")),
 		TsnetFunnel:                os.Getenv("TSFLOW_FUNNEL") == "true",
 		TsnetStateDir:              getEnvWithDefault("TSFLOW_STATE_DIR", filepath.Join(".", "data", "tsnet-state")),
+		TsnetClientID:              os.Getenv("TS_CLIENT_ID"),
+		TsnetIDToken:               os.Getenv("TS_ID_TOKEN"),
+		TsnetAudience:              os.Getenv("TS_AUDIENCE"),
 	}
 }
 
@@ -52,6 +59,7 @@ func Load() *Config {
 func (c *Config) Validate() error {
 	hasAPIKey := c.TailscaleAPIKey != ""
 	hasOAuth := c.TailscaleOAuthClientID != "" && c.TailscaleOAuthClientSecret != ""
+	hasWIF := c.TsnetClientID != ""
 
 	if !hasAPIKey && !hasOAuth {
 		return errors.New("either TAILSCALE_API_KEY or both TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET must be provided")
@@ -61,8 +69,21 @@ func (c *Config) Validate() error {
 		log.Println("Both API key and OAuth credentials provided. OAuth will take precedence.")
 	}
 
-	if c.TsnetServe && !hasOAuth {
-		return errors.New("TSFLOW_SERVE=true requires OAuth credentials (TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET)")
+	if c.TsnetServe {
+		if !hasOAuth && !hasWIF {
+			return errors.New("TSFLOW_SERVE=true requires either OAuth credentials or workload identity federation (TS_CLIENT_ID)")
+		}
+		if hasWIF {
+			if c.TsnetIDToken == "" && c.TsnetAudience == "" {
+				return errors.New("workload identity federation requires TS_ID_TOKEN or TS_AUDIENCE")
+			}
+			if c.TsnetIDToken != "" && c.TsnetAudience != "" {
+				return errors.New("only one of TS_ID_TOKEN or TS_AUDIENCE should be set for workload identity federation")
+			}
+			if len(c.TsnetTags) == 0 {
+				return errors.New("workload identity federation requires TSFLOW_TAGS to be set")
+			}
+		}
 	}
 
 	return nil

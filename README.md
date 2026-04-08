@@ -94,12 +94,28 @@ TSFlow can embed a Tailscale node and serve itself directly on your tailnet, eli
 | `TSFLOW_FUNNEL` | Expose via Tailscale Funnel | `false` |
 | `TSFLOW_STATE_DIR` | tsnet state persistence directory | `./data/tsnet-state` |
 
+##### Workload Identity Federation
+
+tsnet mode supports [workload identity federation](https://tailscale.com/kb/1236/workload-identity) as an alternative to OAuth secrets. This lets tsflow authenticate using platform identity (AWS, GCP, GitHub Actions, Azure) without managing secrets.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TS_CLIENT_ID` | Federated client ID | - |
+| `TS_ID_TOKEN` | ID token from identity provider | - |
+| `TS_AUDIENCE` | Audience for requesting platform tokens | - |
+
+When `TS_CLIENT_ID` is set, tsflow uses WIF instead of OAuth `ClientSecret` for the tsnet node. The platform token is auto-detected from the runtime environment. Set either `TS_ID_TOKEN` or `TS_AUDIENCE`, not both. You must also set `TSFLOW_TAGS`.
+
+> **Note:** OAuth credentials (`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`) are still required for Tailscale API access (fetching devices, network logs). WIF only replaces the tsnet node authentication secret.
+
 **Requirements:**
-- OAuth credentials (API keys are not supported in tsnet mode)
-- ACL tags must be allowed for the OAuth client to register nodes
+- OAuth credentials or workload identity federation (API keys are not supported in tsnet mode)
+- ACL tags must be allowed for the OAuth client or federated identity to register nodes
 - For Funnel, the ACL must grant funnel access to the tag
 
-**Example:**
+**tsnet mode serves on both port 80 (HTTP) and port 443 (HTTPS).**
+
+**Example with OAuth:**
 
 ```bash
 docker run -d \
@@ -113,7 +129,23 @@ docker run -d \
   ghcr.io/rajsinghtech/tsflow:latest
 ```
 
-TSFlow will be accessible at `https://tsflow.<your-tailnet>.ts.net` with automatic HTTPS certificates.
+**Example with Workload Identity (GCP):**
+
+```bash
+docker run -d \
+  --name tsflow \
+  -v tsflow_data:/app/data \
+  -e TAILSCALE_OAUTH_CLIENT_ID=your-client-id \
+  -e TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret \
+  -e TSFLOW_SERVE=true \
+  -e TSFLOW_HOSTNAME=tsflow \
+  -e TSFLOW_TAGS=tag:tsflow \
+  -e TS_CLIENT_ID=your-federated-client-id \
+  -e TS_AUDIENCE=your-tailnet.org \
+  ghcr.io/rajsinghtech/tsflow:latest
+```
+
+TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `http://tsflow.<your-tailnet>.ts.net`.
 
 #### Data Storage & Polling
 
