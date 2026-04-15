@@ -106,11 +106,9 @@
 	const flowNodesStore = writable<Node[]>([]);
 	const flowEdgesStore = writable<Edge[]>([]);
 
-	// Track topology (node IDs only — edge churn should not trigger full re-layout)
+	// Track topology (node IDs + edge connections, excluding traffic volumes)
 	let lastTopologyKey = '';
 	let isLayouting = $state(false);
-	let hasInitialLayout = false;
-	let layoutVersion = 0;
 	let layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// Store references to flow functions (set by child component)
@@ -159,19 +157,20 @@
 	// Track edge traffic data for style-only updates
 	let lastEdgeKey = '';
 
-	// Build a topology key from node IDs only — edge churn (new flows appearing/disappearing)
-	// should not trigger expensive full re-layouts
-	function buildTopologyKey(nodeList: NetworkNodeType[]): string {
-		return nodeList.map((n) => n.id).sort().join(',');
+	// Build a topology key from node IDs + edge connections (ignoring traffic volumes)
+	function buildTopologyKey(nodeList: NetworkNodeType[], edgeList: NetworkLink[]): string {
+		const nodesPart = nodeList.map((n) => n.id).sort().join(',');
+		const edgesPart = edgeList.map((e) => `${e.source}->${e.target}`).sort().join(',');
+		return `${nodesPart}|${edgesPart}`;
 	}
 
 	// Update stores and apply layout when props change
 	$effect(() => {
-		const currentTopologyKey = buildTopologyKey(nodes);
+		const currentTopologyKey = buildTopologyKey(nodes, edges);
 		const currentEdgeKey = edges.map((e) => `${e.id}:${e.totalBytes}`).sort().join(',');
 
 		if (currentTopologyKey !== lastTopologyKey && nodes.length > 0) {
-			// Node set changed - debounce re-layout to batch rapid changes
+			// Topology changed - debounce re-layout to batch rapid changes
 			lastTopologyKey = currentTopologyKey;
 			lastEdgeKey = currentEdgeKey;
 			originalEdges = edges;
@@ -182,54 +181,22 @@
 				layoutNodes();
 			}, 100);
 		} else if (currentEdgeKey !== lastEdgeKey && !isLayouting) {
-			// Only traffic volumes or edge set changed - update edges without re-layout
+			// Only traffic volumes changed - update edge styles without re-layout
 			lastEdgeKey = currentEdgeKey;
 			originalEdges = edges;
 			const highlighted = $highlightedEdgeIds;
 			const isSelectionActive = $hasSelection;
 
-			// Sync edges: add new edges, remove stale ones, update styles
-			const newEdgeMap = new Map(edges.map((e) => [e.id, e]));
+			const edgeLookup = new Map(edges.map((e) => [e.id, e]));
 			flowEdgesStore.update((currentEdges) => {
-				const existingIds = new Set(currentEdges.map((e) => e.id));
-				// Update existing edges + keep only edges that still exist
-				const updated = currentEdges
-					.filter((flowEdge) => newEdgeMap.has(flowEdge.id))
-					.map((flowEdge) => {
-						const originalEdge = newEdgeMap.get(flowEdge.id)!;
-						const dimmed = isSelectionActive && !highlighted.has(flowEdge.id);
-						return {
-							...flowEdge,
-							source: originalEdge.source,
-							target: originalEdge.target,
-							style: getEdgeStyle(originalEdge, dimmed)
-						};
-					});
-				// Add new edges
-				for (const [id, edge] of newEdgeMap) {
-					if (!existingIds.has(id)) {
-						const dimmed = isSelectionActive && !highlighted.has(id);
-						updated.push({
-							id: edge.id,
-							source: edge.source,
-							target: edge.target,
-							type: 'default',
-							style: getEdgeStyle(edge, dimmed)
-						});
-					}
-				}
-				return updated;
-			});
+				return currentEdges.map((flowEdge) => {
+					const originalEdge = edgeLookup.get(flowEdge.id);
+					if (!originalEdge) return flowEdge;
 
-			// Also update node data (traffic totals etc.) without changing positions
-			const nodeDataMap = new Map(nodes.map((n) => [n.id, n]));
-			flowNodesStore.update((currentNodes) => {
-				return currentNodes.map((flowNode) => {
-					const freshData = nodeDataMap.get(flowNode.id);
-					if (!freshData) return flowNode;
+					const dimmed = isSelectionActive && !highlighted.has(flowEdge.id);
 					return {
-						...flowNode,
-						data: { label: freshData.displayName, ...freshData }
+						...flowEdge,
+						style: getEdgeStyle(originalEdge, dimmed)
 					};
 				});
 			});
@@ -303,33 +270,18 @@
 	async function layoutNodes() {
 		if (isLayouting) return;
 		isLayouting = true;
-		const thisVersion = ++layoutVersion;
 
 		try {
-			// Capture existing node state so we can preserve positions and measured dimensions
-			const existingNodes = new Map<string, Node>();
-			get(flowNodesStore).forEach((n) => {
-				existingNodes.set(n.id, n);
-			});
-			const isInitial = !hasInitialLayout;
-
-			// Convert to Svelte Flow format, preserving measured dimensions from existing nodes
-			const flowNodes: Node[] = nodes.map((node) => {
-				const existing = existingNodes.get(node.id);
-				return {
-					id: node.id,
-					type: 'network',
-					position: existing?.position ?? { x: 0, y: 0 },
-					// Preserve measured dimensions so MiniMap continues to render nodes
-					...(existing?.measured ? { measured: existing.measured } : {}),
-					...(existing?.width != null ? { width: existing.width } : {}),
-					...(existing?.height != null ? { height: existing.height } : {}),
-					data: {
-						label: node.displayName,
-						...node
-					}
-				};
-			});
+			// Convert to Svelte Flow format
+			const flowNodes: Node[] = nodes.map((node) => ({
+				id: node.id,
+				type: 'network',
+				position: { x: 0, y: 0 },
+				data: {
+					label: node.displayName,
+					...node
+				}
+			}));
 
 			const flowEdges: Edge[] = edges.map((edge) => ({
 				id: edge.id,
@@ -339,97 +291,32 @@
 				style: getEdgeStyle(edge)
 			}));
 
-			if (isInitial) {
-				// First layout: full ELK layout + fitView
-				const { nodes: layoutedNodes, edges: layoutedEdges } = await applyElkLayout(
-					flowNodes,
-					flowEdges,
-					{ algorithm: 'layered', nodeSpacing: 150 }
-				);
+			// Apply ELK layout
+			const { nodes: layoutedNodes, edges: layoutedEdges } = await applyElkLayout(
+				flowNodes,
+				flowEdges,
+				{ algorithm: 'layered', nodeSpacing: 150 }
+			);
 
-				if (thisVersion !== layoutVersion) return; // stale layout, discard
+			flowNodesStore.set(layoutedNodes);
 
-				flowNodesStore.set(layoutedNodes);
-				flowEdgesStore.set(layoutedEdges);
-				hasInitialLayout = true;
-			} else {
-				// Subsequent refresh: preserve existing node positions, place new nodes
-				const newNodeIds = nodes
-					.filter((n) => !existingNodes.has(n.id))
-					.map((n) => n.id);
-
-				if (newNodeIds.length > 0 && newNodeIds.length < nodes.length * 0.5) {
-					// Minor topology change: run ELK for full graph but then
-					// restore positions for existing nodes (only use ELK for new ones)
-					const { nodes: layoutedNodes, edges: layoutedEdges } = await applyElkLayout(
-						flowNodes,
-						flowEdges,
-						{ algorithm: 'layered', nodeSpacing: 150 }
-					);
-
-					if (thisVersion !== layoutVersion) return;
-
-					const newNodeSet = new Set(newNodeIds);
-					const mergedNodes = layoutedNodes.map((ln) => {
-						if (newNodeSet.has(ln.id)) return ln; // new node gets ELK position
-						const existing = existingNodes.get(ln.id);
-						if (existing) {
-							return {
-								...ln,
-								position: existing.position,
-								...(existing.measured ? { measured: existing.measured } : {}),
-								...(existing.width != null ? { width: existing.width } : {}),
-								...(existing.height != null ? { height: existing.height } : {})
-							};
-						}
-						return ln;
-					});
-
-					flowNodesStore.set(mergedNodes);
-					flowEdgesStore.set(layoutedEdges);
-				} else if (newNodeIds.length >= nodes.length * 0.5) {
-					// Major topology change (>50% new): full re-layout
-					const { nodes: layoutedNodes, edges: layoutedEdges } = await applyElkLayout(
-						flowNodes,
-						flowEdges,
-						{ algorithm: 'layered', nodeSpacing: 150 }
-					);
-
-					if (thisVersion !== layoutVersion) return;
-
-					flowNodesStore.set(layoutedNodes);
-					flowEdgesStore.set(layoutedEdges);
-				} else {
-					// No new nodes, just nodes were removed — update in place
-					if (thisVersion !== layoutVersion) return;
-
-					flowNodesStore.set(flowNodes);
-					flowEdgesStore.set(flowEdges);
-				}
-			}
+			flowEdgesStore.set(layoutedEdges);
 		} catch (error) {
-			if (thisVersion !== layoutVersion) return;
 			console.error('Layout failed:', error);
 			// Fallback: just set nodes with grid positions
 			const cols = Math.ceil(Math.sqrt(nodes.length));
-			const flowNodes: Node[] = nodes.map((node, index) => {
-				const existing = get(flowNodesStore).find((n) => n.id === node.id);
-				return {
-					id: node.id,
-					type: 'network',
-					position: {
-						x: (index % cols) * 300 + 50,
-						y: Math.floor(index / cols) * 180 + 50
-					},
-					...(existing?.measured ? { measured: existing.measured } : {}),
-					...(existing?.width != null ? { width: existing.width } : {}),
-					...(existing?.height != null ? { height: existing.height } : {}),
-					data: {
-						label: node.displayName,
-						...node
-					}
-				};
-			});
+			const flowNodes: Node[] = nodes.map((node, index) => ({
+				id: node.id,
+				type: 'network',
+				position: {
+					x: (index % cols) * 300 + 50,
+					y: Math.floor(index / cols) * 180 + 50
+				},
+				data: {
+					label: node.displayName,
+					...node
+				}
+			}));
 
 			const flowEdges: Edge[] = edges.map((edge) => ({
 				id: edge.id,
@@ -441,11 +328,8 @@
 
 			flowNodesStore.set(flowNodes);
 			flowEdgesStore.set(flowEdges);
-			if (!hasInitialLayout) hasInitialLayout = true;
 		} finally {
-			if (thisVersion === layoutVersion) {
-				isLayouting = false;
-			}
+			isLayouting = false;
 		}
 	}
 
@@ -485,7 +369,7 @@
 		if (fitViewRef) fitViewRef({ duration: 400, padding: 0.1 });
 	}
 
-	// Capture flow instance when mounted, only fitView on initial layout
+	// Capture flow instance when mounted, defer fitView for smoother rendering
 	function captureFlowInstance() {
 		const { fitBounds, fitView } = useSvelteFlow();
 		fitBoundsRef = fitBounds;
@@ -496,8 +380,8 @@
 	}
 </script>
 
-<div class="h-full w-full relative">
-	{#if isLayouting && !hasInitialLayout}
+<div class="h-full w-full">
+	{#if isLayouting}
 		<div class="flex h-full items-center justify-center">
 			<div class="text-muted-foreground">Calculating layout...</div>
 		</div>
@@ -532,12 +416,5 @@
 				/>
 			</SvelteFlow>
 		</SvelteFlowProvider>
-	{/if}
-
-	<!-- Layout update indicator (shown as overlay, does NOT unmount the graph) -->
-	{#if isLayouting && hasInitialLayout}
-		<div class="absolute top-2 left-1/2 -translate-x-1/2 z-10 rounded-md bg-card/90 border border-border px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
-			Updating layout...
-		</div>
 	{/if}
 </div>
