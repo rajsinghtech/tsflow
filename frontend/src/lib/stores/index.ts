@@ -26,7 +26,9 @@ export {
 	retryCount,
 	retryingIn,
 	startAutoRefresh,
-	stopAutoRefresh
+	stopAutoRefresh,
+	toggleAutoRefresh,
+	AUTO_REFRESH_INTERVAL
 } from './network-store';
 export { policyGraph, filteredGraph, parseSummary, fetchError, renderPolicy, runQuery, clearQuery, fetchAndRenderPolicy } from './policy-store';
 export {

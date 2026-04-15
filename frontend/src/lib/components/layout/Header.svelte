@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play } from 'lucide-svelte';
 	import { page } from '$app/stores';
-	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, themeStore, statsSummary, topTalkers } from '$lib/stores';
+	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '$lib/stores';
 	import { policyGraph } from '$lib/stores/policy-store';
 	import { formatBytes } from '$lib/utils';
 	import type { ThemeMode } from '$lib/stores';
@@ -200,17 +200,23 @@
 	<!-- Right section: Actions -->
 	<div class="flex items-center gap-1 sm:gap-2">
 		<button
+			onclick={() => toggleAutoRefresh()}
+			class="relative flex items-center gap-2 rounded-md p-2.5 hover:bg-secondary sm:px-3 sm:py-1.5"
+			title={$isAutoRefreshing ? 'Pause auto-refresh (P)' : 'Resume auto-refresh (P)'}
+		>
+			{#if $isAutoRefreshing}
+				<Pause class="h-4 w-4" />
+			{:else}
+				<Play class="h-4 w-4" />
+			{/if}
+		</button>
+
+		<button
 			onclick={handleRefresh}
 			class="relative flex items-center gap-2 rounded-md p-2.5 hover:bg-secondary sm:px-3 sm:py-1.5"
 			disabled={isRefreshing}
-			title={$isAutoRefreshing ? 'Auto-refreshing every 60s (R to manual refresh)' : 'Refresh (R)'}
+			title="Refresh now (R)"
 		>
-			{#if $isAutoRefreshing}
-				<span class="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5">
-					<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60"></span>
-					<span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary"></span>
-				</span>
-			{/if}
 			<RefreshCw class="h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
 			<span class="hidden text-sm sm:inline">Refresh</span>
 		</button>

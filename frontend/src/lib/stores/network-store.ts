@@ -416,6 +416,9 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 	return Array.from(logsByNode.values());
 }
 
+// Centralized auto-refresh interval (5 minutes)
+export const AUTO_REFRESH_INTERVAL = 300_000;
+
 // Auto-refresh state
 export const isAutoRefreshing = writable(false);
 
@@ -430,7 +433,7 @@ if (typeof window !== 'undefined') {
 	});
 }
 
-export function startAutoRefresh(intervalMs = 300000) {
+export function startAutoRefresh(intervalMs = AUTO_REFRESH_INTERVAL) {
 	stopAutoRefresh();
 	// Don't auto-refresh in historical mode - data is static
 	const ds = get(dataSourceStore);
@@ -445,4 +448,12 @@ export function stopAutoRefresh() {
 		refreshInterval = null;
 	}
 	isAutoRefreshing.set(false);
+}
+
+export function toggleAutoRefresh() {
+	if (get(isAutoRefreshing)) {
+		stopAutoRefresh();
+	} else {
+		startAutoRefresh();
+	}
 }

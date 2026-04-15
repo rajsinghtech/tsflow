@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Clock, Database, Radio } from 'lucide-svelte';
 	import { dataSourceStore, hasHistoricalData } from '$lib/stores/data-source-store';
-	import { loadNetworkData, startAutoRefresh, stopAutoRefresh } from '$lib/stores';
+	import { loadNetworkData, startAutoRefresh, stopAutoRefresh, AUTO_REFRESH_INTERVAL } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	// Debounce timer for reloading data
@@ -151,7 +151,7 @@
 			}
 		} else {
 			// Restart auto-refresh when switching back to live mode
-			startAutoRefresh(60_000);
+			startAutoRefresh(AUTO_REFRESH_INTERVAL);
 		}
 		// Single load - cancel any pending debounced reload
 		if (reloadTimeout) {

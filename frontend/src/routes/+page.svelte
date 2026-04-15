@@ -8,12 +8,12 @@
 	import BandwidthChart from '$lib/components/charts/BandwidthChart.svelte';
 	import EdgePolicyInfo from '$lib/components/logs/EdgePolicyInfo.svelte';
 	import Header from '$lib/components/layout/Header.svelte';
-	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, filteredNodes, filteredEdges } from '$lib/stores/network-store';
+	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '$lib/stores/network-store';
 	import { uiStore } from '$lib/stores/ui-store';
 
 	onMount(() => {
 		loadNetworkData();
-		startAutoRefresh(60_000);
+		startAutoRefresh();
 	});
 
 	onDestroy(() => {
@@ -41,11 +41,14 @@
 			uiStore.toggleFilters();
 		} else if (e.key === 'l' && !e.metaKey && !e.ctrlKey) {
 			uiStore.toggleLogViewer();
+		} else if (e.key === 'p' && !e.metaKey && !e.ctrlKey) {
+			toggleAutoRefresh();
 		}
 	}
 
 	const shortcuts = [
 		{ key: 'R', desc: 'Refresh data' },
+		{ key: 'P', desc: 'Pause/resume auto-refresh' },
 		{ key: 'F', desc: 'Toggle filters' },
 		{ key: 'L', desc: 'Toggle log viewer' },
 		{ key: 'Esc', desc: 'Clear selection' },
