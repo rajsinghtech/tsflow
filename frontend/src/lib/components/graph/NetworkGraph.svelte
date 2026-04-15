@@ -306,23 +306,30 @@
 		const thisVersion = ++layoutVersion;
 
 		try {
-			// Capture existing positions so we can preserve them on subsequent refreshes
-			const existingPositions = new Map<string, { x: number; y: number }>();
+			// Capture existing node state so we can preserve positions and measured dimensions
+			const existingNodes = new Map<string, Node>();
 			get(flowNodesStore).forEach((n) => {
-				existingPositions.set(n.id, { x: n.position.x, y: n.position.y });
+				existingNodes.set(n.id, n);
 			});
 			const isInitial = !hasInitialLayout;
 
-			// Convert to Svelte Flow format
-			const flowNodes: Node[] = nodes.map((node) => ({
-				id: node.id,
-				type: 'network',
-				position: existingPositions.get(node.id) ?? { x: 0, y: 0 },
-				data: {
-					label: node.displayName,
-					...node
-				}
-			}));
+			// Convert to Svelte Flow format, preserving measured dimensions from existing nodes
+			const flowNodes: Node[] = nodes.map((node) => {
+				const existing = existingNodes.get(node.id);
+				return {
+					id: node.id,
+					type: 'network',
+					position: existing?.position ?? { x: 0, y: 0 },
+					// Preserve measured dimensions so MiniMap continues to render nodes
+					...(existing?.measured ? { measured: existing.measured } : {}),
+					...(existing?.width != null ? { width: existing.width } : {}),
+					...(existing?.height != null ? { height: existing.height } : {}),
+					data: {
+						label: node.displayName,
+						...node
+					}
+				};
+			});
 
 			const flowEdges: Edge[] = edges.map((edge) => ({
 				id: edge.id,
@@ -348,7 +355,7 @@
 			} else {
 				// Subsequent refresh: preserve existing node positions, place new nodes
 				const newNodeIds = nodes
-					.filter((n) => !existingPositions.has(n.id))
+					.filter((n) => !existingNodes.has(n.id))
 					.map((n) => n.id);
 
 				if (newNodeIds.length > 0 && newNodeIds.length < nodes.length * 0.5) {
@@ -365,8 +372,16 @@
 					const newNodeSet = new Set(newNodeIds);
 					const mergedNodes = layoutedNodes.map((ln) => {
 						if (newNodeSet.has(ln.id)) return ln; // new node gets ELK position
-						const existing = existingPositions.get(ln.id);
-						if (existing) return { ...ln, position: existing }; // keep existing
+						const existing = existingNodes.get(ln.id);
+						if (existing) {
+							return {
+								...ln,
+								position: existing.position,
+								...(existing.measured ? { measured: existing.measured } : {}),
+								...(existing.width != null ? { width: existing.width } : {}),
+								...(existing.height != null ? { height: existing.height } : {})
+							};
+						}
 						return ln;
 					});
 
@@ -397,18 +412,24 @@
 			console.error('Layout failed:', error);
 			// Fallback: just set nodes with grid positions
 			const cols = Math.ceil(Math.sqrt(nodes.length));
-			const flowNodes: Node[] = nodes.map((node, index) => ({
-				id: node.id,
-				type: 'network',
-				position: {
-					x: (index % cols) * 300 + 50,
-					y: Math.floor(index / cols) * 180 + 50
-				},
-				data: {
-					label: node.displayName,
-					...node
-				}
-			}));
+			const flowNodes: Node[] = nodes.map((node, index) => {
+				const existing = get(flowNodesStore).find((n) => n.id === node.id);
+				return {
+					id: node.id,
+					type: 'network',
+					position: {
+						x: (index % cols) * 300 + 50,
+						y: Math.floor(index / cols) * 180 + 50
+					},
+					...(existing?.measured ? { measured: existing.measured } : {}),
+					...(existing?.width != null ? { width: existing.width } : {}),
+					...(existing?.height != null ? { height: existing.height } : {}),
+					data: {
+						label: node.displayName,
+						...node
+					}
+				};
+			});
 
 			const flowEdges: Edge[] = edges.map((edge) => ({
 				id: edge.id,
