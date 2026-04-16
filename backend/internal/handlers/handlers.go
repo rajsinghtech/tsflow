@@ -171,3 +171,21 @@ func (h *Handlers) resolveNodeID(nodeIDOrIP string) string {
 
 	return nodeIDOrIP
 }
+
+// resolveNodeOwner returns the owner email for a node ID or IP using the device cache.
+// Returns an empty string if the node is unknown or has no owner.
+func (h *Handlers) resolveNodeOwner(nodeIDOrIP string) string {
+	if h.poller == nil {
+		return ""
+	}
+	cache := h.poller.GetDeviceCache()
+
+	var entry *services.DeviceCacheEntry
+	if entry = cache.GetDevice(nodeIDOrIP); entry == nil {
+		entry = cache.GetDeviceByIP(nodeIDOrIP)
+	}
+	if entry == nil {
+		return ""
+	}
+	return entry.Owner
+}

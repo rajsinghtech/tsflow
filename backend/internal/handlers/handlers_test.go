@@ -112,3 +112,10 @@ func TestParseTimeRange_InvalidFormat(t *testing.T) {
 		t.Error("expected error for invalid start time")
 	}
 }
+
+func TestResolveNodeOwner_NilPoller(t *testing.T) {
+	h := &Handlers{}
+	if owner := h.resolveNodeOwner("device1"); owner != "" {
+		t.Errorf("expected empty owner with nil poller, got %q", owner)
+	}
+}
