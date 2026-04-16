@@ -49,181 +49,85 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 
 // Init creates the database schema
 func (s *SQLiteStore) Init(ctx context.Context) error {
+	// Step 1: Migrate minutely tables to flat names (idempotent).
+	// ALTER TABLE fails if source is absent or target already exists — both are OK.
+	for _, m := range [][2]string{
+		{"node_pairs_minutely", "node_pairs"},
+		{"bandwidth_minutely", "bandwidth"},
+		{"bandwidth_by_node_minutely", "bandwidth_by_node"},
+		{"traffic_stats_minutely", "traffic_stats"},
+	} {
+		_, _ = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s RENAME TO %s", m[0], m[1]))
+	}
+
+	// Step 2: Drop old tier tables and the ephemeral raw-log table.
+	for _, table := range []string{
+		"node_pairs_hourly", "node_pairs_daily",
+		"bandwidth_hourly", "bandwidth_daily",
+		"bandwidth_by_node_hourly", "bandwidth_by_node_daily",
+		"traffic_stats_hourly", "traffic_stats_daily",
+		"flow_logs_current",
+	} {
+		_, _ = s.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+	}
+
+	// Step 3: Create flat tables (IF NOT EXISTS handles fresh installs and post-migration runs).
 	schema := `
-	-- Temporary raw flow logs (kept for current poll period only, ~10 minutes)
-	-- Used for real-time queries before aggregation
-	CREATE TABLE IF NOT EXISTS flow_logs_current (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		logged_at DATETIME NOT NULL,
-		node_id TEXT NOT NULL,
-		traffic_type TEXT NOT NULL,
-		protocol INTEGER DEFAULT 0,
-		src_ip TEXT NOT NULL,
-		src_port INTEGER DEFAULT 0,
-		dst_ip TEXT NOT NULL,
-		dst_port INTEGER DEFAULT 0,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		tx_pkts INTEGER DEFAULT 0,
-		rx_pkts INTEGER DEFAULT 0
-	);
-	CREATE INDEX IF NOT EXISTS idx_flow_logs_current_logged ON flow_logs_current(logged_at);
-
-	-- Node-pair aggregates: the primary data for graph rendering
-	-- Pre-computed at poll time with IP->device resolution
-	-- Tiered: minutely (24h), hourly (7d), daily (forever)
-	CREATE TABLE IF NOT EXISTS node_pairs_minutely (
-		bucket INTEGER NOT NULL,
-		src_node_id TEXT NOT NULL,
-		dst_node_id TEXT NOT NULL,
-		traffic_type TEXT NOT NULL,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		tx_pkts INTEGER DEFAULT 0,
-		rx_pkts INTEGER DEFAULT 0,
-		flow_count INTEGER DEFAULT 0,
-		protocols TEXT DEFAULT '[]',
-		ports TEXT DEFAULT '[]',
+	CREATE TABLE IF NOT EXISTS node_pairs (
+		bucket       INTEGER NOT NULL,
+		src_node_id  TEXT    NOT NULL,
+		dst_node_id  TEXT    NOT NULL,
+		traffic_type TEXT    NOT NULL,
+		tx_bytes     INTEGER DEFAULT 0,
+		rx_bytes     INTEGER DEFAULT 0,
+		tx_pkts      INTEGER DEFAULT 0,
+		rx_pkts      INTEGER DEFAULT 0,
+		flow_count   INTEGER DEFAULT 0,
+		protocols    TEXT    DEFAULT '[]',
+		ports        TEXT    DEFAULT '[]',
 		PRIMARY KEY (bucket, src_node_id, dst_node_id, traffic_type)
 	);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_minutely_bucket ON node_pairs_minutely(bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_minutely_src ON node_pairs_minutely(src_node_id, bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_minutely_dst ON node_pairs_minutely(dst_node_id, bucket);
+	CREATE INDEX IF NOT EXISTS idx_node_pairs_bucket ON node_pairs(bucket);
+	CREATE INDEX IF NOT EXISTS idx_node_pairs_src    ON node_pairs(src_node_id, bucket);
+	CREATE INDEX IF NOT EXISTS idx_node_pairs_dst    ON node_pairs(dst_node_id, bucket);
 
-	CREATE TABLE IF NOT EXISTS node_pairs_hourly (
-		bucket INTEGER NOT NULL,
-		src_node_id TEXT NOT NULL,
-		dst_node_id TEXT NOT NULL,
-		traffic_type TEXT NOT NULL,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		tx_pkts INTEGER DEFAULT 0,
-		rx_pkts INTEGER DEFAULT 0,
-		flow_count INTEGER DEFAULT 0,
-		protocols TEXT DEFAULT '[]',
-		ports TEXT DEFAULT '[]',
-		PRIMARY KEY (bucket, src_node_id, dst_node_id, traffic_type)
-	);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_hourly_bucket ON node_pairs_hourly(bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_hourly_src ON node_pairs_hourly(src_node_id, bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_hourly_dst ON node_pairs_hourly(dst_node_id, bucket);
-
-	CREATE TABLE IF NOT EXISTS node_pairs_daily (
-		bucket INTEGER NOT NULL,
-		src_node_id TEXT NOT NULL,
-		dst_node_id TEXT NOT NULL,
-		traffic_type TEXT NOT NULL,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		tx_pkts INTEGER DEFAULT 0,
-		rx_pkts INTEGER DEFAULT 0,
-		flow_count INTEGER DEFAULT 0,
-		protocols TEXT DEFAULT '[]',
-		ports TEXT DEFAULT '[]',
-		PRIMARY KEY (bucket, src_node_id, dst_node_id, traffic_type)
-	);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_daily_bucket ON node_pairs_daily(bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_daily_src ON node_pairs_daily(src_node_id, bucket);
-	CREATE INDEX IF NOT EXISTS idx_node_pairs_daily_dst ON node_pairs_daily(dst_node_id, bucket);
-
-	-- Total bandwidth rollups (for bandwidth chart without node filter)
-	CREATE TABLE IF NOT EXISTS bandwidth_minutely (
-		bucket INTEGER PRIMARY KEY,
+	CREATE TABLE IF NOT EXISTS bandwidth (
+		bucket   INTEGER PRIMARY KEY,
 		tx_bytes INTEGER DEFAULT 0,
 		rx_bytes INTEGER DEFAULT 0
 	);
 
-	CREATE TABLE IF NOT EXISTS bandwidth_hourly (
-		bucket INTEGER PRIMARY KEY,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0
-	);
-
-	CREATE TABLE IF NOT EXISTS bandwidth_daily (
-		bucket INTEGER PRIMARY KEY,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0
-	);
-
-	-- Per-node bandwidth rollups (for bandwidth chart with node filter)
-	CREATE TABLE IF NOT EXISTS bandwidth_by_node_minutely (
-		bucket INTEGER NOT NULL,
-		node_id TEXT NOT NULL,
+	CREATE TABLE IF NOT EXISTS bandwidth_by_node (
+		bucket   INTEGER NOT NULL,
+		node_id  TEXT    NOT NULL,
 		tx_bytes INTEGER DEFAULT 0,
 		rx_bytes INTEGER DEFAULT 0,
 		PRIMARY KEY (bucket, node_id)
 	);
-	CREATE INDEX IF NOT EXISTS idx_bandwidth_node_minutely_node ON bandwidth_by_node_minutely(node_id, bucket);
+	CREATE INDEX IF NOT EXISTS idx_bandwidth_by_node ON bandwidth_by_node(node_id, bucket);
 
-	CREATE TABLE IF NOT EXISTS bandwidth_by_node_hourly (
-		bucket INTEGER NOT NULL,
-		node_id TEXT NOT NULL,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		PRIMARY KEY (bucket, node_id)
-	);
-	CREATE INDEX IF NOT EXISTS idx_bandwidth_node_hourly_node ON bandwidth_by_node_hourly(node_id, bucket);
-
-	CREATE TABLE IF NOT EXISTS bandwidth_by_node_daily (
-		bucket INTEGER NOT NULL,
-		node_id TEXT NOT NULL,
-		tx_bytes INTEGER DEFAULT 0,
-		rx_bytes INTEGER DEFAULT 0,
-		PRIMARY KEY (bucket, node_id)
-	);
-	CREATE INDEX IF NOT EXISTS idx_bandwidth_node_daily_node ON bandwidth_by_node_daily(node_id, bucket);
-
-	-- Network-wide traffic statistics rollups
-	CREATE TABLE IF NOT EXISTS traffic_stats_minutely (
-		bucket INTEGER PRIMARY KEY,
-		tcp_bytes INTEGER DEFAULT 0,
-		udp_bytes INTEGER DEFAULT 0,
+	CREATE TABLE IF NOT EXISTS traffic_stats (
+		bucket            INTEGER PRIMARY KEY,
+		tcp_bytes         INTEGER DEFAULT 0,
+		udp_bytes         INTEGER DEFAULT 0,
 		other_proto_bytes INTEGER DEFAULT 0,
-		virtual_bytes INTEGER DEFAULT 0,
-		subnet_bytes INTEGER DEFAULT 0,
-		physical_bytes INTEGER DEFAULT 0,
-		total_flows INTEGER DEFAULT 0,
-		unique_pairs INTEGER DEFAULT 0,
-		top_ports TEXT DEFAULT '[]'
+		virtual_bytes     INTEGER DEFAULT 0,
+		subnet_bytes      INTEGER DEFAULT 0,
+		physical_bytes    INTEGER DEFAULT 0,
+		total_flows       INTEGER DEFAULT 0,
+		unique_pairs      INTEGER DEFAULT 0,
+		top_ports         TEXT    DEFAULT '[]'
 	);
 
-	CREATE TABLE IF NOT EXISTS traffic_stats_hourly (
-		bucket INTEGER PRIMARY KEY,
-		tcp_bytes INTEGER DEFAULT 0,
-		udp_bytes INTEGER DEFAULT 0,
-		other_proto_bytes INTEGER DEFAULT 0,
-		virtual_bytes INTEGER DEFAULT 0,
-		subnet_bytes INTEGER DEFAULT 0,
-		physical_bytes INTEGER DEFAULT 0,
-		total_flows INTEGER DEFAULT 0,
-		unique_pairs INTEGER DEFAULT 0,
-		top_ports TEXT DEFAULT '[]'
-	);
-
-	CREATE TABLE IF NOT EXISTS traffic_stats_daily (
-		bucket INTEGER PRIMARY KEY,
-		tcp_bytes INTEGER DEFAULT 0,
-		udp_bytes INTEGER DEFAULT 0,
-		other_proto_bytes INTEGER DEFAULT 0,
-		virtual_bytes INTEGER DEFAULT 0,
-		subnet_bytes INTEGER DEFAULT 0,
-		physical_bytes INTEGER DEFAULT 0,
-		total_flows INTEGER DEFAULT 0,
-		unique_pairs INTEGER DEFAULT 0,
-		top_ports TEXT DEFAULT '[]'
-	);
-
-	-- Poll state tracking
 	CREATE TABLE IF NOT EXISTS poll_state (
-		id INTEGER PRIMARY KEY CHECK (id = 1),
+		id            INTEGER PRIMARY KEY CHECK (id = 1),
 		last_poll_end DATETIME,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	INSERT OR IGNORE INTO poll_state (id, last_poll_end, updated_at) VALUES (1, NULL, CURRENT_TIMESTAMP);
 	`
 
-	_, err := s.db.ExecContext(ctx, schema)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("failed to create schema: %w", err)
 	}
 
