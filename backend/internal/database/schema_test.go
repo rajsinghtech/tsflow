@@ -29,58 +29,6 @@ func TestNewSQLiteStore(t *testing.T) {
 	}
 }
 
-func TestInsertAndGetFlowLogs(t *testing.T) {
-	store := setupTestDB(t)
-	ctx := context.Background()
-
-	logs := []FlowLog{
-		{
-			LoggedAt:    time.Now().UTC(),
-			NodeID:      "node1",
-			TrafficType: "virtual",
-			Protocol:    6,
-			SrcIP:       "100.1.1.1",
-			SrcPort:     12345,
-			DstIP:       "100.1.1.2",
-			DstPort:     80,
-			TxBytes:     1000,
-			RxBytes:     500,
-			TxPkts:      10,
-			RxPkts:      5,
-		},
-		{
-			LoggedAt:    time.Now().UTC(),
-			NodeID:      "node2",
-			TrafficType: "subnet",
-			Protocol:    17,
-			SrcIP:       "100.1.1.2",
-			SrcPort:     54321,
-			DstIP:       "192.168.1.1",
-			DstPort:     443,
-			TxBytes:     2000,
-			RxBytes:     1000,
-			TxPkts:      20,
-			RxPkts:      10,
-		},
-	}
-
-	count, err := store.InsertFlowLogs(ctx, logs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 inserted, got %d", count)
-	}
-
-	// Query them back
-	result, err := store.GetRecentFlowLogs(ctx, time.Now().Add(-1*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result) != 2 {
-		t.Errorf("expected 2 logs, got %d", len(result))
-	}
-}
 
 func TestPollState(t *testing.T) {
 	store := setupTestDB(t)

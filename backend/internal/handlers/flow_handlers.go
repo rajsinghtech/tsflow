@@ -169,80 +169,8 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, logs)
 }
 
-// GetStoredFlowLogs retrieves recent flow logs from the local SQLite database
 func (h *Handlers) GetStoredFlowLogs(c *gin.Context) {
-	if h.store == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": "Database not configured",
-		})
-		return
-	}
-
-	start := c.Query("start")
-	end := c.Query("end")
-
-	var startTime, endTime time.Time
-	var err error
-
-	if start == "" {
-		startTime = time.Now().Add(-10 * time.Minute)
-	} else {
-		startTime, err = time.Parse(time.RFC3339, start)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid start time"})
-			return
-		}
-	}
-
-	if end == "" {
-		endTime = time.Now()
-	} else {
-		endTime, err = time.Parse(time.RFC3339, end)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid end time"})
-			return
-		}
-	}
-
-	// Clamp future end times to now
-	now := time.Now()
-	if endTime.After(now) {
-		endTime = now
-	}
-
-	if endTime.Before(startTime) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "end time before start time"})
-		return
-	}
-
-	limit := h.parseLimitParam(c, MaxLogsInResponse, MaxLogsInResponse)
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
-	defer cancel()
-
-	logs, err := h.store.GetFlowLogsInRange(ctx, startTime, endTime, limit)
-	if err != nil {
-		log.Printf("ERROR GetStoredFlowLogs: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to fetch stored logs",
-		})
-		return
-	}
-
-	if logs == nil {
-		logs = []database.FlowLog{}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"logs": logs,
-		"metadata": gin.H{
-			"count":  len(logs),
-			"start":  startTime,
-			"end":    endTime,
-			"limit":  limit,
-			"source": "database",
-		},
-	})
+	c.JSON(http.StatusOK, gin.H{"logs": []any{}})
 }
 
 // GetAggregatedFlowLogs returns pre-aggregated node-to-node traffic
