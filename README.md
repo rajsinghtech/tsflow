@@ -154,12 +154,16 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 | `TSFLOW_DB_PATH` | SQLite database path | `./data/tsflow.db` |
 | `TSFLOW_POLL_INTERVAL` | How often to poll Tailscale API for new logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
-| `TSFLOW_RETENTION` | How long to keep flow logs | `168h` (7 days) |
+| `TSFLOW_RETENTION_MINUTELY` | How long to keep per-minute flow data | `24h` |
+| `TSFLOW_RETENTION_HOURLY` | How long to keep per-hour aggregated data | `168h` (7 days) |
+| `TSFLOW_RETENTION_DAILY` | How long to keep per-day aggregated data | forever |
 
 ### Data Storage
 
-TSFlow stores flow logs in SQLite with:
-- **7-day retention** for raw flow logs (configurable via `TSFLOW_RETENTION`)
+TSFlow stores flow logs in SQLite using a tiered aggregation scheme:
+- **Minutely data** — retained 24 hours (configurable via `TSFLOW_RETENTION_MINUTELY`)
+- **Hourly data** — retained 7 days (configurable via `TSFLOW_RETENTION_HOURLY`)
+- **Daily data** — kept forever by default (configurable via `TSFLOW_RETENTION_DAILY`)
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`
 
