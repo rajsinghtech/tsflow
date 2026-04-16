@@ -16,12 +16,8 @@ type PollerConfig struct {
 	PollInterval time.Duration
 	// InitialBackfill is how far back to fetch on first run
 	InitialBackfill time.Duration
-	// RetentionMinutely is how long to keep minutely data (default 24h)
-	RetentionMinutely time.Duration
-	// RetentionHourly is how long to keep hourly data (default 7d)
-	RetentionHourly time.Duration
-	// RetentionDaily is how long to keep daily data (0 = forever)
-	RetentionDaily time.Duration
+	// Retention is how long to keep flow data
+	Retention time.Duration
 	// CleanupInterval is how often to run cleanup
 	CleanupInterval time.Duration
 	// DeviceCacheRefresh is how often to refresh device cache
@@ -33,9 +29,7 @@ func DefaultPollerConfig() PollerConfig {
 	return PollerConfig{
 		PollInterval:       5 * time.Minute,
 		InitialBackfill:    6 * time.Hour,
-		RetentionMinutely:  24 * time.Hour,
-		RetentionHourly:    7 * 24 * time.Hour,
-		RetentionDaily:     0, // Keep forever
+		Retention:          30 * 24 * time.Hour,
 		CleanupInterval:    1 * time.Hour,
 		DeviceCacheRefresh: 5 * time.Minute,
 	}
@@ -93,8 +87,8 @@ func (p *Poller) Start(ctx context.Context) error {
 	p.triggerChan = make(chan struct{}, 1)
 	p.mu.Unlock()
 
-	log.Printf("Starting background poller (interval: %v, retention minutely: %v, hourly: %v)",
-		p.config.PollInterval, p.config.RetentionMinutely, p.config.RetentionHourly)
+	log.Printf("Starting background poller (interval: %v, retention: %v)",
+		p.config.PollInterval, p.config.Retention)
 
 	// Initial device cache refresh
 	if err := p.refreshDeviceCache(ctx); err != nil {
@@ -347,17 +341,6 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 		return p.store.UpdatePollState(ctx, end)
 	}
 
-	// Only insert raw flow logs for recent data (within last 15 minutes).
-	// During backfill, raw logs are never queried and just bloat the database.
-	insertedCount := len(flowLogs)
-	isRecent := time.Since(end) < 15*time.Minute
-	if isRecent {
-		insertedCount, err = p.store.InsertFlowLogs(ctx, flowLogs)
-		if err != nil {
-			return err
-		}
-	}
-
 	// Pre-aggregate at poll time: node pairs, bandwidth, and traffic stats
 	nodePairs, totalBandwidth, nodeBandwidth, trafficStats := p.aggregate(flowLogs)
 
@@ -375,16 +358,15 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 	// Update rolling cache for fast live view queries
 	p.rollingCache.Update(nodePairs, totalBandwidth, nodeBandwidth, trafficStats)
 
-	// Update stats
 	p.mu.Lock()
 	p.lastPollTime = time.Now()
-	p.lastPollCount = insertedCount
-	p.totalPolled += int64(insertedCount)
+	p.lastPollCount = len(flowLogs)
+	p.totalPolled += int64(len(flowLogs))
 	p.mu.Unlock()
 
-	if insertedCount > 0 {
+	if len(flowLogs) > 0 {
 		log.Printf("Polled %d flow logs, aggregated %d node pairs, %d bandwidth buckets (%v to %v)",
-			insertedCount, len(nodePairs), len(totalBandwidth),
+			len(flowLogs), len(nodePairs), len(totalBandwidth),
 			start.Format(time.RFC3339), end.Format(time.RFC3339))
 	}
 
@@ -392,11 +374,7 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 }
 
 func (p *Poller) cleanup(ctx context.Context) error {
-	deleted, err := p.store.Cleanup(ctx,
-		p.config.RetentionMinutely,
-		p.config.RetentionHourly,
-		p.config.RetentionDaily,
-	)
+	deleted, err := p.store.Cleanup(ctx, p.config.Retention)
 	if err != nil {
 		return err
 	}
