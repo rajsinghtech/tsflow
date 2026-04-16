@@ -133,6 +133,7 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	// and filter to known devices only
 	type talkerAccum struct {
 		displayName string
+		owner       string
 		txBytes     int64
 		rxBytes     int64
 		totalBytes  int64
@@ -151,6 +152,7 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		} else {
 			merged[resolvedID] = &talkerAccum{
 				displayName: name,
+				owner:       h.resolveNodeOwner(resolvedID),
 				txBytes:     t.TxBytes,
 				rxBytes:     t.RxBytes,
 				totalBytes:  t.TotalBytes,
@@ -163,6 +165,7 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		enriched = append(enriched, gin.H{
 			"nodeId":      id,
 			"displayName": acc.displayName,
+			"owner":       acc.owner,
 			"txBytes":     acc.txBytes,
 			"rxBytes":     acc.rxBytes,
 			"totalBytes":  acc.totalBytes,
@@ -221,7 +224,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	type pairKey struct{ src, dst string }
 	type pairAccum struct {
 		srcName    string
+		srcOwner   string
 		dstName    string
+		dstOwner   string
 		txBytes    int64
 		rxBytes    int64
 		totalBytes int64
@@ -245,7 +250,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		} else {
 			pairMerged[key] = &pairAccum{
 				srcName:    srcName,
+				srcOwner:   h.resolveNodeOwner(srcID),
 				dstName:    dstName,
+				dstOwner:   h.resolveNodeOwner(dstID),
 				txBytes:    p.TxBytes,
 				rxBytes:    p.RxBytes,
 				totalBytes: p.TotalBytes,
@@ -259,8 +266,10 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		enriched = append(enriched, gin.H{
 			"srcNodeId":      key.src,
 			"srcDisplayName": acc.srcName,
+			"srcOwner":       acc.srcOwner,
 			"dstNodeId":      key.dst,
 			"dstDisplayName": acc.dstName,
+			"dstOwner":       acc.dstOwner,
 			"txBytes":        acc.txBytes,
 			"rxBytes":        acc.rxBytes,
 			"totalBytes":     acc.totalBytes,
