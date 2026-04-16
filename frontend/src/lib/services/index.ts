@@ -3,8 +3,6 @@ export {
 	tailscaleService,
 	type DataRange,
 	type PollerStatus,
-	type StoredFlowLog,
-	type StoredFlowLogsResponse,
 	type AggregatedFlow,
 	type AggregatedFlowsResponse,
 	type BandwidthBucket,

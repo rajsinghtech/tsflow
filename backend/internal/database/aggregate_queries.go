@@ -415,17 +415,19 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 	}
 
 	bs := resolveBucketSize(endUnix - startUnix)
-	// top_ports: SQLite picks an arbitrary row's value within each group.
+	// top_ports is only meaningful at 1-minute granularity. For coarser buckets
+	// SQLite would pick an arbitrary row's value, so return '[]' instead.
 	query := fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b,
 		       SUM(tcp_bytes), SUM(udp_bytes), SUM(other_proto_bytes),
 		       SUM(virtual_bytes), SUM(subnet_bytes), SUM(physical_bytes),
-		       SUM(total_flows), MAX(unique_pairs), top_ports
+		       SUM(total_flows), MAX(unique_pairs),
+		       CASE WHEN %d = 60 THEN top_ports ELSE '[]' END
 		FROM traffic_stats
 		WHERE bucket >= ? AND bucket <= ?
 		GROUP BY b
 		ORDER BY b ASC
-	`, bs, bs)
+	`, bs, bs, bs)
 
 	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix)
 	if err != nil {

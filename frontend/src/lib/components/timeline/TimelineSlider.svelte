@@ -269,7 +269,7 @@
 		<div class="space-y-1 text-xs text-muted-foreground">
 			<div class="flex justify-between">
 				<span>Stored Records:</span>
-				<span class="font-mono">{(pollerStatus.database?.dataRange?.count ?? pollerStatus.database?.tableCounts?.flow_logs_current ?? 0).toLocaleString()}</span>
+				<span class="font-mono">{(pollerStatus.database?.dataRange?.count ?? 0).toLocaleString()}</span>
 			</div>
 			{#if pollerStatus.lastPollTime && new Date(pollerStatus.lastPollTime).getFullYear() > 1970}
 				<div class="flex justify-between">
