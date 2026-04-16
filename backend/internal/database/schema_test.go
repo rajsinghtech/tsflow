@@ -230,3 +230,61 @@ func TestInit_Idempotent(t *testing.T) {
 		t.Fatalf("second Init() failed: %v", err)
 	}
 }
+
+func TestResolveBucketSize(t *testing.T) {
+	cases := []struct {
+		rangeSeconds int64
+		want         int64
+	}{
+		{30 * 60, 60},
+		{2 * 3600, 60},
+		{2*3600 + 1, 3600},
+		{48 * 3600, 3600},
+		{48*3600 + 1, 86400},
+		{30 * 24 * 3600, 86400},
+	}
+	for _, tc := range cases {
+		got := resolveBucketSize(tc.rangeSeconds)
+		if got != tc.want {
+			t.Errorf("resolveBucketSize(%d) = %d, want %d", tc.rangeSeconds, got, tc.want)
+		}
+	}
+}
+
+func TestGetBandwidth_Bucketing(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+
+	// Insert three 1-minute bandwidth rows
+	base := int64(1000000)
+	base = (base / 60) * 60
+	for i := int64(0); i < 3; i++ {
+		_, err := store.db.ExecContext(ctx,
+			"INSERT INTO bandwidth (bucket, tx_bytes, rx_bytes) VALUES (?, ?, ?)",
+			base+i*60, 100, 50,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := time.Unix(base, 0)
+	end := time.Unix(base+3*60, 0)
+
+	// Small range (≤2h) → should return 3 individual 1-min buckets
+	buckets, err := store.GetBandwidth(ctx, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != 3 {
+		t.Errorf("expected 3 buckets for small range, got %d", len(buckets))
+	}
+
+	total := int64(0)
+	for _, b := range buckets {
+		total += b.TxBytes
+	}
+	if total != 300 {
+		t.Errorf("expected total tx=300, got %d", total)
+	}
+}
