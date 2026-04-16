@@ -15,12 +15,20 @@
 		topPorts,
 		statsLoading,
 		statsError,
-		queryTimeWindow
+		queryTimeWindow,
+		timeRangeStore,
+		hasHistoricalData,
+		dataSourceStore
 	} from '$lib/stores';
 	import { formatBytes } from '$lib/utils';
 	import { getPortLabel } from '$lib/utils/protocol';
 
 	onMount(() => {
+		// Analytics is most useful over at least 1h; nudge the default up from 5m
+		const SHORT_RANGES = new Set(['1m', '5m', '15m', '30m']);
+		if (SHORT_RANGES.has($timeRangeStore.selected)) {
+			timeRangeStore.setPreset('1h');
+		}
 		startStatsRefresh(60_000);
 	});
 
@@ -147,6 +155,15 @@
 				{$statsError}
 			</div>
 		{:else}
+			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasHistoricalData && $dataSourceStore.mode !== 'historical'}
+				<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
+					No traffic data in the selected window.
+					Switch to <button
+						class="underline hover:text-foreground"
+						onclick={() => dataSourceStore.setMode('historical')}
+					>Historical mode</button> to browse stored data.
+				</div>
+			{/if}
 			<!-- Overview Cards -->
 			<div class="mb-4 grid grid-cols-2 gap-2 sm:mb-6 sm:gap-4 lg:grid-cols-4">
 				<StatCard label="Total Traffic" value={formatBytes(totalBytes)} subtitle={timeWindowLabel} sparkline={trafficSparkline}>

@@ -114,30 +114,6 @@ export async function loadStats(currentAttempt = 0) {
 
 		if (signal.aborted) return;
 
-		// If live mode returned empty stats, fall back to stored data range
-		const liveEmpty = ds.mode !== 'historical'
-			&& (!overviewRes.summary || overviewRes.summary.totalFlows === 0)
-			&& (!talkersRes.talkers || talkersRes.talkers.length === 0);
-
-		if (liveEmpty) {
-			if (!ds.dataRange) {
-				await dataSourceStore.fetchDataRange();
-				ds = get(dataSourceStore);
-			}
-			if (ds.dataRange && ds.dataRange.count > 0) {
-				const rangeStart = new Date(ds.dataRange.earliest);
-				const rangeEnd = new Date(ds.dataRange.latest);
-				if (rangeStart.getFullYear() > 1970 && rangeEnd > rangeStart) {
-					[overviewRes, talkersRes, pairsRes] = await Promise.all([
-						tailscaleService.getStatsOverview(rangeStart, rangeEnd, signal),
-						tailscaleService.getTopTalkers(rangeStart, rangeEnd, 15, signal),
-						tailscaleService.getTopPairs(rangeStart, rangeEnd, 15, signal)
-					]);
-					if (signal.aborted) return;
-				}
-			}
-		}
-
 		statsState.set({
 			summary: overviewRes.summary,
 			buckets: overviewRes.buckets || [],
