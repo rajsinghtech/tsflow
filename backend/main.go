@@ -97,19 +97,9 @@ func main() {
 			pollerConfig.InitialBackfill = d
 		}
 	}
-	if retention := os.Getenv("TSFLOW_RETENTION_MINUTELY"); retention != "" {
+	if retention := os.Getenv("TSFLOW_RETENTION"); retention != "" {
 		if d, err := time.ParseDuration(retention); err == nil {
-			pollerConfig.RetentionMinutely = d
-		}
-	}
-	if retention := os.Getenv("TSFLOW_RETENTION_HOURLY"); retention != "" {
-		if d, err := time.ParseDuration(retention); err == nil {
-			pollerConfig.RetentionHourly = d
-		}
-	}
-	if retention := os.Getenv("TSFLOW_RETENTION_DAILY"); retention != "" {
-		if d, err := time.ParseDuration(retention); err == nil {
-			pollerConfig.RetentionDaily = d
+			pollerConfig.Retention = d
 		}
 	}
 
@@ -228,8 +218,7 @@ func main() {
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
-	log.Printf("Retention: minutely=%s, hourly=%s, daily=%s",
-		pollerConfig.RetentionMinutely, pollerConfig.RetentionHourly, pollerConfig.RetentionDaily)
+	log.Printf("Retention: %s", pollerConfig.Retention)
 
 	// Log authentication method being used
 	if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {
