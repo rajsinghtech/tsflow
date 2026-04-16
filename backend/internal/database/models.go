@@ -131,18 +131,13 @@ type Store interface {
 	Init(ctx context.Context) error
 	Close() error
 
-	// Raw log operations (for current incomplete period only)
-	InsertFlowLogs(ctx context.Context, logs []FlowLog) (int, error)
-	GetRecentFlowLogs(ctx context.Context, since time.Time) ([]FlowLog, error)
-	GetFlowLogsInRange(ctx context.Context, start, end time.Time, limit int) ([]FlowLog, error)
-
 	// Pre-aggregated data operations
 	UpsertNodePairAggregates(ctx context.Context, aggregates []NodePairAggregate) error
 	GetNodePairAggregates(ctx context.Context, start, end time.Time, bucketSize int64) ([]NodePairAggregate, error)
 
 	// Bandwidth operations
-	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket, bucketSize int64) error
-	UpsertNodeBandwidth(ctx context.Context, buckets []NodeBandwidth, bucketSize int64) error
+	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket) error
+	UpsertNodeBandwidth(ctx context.Context, buckets []NodeBandwidth) error
 	GetBandwidth(ctx context.Context, start, end time.Time) ([]BandwidthBucket, error)
 	GetNodeBandwidth(ctx context.Context, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
 
@@ -154,7 +149,7 @@ type Store interface {
 	GetTopPairs(ctx context.Context, start, end time.Time, limit int) ([]TopPair, error)
 	GetNodeStats(ctx context.Context, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 
-	// Atomic poll commit (all upserts + poll state in one transaction)
+	// Atomic poll commit
 	CommitPollResults(ctx context.Context, results PollResults) error
 
 	// State operations
@@ -163,6 +158,6 @@ type Store interface {
 	GetDataRange(ctx context.Context) (*DataRange, error)
 
 	// Maintenance
-	Cleanup(ctx context.Context, retentionMinutely, retentionHourly, retentionDaily time.Duration) (int64, error)
+	Cleanup(ctx context.Context, retention time.Duration) (int64, error)
 	GetStats(ctx context.Context) (map[string]any, error)
 }

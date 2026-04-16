@@ -79,18 +79,18 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
 	return &DataRange{}, nil
 }
 
-// Cleanup removes old data based on retention periods
-func (s *SQLiteStore) Cleanup(ctx context.Context, retentionMinutely, retentionHourly, retentionDaily time.Duration) (int64, error) {
+// Cleanup removes old data based on retention period
+func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC().Unix()
+	cutoff := now - int64(retention.Seconds())
 	var totalDeleted int64
 
-	// Clean up minutely tables
-	minutelyCutoff := now - int64(retentionMinutely.Seconds())
-	for _, table := range []string{"node_pairs_minutely", "bandwidth_minutely", "bandwidth_by_node_minutely", "traffic_stats_minutely"} {
-		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), minutelyCutoff)
+	tables := []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"}
+	for _, table := range tables {
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), cutoff)
 		if err != nil {
 			log.Printf("Warning: failed to cleanup %s: %v", table, err)
 			continue
@@ -98,44 +98,6 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retentionMinutely, retentionH
 		if deleted, _ := result.RowsAffected(); deleted > 0 {
 			totalDeleted += deleted
 		}
-	}
-
-	// Clean up hourly tables
-	hourlyCutoff := now - int64(retentionHourly.Seconds())
-	for _, table := range []string{"node_pairs_hourly", "bandwidth_hourly", "bandwidth_by_node_hourly", "traffic_stats_hourly"} {
-		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), hourlyCutoff)
-		if err != nil {
-			log.Printf("Warning: failed to cleanup %s: %v", table, err)
-			continue
-		}
-		if deleted, _ := result.RowsAffected(); deleted > 0 {
-			totalDeleted += deleted
-		}
-	}
-
-	// Clean up daily tables (if retention specified)
-	if retentionDaily > 0 {
-		dailyCutoff := now - int64(retentionDaily.Seconds())
-		for _, table := range []string{"node_pairs_daily", "bandwidth_daily", "bandwidth_by_node_daily", "traffic_stats_daily"} {
-			result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), dailyCutoff)
-			if err != nil {
-				log.Printf("Warning: failed to cleanup %s: %v", table, err)
-				continue
-			}
-			if deleted, _ := result.RowsAffected(); deleted > 0 {
-				totalDeleted += deleted
-			}
-		}
-	}
-
-	// Clean up raw flow logs (keep only last 10 minutes)
-	const sqliteFormat = "2006-01-02 15:04:05"
-	flowLogCutoff := time.Now().Add(-10 * time.Minute).UTC().Format(sqliteFormat)
-	result, err := s.db.ExecContext(ctx, "DELETE FROM flow_logs_current WHERE logged_at < ?", flowLogCutoff)
-	if err != nil {
-		log.Printf("Warning: failed to cleanup flow_logs_current: %v", err)
-	} else if deleted, _ := result.RowsAffected(); deleted > 0 {
-		totalDeleted += deleted
 	}
 
 	return totalDeleted, nil

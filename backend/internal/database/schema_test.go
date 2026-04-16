@@ -127,7 +127,7 @@ func TestCleanup_EmptyDB(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 
-	deleted, err := store.Cleanup(ctx, 24*time.Hour, 7*24*time.Hour, 0)
+	deleted, err := store.Cleanup(ctx, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
