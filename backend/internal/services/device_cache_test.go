@@ -79,3 +79,39 @@ func TestDeviceCache_NeedsRefresh(t *testing.T) {
 		t.Error("just-updated cache should not need refresh")
 	}
 }
+
+func TestDeviceCache_Owner(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{
+		{
+			ID:        "device1",
+			Name:      "laptop.example.ts.net",
+			Hostname:  "laptop",
+			User:      "user@example.com",
+			Addresses: []string{"100.1.1.1"},
+		},
+		{
+			ID:        "device2",
+			Name:      "server.example.ts.net",
+			Hostname:  "server",
+			User:      "",
+			Addresses: []string{"100.1.1.2"},
+		},
+	})
+
+	entry := cache.GetDevice("device1")
+	if entry == nil {
+		t.Fatal("expected device1 entry, got nil")
+	}
+	if entry.Owner != "user@example.com" {
+		t.Errorf("expected owner=user@example.com, got %q", entry.Owner)
+	}
+
+	entry2 := cache.GetDevice("device2")
+	if entry2 == nil {
+		t.Fatal("expected device2 entry, got nil")
+	}
+	if entry2.Owner != "" {
+		t.Errorf("expected empty owner, got %q", entry2.Owner)
+	}
+}

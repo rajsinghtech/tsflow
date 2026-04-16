@@ -17,6 +17,7 @@ type DeviceCacheEntry struct {
 	ID          string
 	Name        string
 	Hostname    string
+	Owner       string
 	IPs         []string
 	IsTailscale bool
 }
@@ -40,6 +41,7 @@ func (c *DeviceCache) Update(devices []Device) {
 			ID:          d.ID,
 			Name:        d.Name,
 			Hostname:    d.Hostname,
+			Owner:       d.User,
 			IPs:         d.Addresses,
 			IsTailscale: true,
 		}
