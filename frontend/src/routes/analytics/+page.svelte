@@ -29,6 +29,9 @@
 		if (SHORT_RANGES.has($timeRangeStore.selected)) {
 			timeRangeStore.setPreset('1h');
 		}
+		if (!$dataSourceStore.dataRange) {
+			dataSourceStore.fetchDataRange();
+		}
 		startStatsRefresh(60_000);
 	});
 
