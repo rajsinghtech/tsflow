@@ -145,6 +145,7 @@ export interface TrafficStatsSummary {
 export interface TopTalker {
 	nodeId: string;
 	displayName?: string;
+	owner?: string;
 	txBytes: number;
 	rxBytes: number;
 	totalBytes: number;
@@ -153,8 +154,10 @@ export interface TopTalker {
 export interface TopPair {
 	srcNodeId: string;
 	srcDisplayName?: string;
+	srcOwner?: string;
 	dstNodeId: string;
 	dstDisplayName?: string;
+	dstOwner?: string;
 	txBytes: number;
 	rxBytes: number;
 	totalBytes: number;
