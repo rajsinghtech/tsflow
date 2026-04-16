@@ -99,7 +99,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	// falls back to a coarser tier than the range heuristic expects.
 	var bucketSeconds int64
 	if source == "cache" {
-		bucketSeconds = 60 // Cache always stores minutely
+		bucketSeconds = 60 // rolling cache uses 1-minute buckets
 	} else if len(buckets) >= 2 {
 		// Derive from minimum gap between consecutive data points
 		minGap := int64(math.MaxInt64)
