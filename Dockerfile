@@ -19,6 +19,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend-build
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 WORKDIR /app/backend
 
@@ -30,11 +31,11 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ ./
 COPY --from=frontend-build /app/backend/frontend/dist ./frontend/dist
 
-# Cross-compile with optimizations
+# Cross-compile with optimizations and inject version
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags="-w -s" -trimpath -o tsflow .
+    go build -ldflags="-w -s -X main.Version=${VERSION}" -trimpath -o tsflow .
 
 # Create data directory (including tsnet state) owned by nonroot user (65532)
 RUN mkdir -p /data/tsnet-state && chown -R 65532:65532 /data

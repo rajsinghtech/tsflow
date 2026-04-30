@@ -15,7 +15,11 @@ func init() {
 }
 
 func TestHealthCheck(t *testing.T) {
-	h := &Handlers{}
+	startTime := time.Now().Add(-10 * time.Second)
+	h := &Handlers{
+		startTime: startTime,
+		version:   "test-version",
+	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/health", nil)
@@ -35,6 +39,12 @@ func TestHealthCheck(t *testing.T) {
 	}
 	if resp["service"] != "tsflow-backend" {
 		t.Errorf("expected service=tsflow-backend, got %v", resp["service"])
+	}
+	if resp["version"] != "test-version" {
+		t.Errorf("expected version=test-version, got %v", resp["version"])
+	}
+	if uptime, ok := resp["uptime"].(float64); !ok || uptime < 10 {
+		t.Errorf("expected uptime >= 10, got %v", resp["uptime"])
 	}
 }
 

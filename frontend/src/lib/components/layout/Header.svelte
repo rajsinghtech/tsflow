@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import { fly } from 'svelte/transition';
 	import { page } from '$app/stores';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '$lib/stores';
 	import { policyGraph } from '$lib/stores/policy-store';
-	import { formatBytes } from '$lib/utils';
+	import { formatBytes, formatDuration } from '$lib/utils';
 	import type { ThemeMode } from '$lib/stores';
 
 	// Tick every 10s to keep the relative time fresh
@@ -12,6 +13,44 @@
 		const interval = setInterval(() => tick++, 10_000);
 		return () => clearInterval(interval);
 	});
+
+	// About flyout state
+	let showAbout = $state(false);
+	let tsflowVersion = $state('...');
+	let uptimeSeconds = $state<number | null>(null);
+	const uptimeFormatted = $derived(uptimeSeconds !== null ? formatDuration(uptimeSeconds) : '...');
+
+	async function fetchHealth() {
+		try {
+			const res = await fetch('/api/health');
+			if (res.ok) {
+				const data = await res.json();
+				if (data.version) tsflowVersion = data.version;
+				if (data.uptime) uptimeSeconds = Math.floor(data.uptime);
+			}
+		} catch (e) {
+			console.error('Failed to fetch health info:', e);
+		}
+	}
+
+	$effect(() => {
+		let interval: ReturnType<typeof setInterval>;
+		if (showAbout) {
+			fetchHealth();
+			interval = setInterval(() => {
+				if (uptimeSeconds !== null) uptimeSeconds++;
+			}, 1000);
+		}
+		return () => {
+			if (interval) clearInterval(interval);
+		};
+	});
+
+	function handleCloseAbout(e: MouseEvent) {
+		if (showAbout && !(e.target as Element).closest('.about-flyout-container')) {
+			showAbout = false;
+		}
+	}
 
 	const lastUpdatedLabel = $derived.by(() => {
 		void tick; // subscribe to tick for periodic re-computation
@@ -86,7 +125,9 @@
 	const ThemeIcon = $derived(getThemeIcon($themeStore));
 </script>
 
-<header class="flex h-12 items-center justify-between border-b border-border bg-card px-2 sm:h-14 sm:px-4">
+<svelte:window onclick={handleCloseAbout} />
+
+<header class="relative z-30 flex h-12 items-center justify-between border-b border-border bg-card px-2 sm:h-14 sm:px-4">
 	<!-- Left section: Filter toggle + Logo + Nav -->
 	<div class="flex items-center gap-2 sm:gap-4">
 		<button
@@ -97,9 +138,58 @@
 			<PanelLeft class="h-5 w-5" />
 		</button>
 
-		<div class="flex items-center gap-1.5 sm:gap-2">
-			<Activity class="h-4 w-4 text-primary sm:h-5 sm:w-5" />
-			<h1 class="text-base font-semibold sm:text-lg">TSFlow</h1>
+		<div class="relative about-flyout-container">
+			<button
+				onclick={() => (showAbout = !showAbout)}
+				class="flex items-center gap-1.5 rounded-md p-1 transition-colors hover:bg-secondary sm:gap-2 sm:p-1.5"
+				title="About TSFlow"
+			>
+				<Activity class="h-4 w-4 text-primary sm:h-5 sm:w-5" />
+				<h1 class="text-base font-semibold sm:text-lg">TSFlow</h1>
+			</button>
+
+			{#if showAbout}
+				<div
+					transition:fly={{ y: -5, duration: 150 }}
+					class="absolute top-full left-0 z-50 mt-2 w-64 rounded-lg border border-border bg-popover p-4 text-popover-foreground shadow-xl backdrop-blur-sm"
+				>
+					<div class="mb-3 flex items-center gap-2">
+						<Activity class="h-5 w-5 text-primary" />
+						<h2 class="font-semibold text-foreground">TSFlow</h2>
+						<span class="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+							>{tsflowVersion.startsWith('v') ? tsflowVersion : `v${tsflowVersion}`}</span
+						>
+					</div>
+
+					<div class="space-y-2.5 text-sm">
+						<a
+							href="https://github.com/rajsinghtech/tsflow/releases"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="flex items-center justify-between text-primary hover:underline"
+						>
+							GitHub Releases
+							<ExternalLink class="h-3.5 w-3.5" />
+						</a>
+						<a
+							href="https://github.com/rajsinghtech/tsflow#readme"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="flex items-center justify-between text-primary hover:underline"
+						>
+							Documentation
+							<ExternalLink class="h-3.5 w-3.5" />
+						</a>
+					</div>
+
+					<div class="mt-4 border-t border-border pt-3">
+						<div class="flex items-center justify-between text-[11px] text-muted-foreground">
+							<span>Container Uptime</span>
+							<span class="font-mono">{uptimeFormatted}</span>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Navigation -->
