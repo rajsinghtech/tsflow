@@ -8,7 +8,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
 	modernc.org/sqlite v1.50.0
-	tailscale.com v1.98.0
+	tailscale.com v1.98.1
 	tailscale.com/client/tailscale/v2 v2.9.0
 )
 
