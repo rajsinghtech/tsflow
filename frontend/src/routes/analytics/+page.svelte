@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Activity, Network, Link, ArrowUpDown, Loader2 } from 'lucide-svelte';
+	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
 	import Header from '$lib/components/layout/Header.svelte';
 	import DonutChart from '$lib/components/charts/DonutChart.svelte';
 	import BarChart from '$lib/components/charts/BarChart.svelte';
 	import StatCard from '$lib/components/charts/StatCard.svelte';
+	import TimelineSlider from '$lib/components/timeline/TimelineSlider.svelte';
 	import {
 		startStatsRefresh,
 		stopStatsRefresh,
+		loadStats,
 		statsSummary,
 		statsBuckets,
 		topTalkers,
@@ -16,23 +18,33 @@
 		statsLoading,
 		statsError,
 		queryTimeWindow,
-		timeRangeStore,
-		hasHistoricalData,
-		dataSourceStore
+		hasStoredData,
+		dataSourceStore,
+		filterStore
 	} from '$lib/stores';
 	import { formatBytes } from '$lib/utils';
 	import { getPortLabel } from '$lib/utils/protocol';
+	import type { TrafficType } from '$lib/types';
 
 	onMount(() => {
-		// Analytics is most useful over at least 1h; nudge the default up from 5m
-		const SHORT_RANGES = new Set(['1m', '5m', '15m', '30m']);
-		if (SHORT_RANGES.has($timeRangeStore.selected)) {
-			timeRangeStore.setPreset('1h');
+		let cancelled = false;
+
+		async function bootstrapAnalytics() {
+			const [range] = await Promise.all([
+				dataSourceStore.fetchDataRange(),
+				dataSourceStore.fetchPollerStatus()
+			]);
+			if (cancelled) return;
+			if (range?.count) {
+				dataSourceStore.showLatestWindow(range);
+			}
+			startStatsRefresh(60_000);
 		}
-		if (!$dataSourceStore.dataRange) {
-			dataSourceStore.fetchDataRange();
-		}
-		startStatsRefresh(60_000);
+
+		bootstrapAnalytics();
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	onDestroy(() => {
@@ -45,6 +57,14 @@
 	let talkerSortDir: 'asc' | 'desc' = $state('desc');
 	let pairSort: PairField = $state('totalBytes');
 	let pairSortDir: 'asc' | 'desc' = $state('desc');
+	let showWindowControls = $state(false);
+	const trafficTypes: { value: TrafficType; label: string; colorClass: string }[] = [
+		{ value: 'virtual', label: 'Virtual', colorClass: 'bg-blue-500' },
+		{ value: 'subnet', label: 'Subnet', colorClass: 'bg-green-500' },
+		{ value: 'exit', label: 'Exit Node', colorClass: 'bg-purple-500' },
+		{ value: 'physical', label: 'Physical', colorClass: 'bg-amber-500' }
+	];
+	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
 
 	function toggleTalkerSort(field: TalkerField) {
 		if (talkerSort === field) {
@@ -62,6 +82,29 @@
 			pairSort = field;
 			pairSortDir = 'desc';
 		}
+	}
+
+	function setAnalyticsTrafficTypes(types: TrafficType[]) {
+		filterStore.setTrafficTypes(types);
+		loadStats();
+	}
+
+	function toggleTrafficType(type: TrafficType) {
+		const next = new Set($filterStore.trafficTypes);
+		if (next.has(type)) {
+			next.delete(type);
+		} else {
+			next.add(type);
+		}
+		setAnalyticsTrafficTypes([...next]);
+	}
+
+	function selectAllTrafficTypes() {
+		setAnalyticsTrafficTypes(trafficTypes.map((t) => t.value));
+	}
+
+	function clearAllTrafficTypes() {
+		setAnalyticsTrafficTypes([]);
 	}
 
 	function sortArrow(active: boolean, dir: 'asc' | 'desc'): string {
@@ -124,13 +167,19 @@
 
 	const timeWindowLabel = $derived.by(() => {
 		const tw = $queryTimeWindow;
-		const diffMs = tw.end.getTime() - tw.start.getTime();
-		const mins = Math.round(diffMs / 60_000);
-		if (mins < 60) return `Last ${mins} min`;
-		const hrs = Math.round(mins / 60);
-		if (hrs < 24) return `Last ${hrs}h`;
-		const days = Math.round(hrs / 24);
-		return `Last ${days}d`;
+		const start = tw.start.toLocaleString(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
+		const end = tw.end.toLocaleString(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
+		return `${start} - ${end}`;
 	});
 
 	// Sparkline data derived from stats buckets
@@ -142,6 +191,11 @@
 		if (displayName) return displayName;
 		if (/^\d{10,}$/.test(id)) return id.slice(0, 8) + '\u2026';
 		return id;
+	}
+
+	function showLatestStoredWindow() {
+		dataSourceStore.showLatestWindow();
+		loadStats();
 	}
 </script>
 
@@ -158,17 +212,92 @@
 				{$statsError}
 			</div>
 		{:else}
-			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasHistoricalData && $dataSourceStore.mode !== 'historical'}
+			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasStoredData}
 				<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
 					No traffic data in the selected window.
 					Switch to <button
-						class="underline hover:text-foreground"
-						onclick={() => dataSourceStore.setMode('historical')}
-					>Historical mode</button> to browse stored data.
+						class="rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary hover:text-foreground"
+						onclick={showLatestStoredWindow}
+					>latest stored window</button> to browse stored data.
 				</div>
 			{/if}
+			<div class="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
+				<div>
+					<h2 class="text-base font-semibold">Analytics</h2>
+					<p class="text-xs text-muted-foreground">{timeWindowLabel}</p>
+				</div>
+				<div class="flex items-center gap-2">
+					{#if $hasStoredData && !$dataSourceStore.followLatest}
+						<button
+							class="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
+							onclick={showLatestStoredWindow}
+						>
+							Latest
+						</button>
+					{/if}
+					<button
+						class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
+						onclick={() => loadStats()}
+					>
+						<RefreshCw class="h-3.5 w-3.5" />
+						Refresh
+					</button>
+				</div>
+			</div>
+
+			<div class="sticky top-0 z-20 mb-4 rounded-lg border border-border bg-card/95 p-2 shadow-sm backdrop-blur sm:mb-5">
+				<div class="flex flex-wrap items-center gap-2">
+					<button
+						type="button"
+						class="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs hover:bg-secondary"
+						class:bg-secondary={showWindowControls}
+						onclick={() => (showWindowControls = !showWindowControls)}
+					>
+						<CalendarClock class="h-3.5 w-3.5" />
+						Window
+					</button>
+
+					<div class="h-6 w-px bg-border"></div>
+
+					<div class="flex items-center gap-1 text-xs text-muted-foreground">
+						<SlidersHorizontal class="h-3.5 w-3.5" />
+						<span class="hidden sm:inline">Traffic</span>
+					</div>
+
+					<div class="flex flex-wrap gap-1">
+						{#each trafficTypes as type}
+							<button
+								type="button"
+								onclick={() => toggleTrafficType(type.value)}
+								class="inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors"
+								class:border-primary={selectedTrafficTypes.has(type.value)}
+								class:bg-secondary={selectedTrafficTypes.has(type.value)}
+								class:border-border={!selectedTrafficTypes.has(type.value)}
+								class:text-muted-foreground={!selectedTrafficTypes.has(type.value)}
+							>
+								<span class="h-2 w-2 rounded-full {type.colorClass}"></span>
+								{type.label}
+							</button>
+						{/each}
+					</div>
+
+					<div class="ml-auto flex gap-1">
+						<button onclick={selectAllTrafficTypes} class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary">All</button>
+						<button onclick={clearAllTrafficTypes} class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary">
+							None
+						</button>
+					</div>
+				</div>
+
+				{#if showWindowControls}
+					<div class="mt-2 border-t border-border pt-2">
+						<TimelineSlider onWindowChange={loadStats} />
+					</div>
+				{/if}
+			</div>
+
 			<!-- Overview Cards -->
-			<div class="mb-4 grid grid-cols-2 gap-2 sm:mb-6 sm:gap-4 lg:grid-cols-4">
+			<div class="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:gap-3 lg:grid-cols-4">
 				<StatCard label="Total Traffic" value={formatBytes(totalBytes)} subtitle={timeWindowLabel} sparkline={trafficSparkline}>
 					{#snippet icon()}<Activity class="h-4 w-4" />{/snippet}
 				</StatCard>
@@ -200,7 +329,7 @@
 			</div>
 
 			<!-- Distribution Charts -->
-			<div class="mb-4 grid grid-cols-1 gap-3 sm:mb-6 sm:gap-6 lg:grid-cols-2">
+			<div class={`mb-4 grid grid-cols-1 gap-3 sm:mb-5 ${portBars.length > 0 ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
 				<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
 					<h3 class="mb-3 text-sm font-medium text-muted-foreground">
 						Protocol Distribution
@@ -213,10 +342,16 @@
 					</h3>
 					<DonutChart segments={trafficTypeSegments} />
 				</div>
+				{#if portBars.length > 0}
+					<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
+						<h3 class="mb-3 text-sm font-medium text-muted-foreground">Top Ports</h3>
+						<BarChart bars={portBars} height={260} />
+					</div>
+				{/if}
 			</div>
 
 			<!-- Rankings -->
-			<div class="mb-4 grid grid-cols-1 gap-3 sm:mb-6 sm:gap-6 lg:grid-cols-2">
+			<div class="mb-4 grid grid-cols-1 gap-3 sm:mb-5 lg:grid-cols-2">
 				<!-- Top Talkers -->
 				<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
 					<h3 class="mb-3 text-sm font-medium text-muted-foreground">Top Talkers</h3>
@@ -446,15 +581,6 @@
 				</div>
 			</div>
 
-			<!-- Top Ports -->
-			<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
-				<h3 class="mb-3 text-sm font-medium text-muted-foreground">Top Ports</h3>
-				{#if portBars.length > 0}
-					<BarChart bars={portBars} height={400} />
-				{:else}
-					<p class="text-sm text-muted-foreground">No port data available yet</p>
-				{/if}
-			</div>
 		{/if}
 	</main>
 </div>

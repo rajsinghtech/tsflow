@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"net"
@@ -31,6 +32,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	}
 
 	nodeID := c.Query("nodeId")
+	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
 	// Validate nodeId if provided — must be non-empty after trimming
 	if c.Query("nodeId") != "" && strings.TrimSpace(nodeID) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId must be non-empty if provided"})
@@ -51,7 +53,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	source := "database"
 
 	// Try rolling cache first for recent data (within last hour)
-	if h.poller != nil {
+	if h.poller != nil && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
 		if cache.HasDataFor(startTime, endTime) {
 			if nodeID != "" {
@@ -68,14 +70,19 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 		defer cancel()
 
-		// If nodeId provided, filter by that node
 		if nodeID != "" {
 			buckets, err = h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
+		} else if len(trafficTypes) > 0 && len(trafficTypes) < 4 {
+			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, startTime, endTime, trafficTypes)
 		} else {
 			buckets, err = h.store.GetBandwidth(ctx, startTime, endTime)
 		}
 
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
+				c.Status(499)
+				return
+			}
 			log.Printf("ERROR GetBandwidthAggregated: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to fetch bandwidth data",
@@ -133,11 +140,35 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 			"start":         startTime,
 			"end":           endTime,
 			"nodeId":        nodeID,
+			"trafficTypes":  trafficTypes,
 			"source":        source,
 			"truncated":     truncated,
 			"bucketSeconds": bucketSeconds,
 		},
 	})
+}
+
+func parseBandwidthTrafficTypes(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	allowed := map[string]bool{
+		"virtual":  true,
+		"exit":     true,
+		"subnet":   true,
+		"physical": true,
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, value := range strings.Split(raw, ",") {
+		value = strings.TrimSpace(value)
+		if !allowed[value] || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 // GetBandwidthByIPs returns bandwidth data filtered by IP addresses

@@ -30,6 +30,7 @@
 		network: NetworkNode as unknown as typeof NetworkNode
 	};
 
+	const MINIMAP_RENDER_LIMIT = 2000;
 
 	// Get edge style based on traffic type and selection state
 	function getEdgeStyle(edge: NetworkLink, dimmed: boolean = false): string {
@@ -157,17 +158,46 @@
 	// Track edge traffic data for style-only updates
 	let lastEdgeKey = '';
 
-	// Build a topology key from node IDs + edge connections (ignoring traffic volumes)
+	function hashPart(value: string): number {
+		let hash = 2166136261;
+		for (let i = 0; i < value.length; i++) {
+			hash ^= value.charCodeAt(i);
+			hash = Math.imul(hash, 16777619);
+		}
+		return hash >>> 0;
+	}
+
+	function addHash(acc: { sum: number; xor: number }, value: string) {
+		const h = hashPart(value);
+		acc.sum = (acc.sum + h) >>> 0;
+		acc.xor = (acc.xor ^ h) >>> 0;
+	}
+
+	function hashKey(parts: { count: number; sum: number; xor: number }): string {
+		return `${parts.count}:${parts.sum.toString(36)}:${parts.xor.toString(36)}`;
+	}
+
+	// Build a compact topology key from node IDs + edge connections (ignoring traffic volumes)
 	function buildTopologyKey(nodeList: NetworkNodeType[], edgeList: NetworkLink[]): string {
-		const nodesPart = nodeList.map((n) => n.id).sort().join(',');
-		const edgesPart = edgeList.map((e) => `${e.source}->${e.target}`).sort().join(',');
-		return `${nodesPart}|${edgesPart}`;
+		const nodeHash = { count: nodeList.length, sum: 0, xor: 0 };
+		const edgeHash = { count: edgeList.length, sum: 0, xor: 0 };
+		for (const node of nodeList) addHash(nodeHash, node.id);
+		for (const edge of edgeList) addHash(edgeHash, `${edge.source}->${edge.target}|${edge.trafficType}`);
+		return `${hashKey(nodeHash)}|${hashKey(edgeHash)}`;
+	}
+
+	function buildEdgeTrafficKey(edgeList: NetworkLink[]): string {
+		const edgeHash = { count: edgeList.length, sum: 0, xor: 0 };
+		for (const edge of edgeList) {
+			addHash(edgeHash, `${edge.id}:${edge.totalBytes}:${edge.txBytes}:${edge.rxBytes}`);
+		}
+		return hashKey(edgeHash);
 	}
 
 	// Update stores and apply layout when props change
 	$effect(() => {
 		const currentTopologyKey = buildTopologyKey(nodes, edges);
-		const currentEdgeKey = edges.map((e) => `${e.id}:${e.totalBytes}`).sort().join(',');
+		const currentEdgeKey = buildEdgeTrafficKey(edges);
 
 		if (currentTopologyKey !== lastTopologyKey && nodes.length > 0) {
 			// Topology changed - debounce re-layout to batch rapid changes
@@ -394,6 +424,7 @@
 				{colorMode}
 				minZoom={0.01}
 				maxZoom={10}
+				onlyRenderVisibleElements={true}
 				proOptions={{ hideAttribution: true }}
 				onnodeclick={handleNodeClick}
 				onedgeclick={handleEdgeClick}
@@ -402,18 +433,20 @@
 			>
 				<Background />
 				<Controls />
-				<MiniMap
-					width={120}
-					height={80}
-					nodeColor={(node) => {
-						const data = node.data as any;
-						const colors = getNodeColors();
-						if (data?.tags?.includes('derp')) return colors.derp;
-						if (data?.isTailscale) return colors.tailscale;
-						if (data?.tags?.includes('private')) return colors.private;
-						return colors.public;
-					}}
-				/>
+				{#if $flowNodesStore.length <= MINIMAP_RENDER_LIMIT}
+					<MiniMap
+						width={120}
+						height={80}
+						nodeColor={(node) => {
+							const data = node.data as any;
+							const colors = getNodeColors();
+							if (data?.tags?.includes('derp')) return colors.derp;
+							if (data?.isTailscale) return colors.tailscale;
+							if (data?.tags?.includes('private')) return colors.private;
+							return colors.public;
+						}}
+					/>
+				{/if}
 			</SvelteFlow>
 		</SvelteFlowProvider>
 	{/if}

@@ -162,7 +162,13 @@ export const tailscaleService = {
 		return api.get<PollerStatus>('/poller/status');
 	},
 
-	async getBandwidth(start: Date, end: Date, ipsOrNodeId?: string[] | string, signal?: AbortSignal): Promise<BandwidthResponse> {
+	async getBandwidth(
+		start: Date,
+		end: Date,
+		ipsOrNodeId?: string[] | string,
+		signal?: AbortSignal,
+		trafficTypes?: string[]
+	): Promise<BandwidthResponse> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
 		let url = `/bandwidth?start=${startISO}&end=${endISO}`;
@@ -175,35 +181,50 @@ export const tailscaleService = {
 				url += `&nodeId=${encodeURIComponent(ipsOrNodeId)}`;
 			}
 		}
+		if (trafficTypes && trafficTypes.length > 0) {
+			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		}
 		return api.get<BandwidthResponse>(url, { signal });
 	},
 
-	async getStatsOverview(start: Date, end: Date, signal?: AbortSignal): Promise<{
+	async getStatsOverview(start: Date, end: Date, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
 		summary: TrafficStatsSummary;
 		buckets: TrafficStatsBucket[];
-		metadata: { start: string; end: string; bucketCount: number; source: string };
+		metadata: { start: string; end: string; bucketCount: number; source: string; trafficTypes?: string[] };
 	}> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
-		return api.get(`/stats/overview?start=${startISO}&end=${endISO}`, { signal });
+		let url = `/stats/overview?start=${startISO}&end=${endISO}`;
+		if (trafficTypes && trafficTypes.length > 0) {
+			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		}
+		return api.get(url, { signal });
 	},
 
-	async getTopTalkers(start: Date, end: Date, limit = 10, signal?: AbortSignal): Promise<{
+	async getTopTalkers(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
 		talkers: TopTalker[];
-		metadata: { start: string; end: string; limit: number; count: number };
+		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
 	}> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
-		return api.get(`/stats/top-talkers?start=${startISO}&end=${endISO}&limit=${limit}`, { signal });
+		let url = `/stats/top-talkers?start=${startISO}&end=${endISO}&limit=${limit}`;
+		if (trafficTypes && trafficTypes.length > 0) {
+			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		}
+		return api.get(url, { signal });
 	},
 
-	async getTopPairs(start: Date, end: Date, limit = 10, signal?: AbortSignal): Promise<{
+	async getTopPairs(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
 		pairs: TopPair[];
-		metadata: { start: string; end: string; limit: number; count: number };
+		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
 	}> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
-		return api.get(`/stats/top-pairs?start=${startISO}&end=${endISO}&limit=${limit}`, { signal });
+		let url = `/stats/top-pairs?start=${startISO}&end=${endISO}&limit=${limit}`;
+		if (trafficTypes && trafficTypes.length > 0) {
+			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		}
+		return api.get(url, { signal });
 	},
 
 	async getNodeStats(nodeId: string, start: Date, end: Date): Promise<NodeDetailStats> {

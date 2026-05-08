@@ -38,7 +38,7 @@ func customLoggingMiddleware() gin.HandlerFunc {
 				param.ClientIP,
 			)
 		},
-		Output: os.Stdout,
+		Output:    os.Stdout,
 		SkipPaths: []string{"/health"}, // Skip health checks to reduce noise
 	})
 }
@@ -107,8 +107,40 @@ func main() {
 			pollerConfig.Retention = d
 		}
 	}
+	pollerConfig.FlowBackend = cfg.FlowBackend
+	if pollerConfig.FlowBackend == "" {
+		pollerConfig.FlowBackend = "api"
+		if cfg.FlowObjectStoreEndpoint != "" && cfg.FlowObjectStoreAccessKey != "" && cfg.FlowObjectStoreSecretKey != "" {
+			pollerConfig.FlowBackend = "s3"
+		}
+	}
+	if pollerConfig.FlowBackend == "s3" && os.Getenv("TSFLOW_RETENTION") == "" {
+		pollerConfig.Retention = 0
+	}
+	lookback, err := time.ParseDuration(cfg.FlowObjectStoreLookback)
+	if err != nil {
+		lookback = 15 * time.Minute
+	}
+	pollerConfig.ObjectStore = services.ObjectStoreConfig{
+		Bucket:       cfg.FlowObjectStoreBucket,
+		Prefix:       cfg.FlowObjectStorePrefix,
+		Endpoint:     cfg.FlowObjectStoreEndpoint,
+		Region:       cfg.FlowObjectStoreRegion,
+		AccessKey:    cfg.FlowObjectStoreAccessKey,
+		SecretKey:    cfg.FlowObjectStoreSecretKey,
+		UsePathStyle: cfg.FlowObjectStorePathStyle,
+		Lookback:     lookback,
+		MaxObjects:   cfg.FlowObjectStoreMaxObjects,
+	}
 
 	poller := services.NewPoller(tailscaleService, store, pollerConfig)
+	if pollerConfig.FlowBackend == "s3" {
+		objectSource, err := services.NewObjectStoreSource(ctx, pollerConfig.ObjectStore)
+		if err != nil {
+			log.Fatalf("Failed to configure object-store flow backend: %v", err)
+		}
+		poller.ConfigureObjectStore(objectSource)
+	}
 
 	// Start poller in background
 	if err := poller.Start(ctx); err != nil {
@@ -225,6 +257,15 @@ func main() {
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
 	log.Printf("Retention: %s", pollerConfig.Retention)
+	log.Printf("Flow Backend: %s", pollerConfig.FlowBackend)
+	if pollerConfig.FlowBackend == "s3" {
+		log.Printf("Flow Object Store: bucket=%s prefix=%s endpoint=%s maxObjectsPerPoll=%d",
+			pollerConfig.ObjectStore.Bucket,
+			pollerConfig.ObjectStore.Prefix,
+			pollerConfig.ObjectStore.Endpoint,
+			pollerConfig.ObjectStore.MaxObjects,
+		)
+	}
 
 	// Log authentication method being used
 	if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {

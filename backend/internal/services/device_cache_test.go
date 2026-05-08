@@ -3,6 +3,8 @@ package services
 import (
 	"testing"
 	"time"
+
+	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
 func TestDeviceCache_UpdateAndResolve(t *testing.T) {
@@ -113,5 +115,32 @@ func TestDeviceCache_Owner(t *testing.T) {
 	}
 	if entry2.Owner != "" {
 		t.Errorf("expected empty owner, got %q", entry2.Owner)
+	}
+}
+
+func TestDeviceCache_UpsertNodeMetadata(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{
+		{ID: "numeric-id", Name: "api-device.example.ts.net", Hostname: "api-device", Addresses: []string{"100.1.1.1"}},
+	})
+
+	cache.UpsertNodeMetadata([]database.NodeMetadata{{
+		NodeID:   "n5ZfK4a5pz11CNTRL",
+		Name:     "garage.keiretsu.ts.net",
+		Hostname: "garage",
+		Owner:    "ops@example.com",
+		IPs:      []string{"100.64.1.2"},
+		Tags:     []string{"tag:storage"},
+	}})
+
+	if id := cache.ResolveIP("100.64.1.2"); id != "n5ZfK4a5pz11CNTRL" {
+		t.Fatalf("expected raw node ID from metadata IP, got %s", id)
+	}
+	entry := cache.GetDevice("n5ZfK4a5pz11CNTRL")
+	if entry == nil {
+		t.Fatal("expected node metadata entry")
+	}
+	if entry.Hostname != "garage" || entry.Name != "garage.keiretsu.ts.net" {
+		t.Fatalf("unexpected node metadata entry: %+v", entry)
 	}
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink, Info } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/stores';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '$lib/stores';
@@ -65,6 +65,13 @@
 	});
 
 	const currentPath = $derived($page.url.pathname);
+	const isTrafficPage = $derived(currentPath === '/');
+
+	const primaryNav = [
+		{ href: '/', label: 'Traffic', icon: Network },
+		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
+		{ href: '/policy', label: 'Policy', icon: Shield }
+	];
 
 	let isRefreshing = $state(false);
 
@@ -127,22 +134,15 @@
 
 <svelte:window onclick={handleCloseAbout} />
 
-<header class="relative z-30 flex h-12 items-center justify-between border-b border-border bg-card px-2 sm:h-14 sm:px-4">
-	<!-- Left section: Filter toggle + Logo + Nav -->
-	<div class="flex items-center gap-2 sm:gap-4">
-		<button
-			onclick={handleFilterToggle}
-			class="rounded-md p-2.5 hover:bg-secondary sm:p-2"
-			title="Toggle filter panel"
-		>
-			<PanelLeft class="h-5 w-5" />
-		</button>
-
+<header class="relative z-30 flex h-12 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:h-14 sm:px-4">
+	<!-- Left section: Logo + primary navigation -->
+	<div class="flex min-w-0 items-center gap-2 sm:gap-3">
 		<div class="relative about-flyout-container">
 			<button
 				onclick={() => (showAbout = !showAbout)}
-				class="flex items-center gap-1.5 rounded-md p-1 transition-colors hover:bg-secondary sm:gap-2 sm:p-1.5"
+				class="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors hover:bg-secondary sm:gap-2"
 				title="About TSFlow"
+				aria-label="About TSFlow"
 			>
 				<Activity class="h-4 w-4 text-primary sm:h-5 sm:w-5" />
 				<h1 class="text-base font-semibold sm:text-lg">TSFlow</h1>
@@ -184,7 +184,7 @@
 
 					<div class="mt-4 border-t border-border pt-3">
 						<div class="flex items-center justify-between text-[11px] text-muted-foreground">
-							<span>Container Uptime</span>
+							<span>Uptime</span>
 							<span class="font-mono">{uptimeFormatted}</span>
 						</div>
 					</div>
@@ -193,31 +193,23 @@
 		</div>
 
 		<!-- Navigation -->
-		<nav class="flex items-center gap-0.5 sm:gap-1">
-			<a
-				href="/"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
-				class:bg-secondary={currentPath === '/'}
-			>
-				<Network class="h-4 w-4" />
-				<span class="hidden sm:inline">Traffic</span>
-			</a>
-			<a
-				href="/policy"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
-				class:bg-secondary={currentPath === '/policy'}
-			>
-				<Shield class="h-4 w-4" />
-				<span class="hidden sm:inline">Policy</span>
-			</a>
-			<a
-				href="/analytics"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm hover:bg-secondary sm:px-3 sm:py-1.5"
-				class:bg-secondary={currentPath === '/analytics'}
-			>
-				<BarChart3 class="h-4 w-4" />
-				<span class="hidden sm:inline">Analytics</span>
-			</a>
+		<nav class="flex min-w-0 items-center rounded-md border border-border bg-muted/30 p-0.5" aria-label="Primary">
+			{#each primaryNav as item}
+				{@const Icon = item.icon}
+				{@const active = currentPath === item.href}
+				<a
+					href={item.href}
+					aria-current={active ? 'page' : undefined}
+					aria-label={item.label}
+					class="flex min-h-8 items-center gap-1.5 rounded px-2 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
+					class:bg-background={active}
+					class:text-foreground={active}
+					class:shadow-sm={active}
+				>
+					<Icon class="h-4 w-4 shrink-0" />
+					<span class="hidden sm:inline">{item.label}</span>
+				</a>
+			{/each}
 		</nav>
 	</div>
 
@@ -289,10 +281,22 @@
 
 	<!-- Right section: Actions -->
 	<div class="flex items-center gap-1 sm:gap-2">
+		{#if isTrafficPage}
+			<button
+				onclick={handleFilterToggle}
+				class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
+				title="Toggle filters"
+				aria-label="Toggle filters"
+			>
+				<PanelLeft class="h-4 w-4" />
+			</button>
+		{/if}
+
 		<button
 			onclick={() => toggleAutoRefresh()}
-			class="relative flex items-center gap-2 rounded-md p-2.5 hover:bg-secondary sm:px-3 sm:py-1.5"
+			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
 			title={$isAutoRefreshing ? 'Pause auto-refresh (P)' : 'Resume auto-refresh (P)'}
+			aria-label={$isAutoRefreshing ? 'Pause auto-refresh' : 'Resume auto-refresh'}
 		>
 			{#if $isAutoRefreshing}
 				<Pause class="h-4 w-4" />
@@ -303,9 +307,10 @@
 
 		<button
 			onclick={handleRefresh}
-			class="relative flex items-center gap-2 rounded-md p-2.5 hover:bg-secondary sm:px-3 sm:py-1.5"
+			class="flex min-h-9 min-w-9 items-center justify-center gap-2 rounded-md border border-border px-2.5 py-2 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60 sm:px-3"
 			disabled={isRefreshing}
 			title="Refresh now (R)"
+			aria-label="Refresh data"
 		>
 			<RefreshCw class="h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
 			<span class="hidden text-sm sm:inline">Refresh</span>
@@ -313,18 +318,29 @@
 
 		<button
 			onclick={cycleTheme}
-			class="flex items-center gap-2 rounded-md p-2.5 hover:bg-secondary sm:p-2"
+			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
 			title="Theme: {getThemeLabel($themeStore)} (click to cycle)"
+			aria-label="Theme: {getThemeLabel($themeStore)}"
 		>
-			<ThemeIcon class="h-5 w-5" />
+			<ThemeIcon class="h-4 w-4" />
 		</button>
 
 		<button
 			onclick={() => uiStore.toggleLogViewer()}
-			class="rounded-md p-2.5 hover:bg-secondary sm:p-2"
+			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
 			title="Toggle log viewer"
+			aria-label="Toggle log viewer"
 		>
-			<ScrollText class="h-5 w-5" />
+			<ScrollText class="h-4 w-4" />
+		</button>
+
+		<button
+			onclick={() => (showAbout = !showAbout)}
+			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary sm:flex"
+			title="About TSFlow"
+			aria-label="About TSFlow"
+		>
+			<Info class="h-4 w-4" />
 		</button>
 	</div>
 </header>

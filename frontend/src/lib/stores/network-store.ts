@@ -2,16 +2,16 @@ import { writable, derived, get } from 'svelte/store';
 import type { Device, NetworkLog, NetworkNode, NetworkLink } from '$lib/types';
 import { tailscaleService, type AggregatedFlow } from '$lib/services';
 import { processNetworkLogs } from '$lib/utils/network-processor';
-import { filterStore, debouncedFilterStore, timeRangeStore, TIME_RANGES } from './filter-store';
+import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
-import { dataSourceStore } from './data-source-store';
+import { dataSourceStore, queryTimeWindow } from './data-source-store';
 
 // Last updated timestamp
 export const lastUpdated = writable<Date | null>(null);
 
 // Raw data stores
 export const devices = writable<Device[]>([]);
-export const networkLogs = writable<NetworkLog[]>([]); // Used for graph (aggregated in historical mode)
+export const networkLogs = writable<NetworkLog[]>([]); // Used for graph aggregate data
 export const rawLogs = writable<NetworkLog[]>([]); // Used for LogViewer (always full detail with ports)
 export const services = writable<Record<string, { name: string; addrs: string[]; tags?: string[] }>>({});
 export const records = writable<Record<string, { addrs: string[]; comment?: string }>>({});
@@ -28,8 +28,8 @@ export const processedNetwork = derived(
 // Uses debouncedFilterStore to avoid re-running expensive graph filtering on every keystroke
 const trafficFilteredEdges = derived([processedNetwork, debouncedFilterStore], ([$network, $filters]) => {
 	return $network.links.filter((link) => {
-		// Traffic type filter — only show selected types. Empty = show all (defensive fallback).
-		if ($filters.trafficTypes.length === 0) return true;
+		// Traffic type filter — only show selected types. Empty means show none.
+		if ($filters.trafficTypes.length === 0) return false;
 		return $filters.trafficTypes.includes(link.trafficType);
 	});
 });
@@ -244,62 +244,30 @@ export async function loadNetworkData(currentAttempt = 0) {
 	uiStore.setError(null);
 
 	try {
-		// Check data source mode
-		const dataSource = get(dataSourceStore);
-		let start: Date, end: Date;
-
-		if (dataSource.mode === 'historical') {
-			if (!dataSource.selectedStart || !dataSource.selectedEnd) {
-				// Range not set yet (e.g. during mode switch) - skip load
-				uiStore.setLoading(false);
-				return;
-			}
-			start = dataSource.selectedStart;
-			end = dataSource.selectedEnd;
-			// Guard against zero/invalid dates from empty DB
-			if (start.getFullYear() < 1970 || end.getFullYear() < 1970 || start >= end) {
-				uiStore.setLoading(false);
-				uiStore.setError('No stored data available yet. Switch to Live mode.');
-				return;
-			}
-		} else {
-			// Live mode - use time range store
-			const timeRange = get(timeRangeStore);
-
-			if (timeRange.selected === 'custom' && timeRange.customStart && timeRange.customEnd) {
-				start = timeRange.customStart;
-				end = timeRange.customEnd;
-			} else {
-				const preset = TIME_RANGES.find((p) => p.value === timeRange.selected);
-
-				end = new Date();
-				start = new Date(end.getTime() - (preset?.minutes || 5) * 60 * 1000);
-			}
+		if (get(dataSourceStore).followLatest) {
+			await dataSourceStore.fetchDataRange();
+			if (signal.aborted) return;
+		}
+		const { start, end } = get(queryTimeWindow);
+		if (start.getFullYear() < 1970 || end.getFullYear() < 1970 || start >= end) {
+			uiStore.setLoading(false);
+			uiStore.setError('No valid traffic data window is available yet.');
+			return;
 		}
 
 		// Fetch devices and services (always from live API)
-		const [devicesData, servicesData] = await Promise.all([
+		let [devicesData, servicesData] = await Promise.all([
 			tailscaleService.getDevices(signal),
 			tailscaleService.getServicesRecords(signal)
 		]);
 
-		// Fetch logs based on mode
-		let graphLogs;
-		let viewerLogs;
-		if (dataSource.mode === 'historical') {
-			// Fetch all traffic types — client-side filtering (trafficFilteredEdges)
-			// handles showing/hiding by type. Server-side filtering would cause
-			// missing data when the user enables a type that wasn't initially fetched.
-			const aggregatedData = await tailscaleService.getAggregatedFlows(start, end, undefined, signal);
-			graphLogs = convertAggregatedFlowsToNetworkLogs(aggregatedData.flows || [], start, end);
-			// Use aggregated flows for LogViewer too (raw flow_logs_current is empty for old data)
-			viewerLogs = graphLogs;
-		} else {
-			// Fetch live from Tailscale API - same data for both
-			const logsData = await tailscaleService.getNetworkLogs(start, end, signal);
-			graphLogs = logsData.logs || [];
-			viewerLogs = graphLogs;
-		}
+		// Fetch flow data from the backend aggregate store for the selected window.
+		// This avoids browser-scale raw log payloads and avoids direct Tailscale API polling
+		// on every refresh once the backend poller/importer is running.
+		const aggregatedData = await tailscaleService.getAggregatedFlows(start, end, undefined, signal);
+		devicesData = mergeSyntheticDevices(devicesData, aggregatedData.flows || []);
+		const graphLogs = convertAggregatedFlowsToNetworkLogs(aggregatedData.flows || [], start, end);
+		const viewerLogs = graphLogs;
 
 		if (signal.aborted) return;
 
@@ -327,6 +295,44 @@ export async function loadNetworkData(currentAttempt = 0) {
 	}
 }
 
+function mergeSyntheticDevices(existing: Device[], flows: AggregatedFlow[]): Device[] {
+	const byID = new Map(existing.map((device) => [device.id, device]));
+
+	for (const flow of flows) {
+		addSyntheticDevice(byID, flow.srcNodeId, flow.srcDisplayName);
+		addSyntheticDevice(byID, flow.dstNodeId, flow.dstDisplayName);
+	}
+
+	return Array.from(byID.values());
+}
+
+function addSyntheticDevice(byID: Map<string, Device>, id: string, displayName?: string) {
+	if (!id || byID.has(id)) return;
+	const name = formatSyntheticDeviceName(id, displayName);
+	byID.set(id, {
+		id,
+		name,
+		hostname: name.split('.')[0] || name,
+		user: '',
+		os: '',
+		addresses: [],
+		online: false,
+		lastSeen: '',
+		authorized: true,
+		clientVersion: '',
+		tags: [],
+		isExternal: false
+	});
+}
+
+function formatSyntheticDeviceName(id: string, displayName?: string): string {
+	const raw = displayName || id;
+	if (/^[A-Za-z0-9]{8,}CNTRL$/.test(raw)) {
+		return `Unknown Tailscale node ${raw.slice(0, 4)}`;
+	}
+	return raw;
+}
+
 // Manual retry with reset backoff
 export function retryLoadNetworkData() {
 	clearRetryState();
@@ -335,7 +341,7 @@ export function retryLoadNetworkData() {
 
 // Convert pre-aggregated node-pair flows to NetworkLog format for the graph.
 // Emits two entries per flow (forward + reverse with TX-only) so the network
-// processor's TX-only dedup logic works consistently for both live and historical data.
+// processor's TX-only dedup logic works consistently for aggregate data.
 function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart: Date, rangeEnd: Date): NetworkLog[] {
 	// Build two NetworkLogs per flow: one for the forward direction (src→dst)
 	// and one for the reverse (dst→src). Each only carries txBytes.
@@ -435,9 +441,6 @@ if (typeof window !== 'undefined') {
 
 export function startAutoRefresh(intervalMs = AUTO_REFRESH_INTERVAL) {
 	stopAutoRefresh();
-	// Don't auto-refresh in historical mode - data is static
-	const ds = get(dataSourceStore);
-	if (ds.mode === 'historical') return;
 	refreshInterval = setInterval(() => loadNetworkData(0), intervalMs);
 	isAutoRefreshing.set(true);
 }

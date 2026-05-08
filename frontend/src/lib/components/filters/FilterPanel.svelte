@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Search, X, ChevronDown } from 'lucide-svelte';
-	import { filterStore, dataSourceStore } from '$lib/stores';
+	import { X } from 'lucide-svelte';
+	import { filterStore, uiStore } from '$lib/stores';
 	import type { TrafficType } from '$lib/types';
 	import TimelineSlider from '$lib/components/timeline/TimelineSlider.svelte';
 
@@ -12,26 +12,23 @@
 		{ value: 'physical', label: 'Physical', defaultOn: false }
 	];
 
-	// Initialize from filter store (defaults set in filter-store.ts, overridden by localStorage)
-	let selectedTrafficTypes = $state<Set<string>>(new Set($filterStore.trafficTypes));
+	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
 
 	function toggleTrafficType(type: string) {
-		if (selectedTrafficTypes.has(type)) {
-			selectedTrafficTypes.delete(type);
+		const next = new Set($filterStore.trafficTypes);
+		if (next.has(type as TrafficType)) {
+			next.delete(type as TrafficType);
 		} else {
-			selectedTrafficTypes.add(type);
+			next.add(type as TrafficType);
 		}
-		selectedTrafficTypes = new Set(selectedTrafficTypes);
-		filterStore.setTrafficTypes([...selectedTrafficTypes] as TrafficType[]);
+		filterStore.setTrafficTypes([...next]);
 	}
 
 	function selectAllTrafficTypes() {
-		selectedTrafficTypes = new Set(trafficTypes.map((t) => t.value));
-		filterStore.setTrafficTypes([...selectedTrafficTypes] as TrafficType[]);
+		filterStore.setTrafficTypes(trafficTypes.map((t) => t.value));
 	}
 
 	function clearAllTrafficTypes() {
-		selectedTrafficTypes = new Set();
 		filterStore.setTrafficTypes([]);
 	}
 
@@ -55,8 +52,14 @@
 <div class="flex h-full flex-col overflow-y-auto p-4">
 	<div class="mb-4 flex items-center justify-between">
 		<h2 class="text-lg font-semibold">Filters</h2>
-		<button class="text-muted-foreground hover:text-foreground">
-			<ChevronDown class="h-4 w-4" />
+		<button
+			type="button"
+			class="flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground"
+			onclick={() => uiStore.toggleFilters()}
+			title="Close filters"
+			aria-label="Close filters"
+		>
+			<X class="h-4 w-4" />
 		</button>
 	</div>
 
@@ -75,7 +78,9 @@
 			{#if $filterStore.search}
 				<button
 					onclick={() => filterStore.setSearch('')}
-					class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+					class="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+					title="Clear search"
+					aria-label="Clear search"
 				>
 					<X class="h-4 w-4" />
 				</button>
@@ -108,16 +113,16 @@
 				</label>
 			{/each}
 		</div>
-		<div class="mt-1 flex gap-2 text-xs">
-			<button onclick={selectAllTrafficTypes} class="text-primary hover:underline">Select all</button
+		<div class="mt-2 flex gap-2 text-xs">
+			<button onclick={selectAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary">All</button
 			>
-			<button onclick={clearAllTrafficTypes} class="text-primary hover:underline">
-				Clear all ({selectedTrafficTypes.size})
+			<button onclick={clearAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary">
+				None ({selectedTrafficTypes.size})
 			</button>
 		</div>
 	</fieldset>
 
-	<!-- Timeline / Data Source -->
+	<!-- Time Window -->
 	<div class="mb-4 border-t border-border pt-4">
 		<TimelineSlider />
 	</div>

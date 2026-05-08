@@ -26,6 +26,8 @@ const elk = new ELK({
 
 const DEFAULT_NODE_WIDTH = 200;
 const DEFAULT_NODE_HEIGHT = 80;
+const ELK_NODE_LIMIT = 1200;
+const ELK_EDGE_LIMIT = 2500;
 
 export interface ElkLayoutOptions {
 	nodeSpacing?: number;
@@ -79,6 +81,10 @@ export async function applyElkLayout(
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
 	if (nodes.length === 0) {
 		return { nodes: [], edges: [] };
+	}
+
+	if (nodes.length > ELK_NODE_LIMIT || edges.length > ELK_EDGE_LIMIT) {
+		return applyFallbackLayout(nodes, edges, options.nodeSpacing || 150);
 	}
 
 	const layoutOptions: LayoutOptions = {

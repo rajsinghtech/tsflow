@@ -26,10 +26,11 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	var buckets []database.TrafficStats
 	source := "database"
+	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
 
 	// Try rolling cache first for recent data
 	duration := endTime.Sub(startTime)
-	if h.poller != nil && duration <= time.Hour {
+	if h.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
 		if cache.HasDataFor(startTime, endTime) {
 			buckets = cache.GetTrafficStats(startTime, endTime)
@@ -42,7 +43,11 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
 		defer cancel()
 
-		buckets, err = h.store.GetTrafficStats(ctx, startTime, endTime)
+		if len(trafficTypes) > 0 {
+			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, startTime, endTime, trafficTypes)
+		} else {
+			buckets, err = h.store.GetTrafficStats(ctx, startTime, endTime)
+		}
 		if err != nil {
 			log.Printf("ERROR GetStatsOverview: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -53,7 +58,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		source = "database"
 
 		// Fallback: synthesize from node_pairs when traffic_stats tables are empty
-		if len(buckets) == 0 {
+		if len(buckets) == 0 && len(trafficTypes) == 0 {
 			buckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
 			if err != nil {
 				log.Printf("ERROR GetStatsOverview (fallback): %v", err)
@@ -93,10 +98,11 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		},
 		"buckets": buckets,
 		"metadata": gin.H{
-			"start":       startTime,
-			"end":         endTime,
-			"bucketCount": len(buckets),
-			"source":      source,
+			"start":        startTime,
+			"end":          endTime,
+			"bucketCount":  len(buckets),
+			"source":       source,
+			"trafficTypes": trafficTypes,
 		},
 	})
 }
@@ -115,12 +121,18 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
+	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
-	talkers, err := h.store.GetTopTalkers(ctx, startTime, endTime, limit*10)
+	var talkers []database.TopTalker
+	if len(trafficTypes) > 0 {
+		talkers, err = h.store.GetTopTalkersByTrafficTypes(ctx, startTime, endTime, trafficTypes, limit*10)
+	} else {
+		talkers, err = h.store.GetTopTalkers(ctx, startTime, endTime, limit*10)
+	}
 	if err != nil {
 		log.Printf("ERROR GetTopTalkers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -143,7 +155,7 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		resolvedID := h.resolveNodeID(t.NodeID)
 		name := h.resolveNodeName(resolvedID)
 		if name == "" {
-			continue // skip unknown devices
+			name = resolvedID
 		}
 		if existing, ok := merged[resolvedID]; ok {
 			existing.txBytes += t.TxBytes
@@ -183,10 +195,11 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"talkers": enriched,
 		"metadata": gin.H{
-			"start": startTime,
-			"end":   endTime,
-			"limit": limit,
-			"count": len(enriched),
+			"start":        startTime,
+			"end":          endTime,
+			"limit":        limit,
+			"count":        len(enriched),
+			"trafficTypes": trafficTypes,
 		},
 	})
 }
@@ -205,12 +218,18 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
+	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
-	pairs, err := h.store.GetTopPairs(ctx, startTime, endTime, limit*10)
+	var pairs []database.TopPair
+	if len(trafficTypes) > 0 {
+		pairs, err = h.store.GetTopPairsByTrafficTypes(ctx, startTime, endTime, trafficTypes, limit*10)
+	} else {
+		pairs, err = h.store.GetTopPairs(ctx, startTime, endTime, limit*10)
+	}
 	if err != nil {
 		log.Printf("ERROR GetTopPairs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -238,8 +257,11 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		dstID := h.resolveNodeID(p.DstNodeID)
 		srcName := h.resolveNodeName(srcID)
 		dstName := h.resolveNodeName(dstID)
-		if srcName == "" || dstName == "" {
-			continue
+		if srcName == "" {
+			srcName = srcID
+		}
+		if dstName == "" {
+			dstName = dstID
 		}
 		key := pairKey{srcID, dstID}
 		if existing, ok := pairMerged[key]; ok {
@@ -288,10 +310,11 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"pairs": enriched,
 		"metadata": gin.H{
-			"start": startTime,
-			"end":   endTime,
-			"limit": limit,
-			"count": len(enriched),
+			"start":        startTime,
+			"end":          endTime,
+			"limit":        limit,
+			"count":        len(enriched),
+			"trafficTypes": trafficTypes,
 		},
 	})
 }
