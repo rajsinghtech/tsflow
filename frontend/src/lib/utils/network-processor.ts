@@ -31,6 +31,21 @@ function isIPAddress(value: string): boolean {
 	return false;
 }
 
+function isOpaqueTailscaleNodeID(value: string): boolean {
+	return /^[A-Za-z0-9]{8,}CNTRL$/.test(value);
+}
+
+function formatUnknownNodeID(value: string): string {
+	if (isOpaqueTailscaleNodeID(value)) {
+		return `Unknown Tailscale node ${value.slice(0, 4)}`;
+	}
+	return value;
+}
+
+function displayAddress(value: string): string {
+	return isIPAddress(value) ? value : '';
+}
+
 // Get device name from IP or device ID
 function getDeviceName(
 	ipOrId: string,
@@ -43,9 +58,10 @@ function getDeviceName(
 		const device = devices.find((d) => d.id === ipOrId);
 		if (device) {
 			const shortName = device.name.split('.')[0];
-			return shortName || device.name;
+			const name = shortName || device.name;
+			return formatUnknownNodeID(name);
 		}
-		return ipOrId; // Return ID as-is if no device found
+		return formatUnknownNodeID(ipOrId);
 	}
 
 	// Extract IP from IP:port format
@@ -156,20 +172,21 @@ export function processNetworkLogs(
 
 			// Create or update source node
 			const srcDeviceName = getDeviceName(traffic.src, devices, services, records);
-			const srcNodeId = srcDeviceName !== srcIP ? srcDeviceName : srcIP;
+			const srcNodeId = isOpaqueTailscaleNodeID(traffic.src) ? traffic.src : (srcDeviceName !== srcIP ? srcDeviceName : srcIP);
 
 			if (!nodeMap.has(srcNodeId)) {
-				const isTailscale = categorizeIP(srcIP).includes('tailscale');
+				const srcAddress = displayAddress(srcIP);
+				const isTailscale = srcAddress ? categorizeIP(srcAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.src, devices);
 				const serviceData = getServiceData(traffic.src, services);
-				const ipTags = categorizeIP(srcIP);
+				const ipTags = srcAddress ? categorizeIP(srcAddress) : (isOpaqueTailscaleNodeID(traffic.src) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
 				const allTags = [...new Set([...ipTags, ...deviceTags, ...serviceTags])];
 
 				nodeMap.set(srcNodeId, {
 					id: srcNodeId,
-					ip: srcIP,
+					ip: srcAddress,
 					displayName: srcDeviceName,
 					nodeType: 'ip',
 					totalBytes: 0,
@@ -179,7 +196,7 @@ export function processNetworkLogs(
 					tags: allTags,
 					user: deviceData?.user,
 					isTailscale,
-					ips: [srcIP],
+					ips: srcAddress ? [srcAddress] : [],
 					incomingPorts: new Set<number>(),
 					outgoingPorts: new Set<number>(),
 					protocols: new Set<string>(),
@@ -188,9 +205,10 @@ export function processNetworkLogs(
 				});
 			} else {
 				const existingNode = nodeMap.get(srcNodeId)!;
-				if (!existingNode.ips.includes(srcIP)) {
-					existingNode.ips.push(srcIP);
-					const newTags = categorizeIP(srcIP);
+				const srcAddress = displayAddress(srcIP);
+				if (srcAddress && !existingNode.ips.includes(srcAddress)) {
+					existingNode.ips.push(srcAddress);
+					const newTags = categorizeIP(srcAddress);
 					const deviceData = getDeviceData(traffic.src, devices);
 					const serviceData = getServiceData(traffic.src, services);
 					const deviceTags = deviceData?.tags || [];
@@ -208,20 +226,21 @@ export function processNetworkLogs(
 
 			// Create or update destination node
 			const dstDeviceName = getDeviceName(traffic.dst, devices, services, records);
-			const dstNodeId = dstDeviceName !== dstIP ? dstDeviceName : dstIP;
+			const dstNodeId = isOpaqueTailscaleNodeID(traffic.dst) ? traffic.dst : (dstDeviceName !== dstIP ? dstDeviceName : dstIP);
 
 			if (!nodeMap.has(dstNodeId)) {
-				const isTailscale = categorizeIP(dstIP).includes('tailscale');
+				const dstAddress = displayAddress(dstIP);
+				const isTailscale = dstAddress ? categorizeIP(dstAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.dst, devices);
 				const serviceData = getServiceData(traffic.dst, services);
-				const ipTags = categorizeIP(dstIP);
+				const ipTags = dstAddress ? categorizeIP(dstAddress) : (isOpaqueTailscaleNodeID(traffic.dst) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
 				const allTags = [...new Set([...ipTags, ...deviceTags, ...serviceTags])];
 
 				nodeMap.set(dstNodeId, {
 					id: dstNodeId,
-					ip: dstIP,
+					ip: dstAddress,
 					displayName: dstDeviceName,
 					nodeType: 'ip',
 					totalBytes: 0,
@@ -231,7 +250,7 @@ export function processNetworkLogs(
 					tags: allTags,
 					user: deviceData?.user,
 					isTailscale,
-					ips: [dstIP],
+					ips: dstAddress ? [dstAddress] : [],
 					incomingPorts: new Set<number>(),
 					outgoingPorts: new Set<number>(),
 					protocols: new Set<string>(),
@@ -240,9 +259,10 @@ export function processNetworkLogs(
 				});
 			} else {
 				const existingNode = nodeMap.get(dstNodeId)!;
-				if (!existingNode.ips.includes(dstIP)) {
-					existingNode.ips.push(dstIP);
-					const newTags = categorizeIP(dstIP);
+				const dstAddress = displayAddress(dstIP);
+				if (dstAddress && !existingNode.ips.includes(dstAddress)) {
+					existingNode.ips.push(dstAddress);
+					const newTags = categorizeIP(dstAddress);
 					const deviceData = getDeviceData(traffic.dst, devices);
 					const serviceData = getServiceData(traffic.dst, services);
 					const deviceTags = deviceData?.tags || [];

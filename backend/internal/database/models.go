@@ -96,6 +96,33 @@ type PollResults struct {
 	PollEnd       time.Time
 }
 
+// ObjectIngestResult records aggregates produced by one immutable object-store log object.
+type ObjectIngestResult struct {
+	Key           string
+	LastModified  time.Time
+	Size          int64
+	FlowCount     int
+	NodeMetadata  []NodeMetadata
+	NodePairs     []NodePairAggregate
+	Bandwidth     []BandwidthBucket
+	NodeBandwidth []NodeBandwidth
+	TrafficStats  []TrafficStats
+	PollEnd       time.Time
+}
+
+// NodeMetadata stores node identities embedded in exported flow-log objects.
+// Tailscale flow logs use n...CNTRL node IDs that are distinct from the live
+// Devices API IDs, so this metadata is required to render historical data.
+type NodeMetadata struct {
+	NodeID   string    `json:"nodeId"`
+	Name     string    `json:"name"`
+	Hostname string    `json:"hostname"`
+	Owner    string    `json:"owner"`
+	IPs      []string  `json:"ips"`
+	Tags     []string  `json:"tags"`
+	Updated  time.Time `json:"updated"`
+}
+
 // PollState tracks the polling state
 type PollState struct {
 	LastPollEnd time.Time `json:"lastPollEnd"`
@@ -139,18 +166,26 @@ type Store interface {
 	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket) error
 	UpsertNodeBandwidth(ctx context.Context, buckets []NodeBandwidth) error
 	GetBandwidth(ctx context.Context, start, end time.Time) ([]BandwidthBucket, error)
+	GetBandwidthByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
 	GetNodeBandwidth(ctx context.Context, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
 
 	// Traffic stats operations
 	UpsertTrafficStats(ctx context.Context, stats []TrafficStats) error
 	GetTrafficStats(ctx context.Context, start, end time.Time) ([]TrafficStats, error)
 	GetTrafficStatsFromNodePairs(ctx context.Context, start, end time.Time) ([]TrafficStats, error)
+	GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]TrafficStats, error)
 	GetTopTalkers(ctx context.Context, start, end time.Time, limit int) ([]TopTalker, error)
+	GetTopTalkersByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
 	GetTopPairs(ctx context.Context, start, end time.Time, limit int) ([]TopPair, error)
+	GetTopPairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
 	GetNodeStats(ctx context.Context, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 
 	// Atomic poll commit
 	CommitPollResults(ctx context.Context, results PollResults) error
+	CommitObjectIngest(ctx context.Context, result ObjectIngestResult) error
+	IsObjectIngested(ctx context.Context, key string) (bool, error)
+	UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error
+	GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error)
 
 	// State operations
 	GetPollState(ctx context.Context) (*PollState, error)

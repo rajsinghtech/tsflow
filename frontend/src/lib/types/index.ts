@@ -92,14 +92,6 @@ export interface FilterState {
 	selectedTags: string[];
 }
 
-export interface TimeRange {
-	label: string;
-	value: string;
-	minutes?: number;
-	start?: Date;
-	end?: Date;
-}
-
 // UI state types
 export interface UIState {
 	showFilterPanel: boolean;

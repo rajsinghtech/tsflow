@@ -25,8 +25,6 @@ const (
 	MaxLogsInResponse = 50000
 	// MaxBuckets limits the number of time-series buckets returned
 	MaxBuckets = 5000
-	// MaxAggregates limits the number of aggregated flow entries returned
-	MaxAggregates = 10000
 	// MinQueryRange prevents degenerate zero-duration queries
 	MinQueryRange = time.Second
 	// DefaultQueryTimeout is the default timeout for database queries

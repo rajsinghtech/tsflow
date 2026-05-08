@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { Loader2, AlertCircle, RefreshCw, X, Keyboard } from 'lucide-svelte';
 	import NetworkGraph from '$lib/components/graph/NetworkGraph.svelte';
 	import FilterPanel from '$lib/components/filters/FilterPanel.svelte';
@@ -10,14 +10,43 @@
 	import Header from '$lib/components/layout/Header.svelte';
 	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '$lib/stores/network-store';
 	import { uiStore } from '$lib/stores/ui-store';
+	import { dataSourceStore } from '$lib/stores/data-source-store';
+
+	let isBootstrapping = $state(true);
 
 	onMount(() => {
-		loadNetworkData();
-		startAutoRefresh();
-	});
+		let cancelled = false;
 
-	onDestroy(() => {
-		stopAutoRefresh();
+		async function bootstrap() {
+			isBootstrapping = true;
+			const [range] = await Promise.all([
+				dataSourceStore.fetchDataRange(),
+				dataSourceStore.fetchPollerStatus()
+			]);
+			if (cancelled) return;
+
+			const latest = range?.latest ? new Date(range.latest) : null;
+			const earliest = range?.earliest ? new Date(range.earliest) : null;
+			const hasStoredData = !!range && range.count > 0 && earliest && latest;
+
+			if (hasStoredData) {
+				dataSourceStore.showLatestWindow(range);
+			}
+			startAutoRefresh();
+
+			await loadNetworkData();
+			if (!cancelled) {
+				isBootstrapping = false;
+			}
+		}
+
+		bootstrap();
+
+		return () => {
+			cancelled = true;
+			isBootstrapping = false;
+			stopAutoRefresh();
+		};
 	});
 
 	// Keyboard shortcuts
@@ -120,7 +149,7 @@
 		<!-- Graph Area -->
 		<main id="main-content" class="relative flex flex-1 flex-col overflow-hidden">
 			<!-- Loading State -->
-			{#if $uiStore.isLoading && $filteredNodes.length === 0}
+			{#if isBootstrapping || ($uiStore.isLoading && $filteredNodes.length === 0)}
 				<div class="flex flex-1 flex-col items-center justify-center gap-4">
 					<Loader2 class="h-8 w-8 animate-spin text-primary" />
 					<p class="text-muted-foreground">Loading network data...</p>
@@ -162,7 +191,7 @@
 			{/if}
 
 			<!-- Bottom Panel: Bandwidth Chart + Port Details + Log Viewer -->
-			{#if $uiStore.showLogViewer}
+			{#if $uiStore.showLogViewer && !isBootstrapping}
 				<BandwidthChart />
 				<PortDetails />
 				<EdgePolicyInfo />

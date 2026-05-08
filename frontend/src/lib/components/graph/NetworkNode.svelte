@@ -31,6 +31,7 @@
 	// Determine node color based on type
 	const nodeColor = $derived.by(() => {
 		if (data.isVIPService) return 'var(--color-node-vip)';
+		if (data.tags?.includes('unresolved')) return 'var(--color-muted-foreground)';
 		if (data.tags?.includes('derp')) return 'var(--color-node-derp)';
 		if (data.isTailscale) return 'var(--color-node-tailscale)';
 		if (data.tags?.includes('private')) return 'var(--color-node-private)';
@@ -40,6 +41,7 @@
 	// Determine icon type
 	const iconType = $derived.by(() => {
 		if (data.isVIPService) return 'vip';
+		if (data.tags?.includes('unresolved')) return 'unresolved';
 		if (data.tags?.includes('derp')) return 'derp';
 		if (data.isTailscale) return 'tailscale';
 		if (data.tags?.includes('private')) return 'private';
@@ -96,7 +98,7 @@
 					<Cloud class="h-4 w-4 shrink-0" style="color: {nodeColor}" />
 				{:else if iconType === 'derp'}
 					<Radio class="h-4 w-4 shrink-0" style="color: {nodeColor}" />
-				{:else if iconType === 'tailscale'}
+				{:else if iconType === 'tailscale' || iconType === 'unresolved'}
 					<Server class="h-4 w-4 shrink-0" style="color: {nodeColor}" />
 				{:else if iconType === 'private'}
 					<Network class="h-4 w-4 shrink-0" style="color: {nodeColor}" />
@@ -198,6 +200,8 @@
 			{:else if data.isTailscale}
 				<div class="h-2 w-2 animate-pulse rounded-full bg-node-tailscale"></div>
 				<span class="text-xs text-node-tailscale">Tailscale</span>
+			{:else if iconType === 'unresolved'}
+				<span class="text-xs text-muted-foreground">Unresolved node</span>
 			{:else if iconType === 'derp'}
 				<span class="text-xs text-node-derp">DERP</span>
 			{:else if iconType === 'private'}

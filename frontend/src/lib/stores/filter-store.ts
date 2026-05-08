@@ -1,22 +1,12 @@
 import { writable, derived } from 'svelte/store';
-import type { FilterState, TimeRange, Protocol, TrafficType } from '$lib/types';
+import type { FilterState, Protocol, TrafficType } from '$lib/types';
 
-// Time range presets
-export const TIME_RANGES: TimeRange[] = [
-	{ label: '1 minute', value: '1m', minutes: 1 },
-	{ label: '5 minutes', value: '5m', minutes: 5 },
-	{ label: '15 minutes', value: '15m', minutes: 15 },
-	{ label: '30 minutes', value: '30m', minutes: 30 },
-	{ label: '1 hour', value: '1h', minutes: 60 },
-	{ label: '6 hours', value: '6h', minutes: 360 },
-	{ label: '24 hours', value: '24h', minutes: 1440 },
-	{ label: '7 days', value: '7d', minutes: 10080 },
-	{ label: '30 days', value: '30d', minutes: 43200 },
-	{ label: 'Custom', value: 'custom' }
-];
+const DEFAULT_TRAFFIC_TYPES: TrafficType[] = ['virtual', 'subnet'];
+const ALL_TRAFFIC_TYPES = new Set<TrafficType>(['virtual', 'subnet', 'exit', 'physical']);
 
-// LocalStorage key for persisted filter preferences
-const FILTER_STORAGE_KEY = 'tsflow-filter-prefs';
+// LocalStorage key for persisted filter preferences. v2 intentionally drops
+// older traffic-type preferences so the default is virtual + subnet.
+const FILTER_STORAGE_KEY = 'tsflow-filter-prefs-v2';
 
 function loadPersistedFilters(): Partial<FilterState> {
 	if (typeof window === 'undefined') return {};
@@ -33,7 +23,12 @@ function loadPersistedFilters(): Partial<FilterState> {
 			showIpv6: parsed.showIpv6 ?? true
 		};
 		if (Array.isArray(parsed.trafficTypes) && parsed.trafficTypes.length > 0) {
-			result.trafficTypes = parsed.trafficTypes;
+			const trafficTypes = parsed.trafficTypes.filter((type: unknown): type is TrafficType =>
+				typeof type === 'string' && ALL_TRAFFIC_TYPES.has(type as TrafficType)
+			);
+			if (trafficTypes.length > 0) {
+				result.trafficTypes = trafficTypes;
+			}
 		}
 		return result;
 	} catch {
@@ -53,16 +48,20 @@ function persistFilters(state: FilterState) {
 }
 
 // Default filter state — virtual + subnet shown by default
-const defaultFilterState: FilterState = {
+const baseFilterState: FilterState = {
 	search: '',
 	protocols: [],
-	trafficTypes: ['virtual', 'subnet'],
+	trafficTypes: DEFAULT_TRAFFIC_TYPES,
 	minBandwidth: 0,
 	maxBandwidth: 1000000000, // 1GB
 	minConnections: 0,
 	showIpv4: true,
 	showIpv6: true,
-	selectedTags: [],
+	selectedTags: []
+};
+
+const defaultFilterState: FilterState = {
+	...baseFilterState,
 	...loadPersistedFilters()
 };
 
@@ -131,7 +130,8 @@ function createFilterStore() {
 		}),
 		setSelectedTags: (tags: string[]) => update((s) => ({ ...s, selectedTags: tags })),
 		reset: () => {
-			set(defaultFilterState);
+			set(baseFilterState);
+			persistFilters(baseFilterState);
 			// Also reset debounced search immediately
 			if (searchDebounceTimer) {
 				clearTimeout(searchDebounceTimer);
@@ -160,52 +160,3 @@ export const debouncedFilterStore = derived(
 		search: $debouncedSearch
 	})
 );
-
-// Time range store
-function createTimeRangeStore() {
-	const { subscribe, set, update } = writable({
-		selected: '5m' as string,
-		customStart: null as Date | null,
-		customEnd: null as Date | null
-	});
-
-	return {
-		subscribe,
-		setPreset: (value: string) =>
-			update((s) => ({
-				...s,
-				selected: value,
-				customStart: null,
-				customEnd: null
-			})),
-		setCustomRange: (start: Date, end: Date) =>
-			update((s) => ({
-				...s,
-				selected: 'custom',
-				customStart: start,
-				customEnd: end
-			})),
-		getDateRange: derived({ subscribe }, ($store) => {
-			if ($store.selected === 'custom' && $store.customStart && $store.customEnd) {
-				return { start: $store.customStart, end: $store.customEnd };
-			}
-
-			const preset = TIME_RANGES.find((r) => r.value === $store.selected);
-			if (preset?.minutes) {
-				const end = new Date();
-				const start = new Date(end.getTime() - preset.minutes * 60 * 1000);
-				return { start, end };
-			}
-
-			// Fallback to 5 minutes - log warning for debugging
-			if ($store.selected !== 'custom') {
-				console.warn(`Unknown time range preset: "${$store.selected}", falling back to 5 minutes`);
-			}
-			const end = new Date();
-			const start = new Date(end.getTime() - 5 * 60 * 1000);
-			return { start, end };
-		})
-	};
-}
-
-export const timeRangeStore = createTimeRangeStore();

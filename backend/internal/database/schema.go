@@ -125,6 +125,25 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	INSERT OR IGNORE INTO poll_state (id, last_poll_end, updated_at) VALUES (1, NULL, CURRENT_TIMESTAMP);
+
+	CREATE TABLE IF NOT EXISTS ingested_objects (
+		object_key    TEXT PRIMARY KEY,
+		last_modified DATETIME,
+		size_bytes    INTEGER DEFAULT 0,
+		flow_count    INTEGER DEFAULT 0,
+		ingested_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_ingested_objects_ingested_at ON ingested_objects(ingested_at);
+
+	CREATE TABLE IF NOT EXISTS node_metadata (
+		node_id    TEXT PRIMARY KEY,
+		name       TEXT DEFAULT '',
+		hostname   TEXT DEFAULT '',
+		owner      TEXT DEFAULT '',
+		ips        TEXT DEFAULT '[]',
+		tags       TEXT DEFAULT '[]',
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {

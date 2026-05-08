@@ -63,6 +63,60 @@ spec:
                   name: tsflow
                   key: TAILSCALE_API_URL
                   optional: true
+            - name: TSFLOW_FLOW_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_FLOW_BACKEND
+                  optional: true
+            - name: TSFLOW_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_BUCKET
+                  optional: true
+            - name: TSFLOW_S3_PREFIX
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_PREFIX
+                  optional: true
+            - name: TSFLOW_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_ENDPOINT
+                  optional: true
+            - name: TSFLOW_S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_REGION
+                  optional: true
+            - name: TSFLOW_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_ACCESS_KEY_ID
+                  optional: true
+            - name: TSFLOW_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_SECRET_ACCESS_KEY
+                  optional: true
+            - name: TSFLOW_S3_LOOKBACK
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_LOOKBACK
+                  optional: true
+            - name: TSFLOW_S3_MAX_OBJECTS_PER_POLL
+              valueFrom:
+                secretKeyRef:
+                  name: tsflow
+                  key: TSFLOW_S3_MAX_OBJECTS_PER_POLL
+                  optional: true
           volumeMounts:
             - name: data
               mountPath: /app/data

@@ -10,8 +10,17 @@
 
 	// Derive a display name for a device, skipping "localhost" (common on mobile devices)
 	function deviceDisplayName(device: { hostname?: string; name: string }): string {
-		if (device.hostname && device.hostname !== 'localhost') return device.hostname;
-		return device.name.split('.')[0] || device.name;
+		const name = device.hostname && device.hostname !== 'localhost'
+			? device.hostname
+			: device.name.split('.')[0] || device.name;
+		return formatUnknownNodeName(name);
+	}
+
+	function formatUnknownNodeName(value: string): string {
+		if (/^[A-Za-z0-9]{8,}CNTRL$/.test(value)) {
+			return `Unknown Tailscale node ${value.slice(0, 4)}`;
+		}
+		return value;
 	}
 
 	// Build IP to device name lookup map
@@ -60,7 +69,7 @@
 	});
 
 	// Resolve an address (could be IP:port or device ID) to its IP.
-	// In historical mode, aggregated flows use device IDs as src/dst instead of IP:port.
+	// Aggregated flows may use device IDs as src/dst instead of IP:port.
 	function resolveToNodeIP(address: string): string {
 		const ip = extractIP(address);
 		return deviceIdToIP.get(ip) || ip;

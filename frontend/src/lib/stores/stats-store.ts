@@ -1,7 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import { tailscaleService } from '$lib/services/tailscale-service';
-import { dataSourceStore } from './data-source-store';
-import { timeRangeStore, TIME_RANGES } from './filter-store';
+import { dataSourceStore, queryTimeWindow } from './data-source-store';
+import { filterStore } from './filter-store';
+import { extractIP, ipMatches } from '$lib/utils/ip-utils';
 import type { TrafficStatsSummary, TrafficStatsBucket, TopTalker, TopPair, PortStat } from '$lib/types';
 
 interface StatsState {
@@ -84,41 +85,57 @@ export async function loadStats(currentAttempt = 0) {
 	statsState.update((s) => ({ ...s, isLoading: true, error: null }));
 
 	try {
-		// Compute time window fresh each call to avoid stale derived store values.
-		let start: Date;
-		let end: Date;
+		if (get(dataSourceStore).followLatest) {
+			await dataSourceStore.fetchDataRange();
+			if (signal.aborted) return;
+		}
+		const { start, end } = get(queryTimeWindow);
+		const trafficTypes = get(filterStore).trafficTypes;
 
-		let ds = get(dataSourceStore);
-
-		if (ds.mode === 'historical' && ds.selectedStart && ds.selectedEnd) {
-			start = ds.selectedStart;
-			end = ds.selectedEnd;
-		} else {
-			// Live mode - use time range store (same as network data)
-			const timeRange = get(timeRangeStore);
-			if (timeRange.selected === 'custom' && timeRange.customStart && timeRange.customEnd) {
-				start = timeRange.customStart;
-				end = timeRange.customEnd;
-			} else {
-				const preset = TIME_RANGES.find((p) => p.value === timeRange.selected);
-				end = new Date();
-				start = new Date(end.getTime() - (preset?.minutes || 5) * 60 * 1000);
-			}
+		if (trafficTypes.length === 0) {
+			statsState.set({
+				summary: {
+					tcpBytes: 0,
+					udpBytes: 0,
+					otherProtoBytes: 0,
+					virtualBytes: 0,
+					subnetBytes: 0,
+					physicalBytes: 0,
+					totalFlows: 0,
+					uniquePairs: 0
+				},
+				buckets: [],
+				topTalkers: [],
+				topPairs: [],
+				isLoading: false,
+				error: null
+			});
+			clearStatsRetryState();
+			return;
 		}
 
-		let [overviewRes, talkersRes, pairsRes] = await Promise.all([
-			tailscaleService.getStatsOverview(start, end, signal),
-			tailscaleService.getTopTalkers(start, end, 15, signal),
-			tailscaleService.getTopPairs(start, end, 15, signal)
+		let [overviewRes, talkersRes, pairsRes, servicesRes] = await Promise.all([
+			tailscaleService.getStatsOverview(start, end, signal, trafficTypes),
+			tailscaleService.getTopTalkers(start, end, 15, signal, trafficTypes),
+			tailscaleService.getTopPairs(start, end, 15, signal, trafficTypes),
+			tailscaleService.getServicesRecords(signal).catch(() => ({ services: {}, records: {} }))
 		]);
 
 		if (signal.aborted) return;
 
+		const resolveDisplayName = createServiceRecordResolver(servicesRes.services || {}, servicesRes.records || {});
 		statsState.set({
 			summary: overviewRes.summary,
 			buckets: overviewRes.buckets || [],
-			topTalkers: talkersRes.talkers || [],
-			topPairs: pairsRes.pairs || [],
+			topTalkers: (talkersRes.talkers || []).map((talker) => ({
+				...talker,
+				displayName: resolveDisplayName(talker.nodeId, talker.displayName)
+			})),
+			topPairs: (pairsRes.pairs || []).map((pair) => ({
+				...pair,
+				srcDisplayName: resolveDisplayName(pair.srcNodeId, pair.srcDisplayName),
+				dstDisplayName: resolveDisplayName(pair.dstNodeId, pair.dstDisplayName)
+			})),
 			isLoading: false,
 			error: null
 		});
@@ -148,8 +165,6 @@ export function retryLoadStats() {
 export function startStatsRefresh(intervalMs = 60_000) {
 	stopStatsRefresh();
 	loadStats();
-	// Don't auto-refresh in historical mode - data is static
-	if (get(dataSourceStore).mode === 'historical') return;
 	refreshTimer = setInterval(() => loadStats(0), intervalMs);
 }
 
@@ -190,3 +205,46 @@ export const topPorts = derived(statsState, ($s): PortStat[] => {
 		.sort((a, b) => b.bytes - a.bytes)
 		.slice(0, 15);
 });
+
+function createServiceRecordResolver(
+	services: Record<string, { name: string; addrs: string[]; tags?: string[] }>,
+	records: Record<string, { addrs: string[]; comment?: string }>
+) {
+	return (nodeId: string, existingName?: string): string => {
+		const ip = extractIP(nodeId);
+		for (const [serviceName, service] of Object.entries(services)) {
+			if (service.addrs?.some((addr) => ipMatches(ip, addr))) {
+				return service.name || serviceName;
+			}
+		}
+		for (const [recordName, record] of Object.entries(records)) {
+			if (record.addrs?.some((addr) => ipMatches(ip, addr))) {
+				return recordName;
+			}
+		}
+		if (existingName && existingName !== nodeId && !isOpaqueTailscaleNodeID(existingName)) {
+			return existingName;
+		}
+		if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+			if (
+				ip.startsWith('10.') ||
+				ip.startsWith('192.168.') ||
+				(ip.startsWith('172.') && Number(ip.split('.')[1]) >= 16 && Number(ip.split('.')[1]) <= 31)
+			) {
+				return `Subnet route ${ip}`;
+			}
+		}
+		return formatFallbackNodeName(existingName || nodeId);
+	};
+}
+
+function isOpaqueTailscaleNodeID(value: string): boolean {
+	return /^[A-Za-z0-9]{8,}CNTRL$/.test(value);
+}
+
+function formatFallbackNodeName(value: string): string {
+	if (isOpaqueTailscaleNodeID(value)) {
+		return `Unknown Tailscale node ${value.slice(0, 4)}`;
+	}
+	return value;
+}

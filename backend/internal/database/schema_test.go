@@ -29,7 +29,6 @@ func TestNewSQLiteStore(t *testing.T) {
 	}
 }
 
-
 func TestPollState(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
@@ -196,6 +195,94 @@ func TestResolveBucketSize(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("resolveBucketSize(%d) = %d, want %d", tc.rangeSeconds, got, tc.want)
 		}
+	}
+}
+
+func TestCommitObjectIngest_Idempotent(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	pollEnd := time.Unix(120, 0).UTC()
+
+	result := ObjectIngestResult{
+		Key:          "network/2026/03/31/2026-03-31-00-01-00.ndjson.zst",
+		LastModified: pollEnd,
+		Size:         123,
+		FlowCount:    1,
+		NodeMetadata: []NodeMetadata{{
+			NodeID:   "n5ZfK4a5pz11CNTRL",
+			Name:     "garage.keiretsu.ts.net",
+			Hostname: "garage",
+			Owner:    "ops@example.com",
+			IPs:      []string{"100.64.1.2"},
+			Tags:     []string{"tag:storage"},
+		}},
+		NodePairs: []NodePairAggregate{{
+			Bucket:      120,
+			SrcNodeID:   "node-a",
+			DstNodeID:   "node-b",
+			TrafficType: "virtual",
+			TxBytes:     100,
+			RxBytes:     50,
+			TxPkts:      2,
+			RxPkts:      1,
+			FlowCount:   1,
+			Protocols:   "[6]",
+			Ports:       "[]",
+		}},
+		Bandwidth: []BandwidthBucket{{
+			Time:    pollEnd,
+			TxBytes: 100,
+			RxBytes: 50,
+		}},
+		TrafficStats: []TrafficStats{{
+			Bucket:       120,
+			TCPBytes:     150,
+			VirtualBytes: 150,
+			TotalFlows:   1,
+			UniquePairs:  1,
+			TopPorts:     "[]",
+		}},
+		PollEnd: pollEnd,
+	}
+
+	if err := store.CommitObjectIngest(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitObjectIngest(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+
+	seen, err := store.IsObjectIngested(ctx, result.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("expected object to be marked ingested")
+	}
+
+	pairs, err := store.GetNodePairAggregates(ctx, pollEnd.Add(-time.Minute), pollEnd.Add(time.Minute), 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 {
+		t.Fatalf("expected one node pair, got %d", len(pairs))
+	}
+	if pairs[0].TxBytes != 100 || pairs[0].RxBytes != 50 || pairs[0].FlowCount != 1 {
+		t.Fatalf("object ingest was double counted: %+v", pairs[0])
+	}
+
+	nodes, err := store.GetNodeMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node metadata row, got %d", len(nodes))
+	}
+	if nodes[0].NodeID != "n5ZfK4a5pz11CNTRL" || nodes[0].Hostname != "garage" {
+		t.Fatalf("unexpected node metadata: %+v", nodes[0])
+	}
+	if len(nodes[0].IPs) != 1 || nodes[0].IPs[0] != "100.64.1.2" {
+		t.Fatalf("unexpected node metadata IPs: %+v", nodes[0].IPs)
 	}
 }
 

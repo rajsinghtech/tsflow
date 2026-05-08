@@ -22,6 +22,10 @@ type PollerConfig struct {
 	CleanupInterval time.Duration
 	// DeviceCacheRefresh is how often to refresh device cache
 	DeviceCacheRefresh time.Duration
+	// FlowBackend identifies where flow logs come from: "api" or "s3".
+	FlowBackend string
+	// ObjectStore is used when FlowBackend is "s3".
+	ObjectStore ObjectStoreConfig
 }
 
 // DefaultPollerConfig returns sensible defaults
@@ -32,6 +36,7 @@ func DefaultPollerConfig() PollerConfig {
 		Retention:          30 * 24 * time.Hour,
 		CleanupInterval:    1 * time.Hour,
 		DeviceCacheRefresh: 5 * time.Minute,
+		FlowBackend:        "api",
 	}
 }
 
@@ -42,6 +47,7 @@ type Poller struct {
 	config       PollerConfig
 	deviceCache  *DeviceCache
 	rollingCache *RollingWindowCache
+	objectStore  *ObjectStoreSource
 
 	mu          sync.RWMutex
 	running     bool
@@ -73,6 +79,13 @@ func NewPoller(tsService *TailscaleService, store database.Store, config PollerC
 	}
 }
 
+func (p *Poller) ConfigureObjectStore(source *ObjectStoreSource) {
+	p.objectStore = source
+	if source != nil {
+		p.config.FlowBackend = "s3"
+	}
+}
+
 // Start begins the background polling loop
 func (p *Poller) Start(ctx context.Context) error {
 	p.mu.Lock()
@@ -87,8 +100,8 @@ func (p *Poller) Start(ctx context.Context) error {
 	p.triggerChan = make(chan struct{}, 1)
 	p.mu.Unlock()
 
-	log.Printf("Starting background poller (interval: %v, retention: %v)",
-		p.config.PollInterval, p.config.Retention)
+	log.Printf("Starting background poller (backend: %s, interval: %v, retention: %v)",
+		p.config.FlowBackend, p.config.PollInterval, p.config.Retention)
 
 	// Initial device cache refresh
 	if err := p.refreshDeviceCache(ctx); err != nil {
@@ -136,6 +149,7 @@ func (p *Poller) Stats() map[string]any {
 		"totalPolled":   p.totalPolled,
 		"pollErrors":    p.pollErrors,
 		"pollInterval":  p.config.PollInterval.String(),
+		"flowBackend":   p.config.FlowBackend,
 	}
 	if p.lastPollError != "" {
 		stats["lastError"] = p.lastPollError
@@ -241,12 +255,20 @@ func (p *Poller) run(ctx context.Context) {
 	}
 }
 
-func (p *Poller) refreshDeviceCache(_ context.Context) error {
+func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 	devicesResp, err := p.tsService.GetDevices()
 	if err != nil {
 		return err
 	}
 	p.deviceCache.Update(devicesResp.Devices)
+	if p.store != nil {
+		nodeMetadata, err := p.store.GetNodeMetadata(ctx)
+		if err != nil {
+			log.Printf("Warning: node metadata cache hydration failed: %v", err)
+		} else if len(nodeMetadata) > 0 {
+			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
+		}
+	}
 	log.Printf("Device cache refreshed: %d devices", len(devicesResp.Devices))
 	return nil
 }
@@ -274,6 +296,10 @@ func (p *Poller) poll(ctx context.Context) error {
 		start = pollState.LastPollEnd
 	}
 
+	if p.objectStore != nil {
+		return p.pollObjectStore(ctx, start, end)
+	}
+
 	// If the time range is larger than maxPollChunk, split into chunks
 	// to avoid HTTP timeouts on large API responses.
 	if end.Sub(start) > maxPollChunk {
@@ -281,6 +307,32 @@ func (p *Poller) poll(ctx context.Context) error {
 	}
 
 	return p.pollRange(ctx, start, end)
+}
+
+func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) error {
+	objects, flows, lastProcessed, err := p.objectStore.Poll(ctx, p, start, end)
+	if err != nil {
+		return err
+	}
+
+	if objects == 0 {
+		// Move the cursor forward when no object exists yet. Object-store polling
+		// still applies a lookback and an ingested-object guard on the next pass.
+		lastProcessed = end
+		if err := p.store.UpdatePollState(ctx, end); err != nil {
+			return err
+		}
+	}
+
+	p.mu.Lock()
+	p.lastPollTime = time.Now()
+	p.lastPollCount = flows
+	p.totalPolled += int64(flows)
+	p.mu.Unlock()
+
+	log.Printf("Object-store poll processed %d objects and %d flow rows (%v to %v)",
+		objects, flows, start.Format(time.RFC3339), lastProcessed.Format(time.RFC3339))
+	return nil
 }
 
 // pollChunked splits a large time range into sequential chunks, committing

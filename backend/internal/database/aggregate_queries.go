@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
 // resolveBucketSize returns the SQL grouping interval in seconds for a query window.
-//   ≤ 2 hours  → 60 s  (1-minute buckets, raw)
-//   ≤ 48 hours → 3600 s (1-hour buckets)
-//   otherwise  → 86400 s (1-day buckets)
+//
+//	≤ 2 hours  → 60 s  (1-minute buckets, raw)
+//	≤ 48 hours → 3600 s (1-hour buckets)
+//	otherwise  → 86400 s (1-day buckets)
 func resolveBucketSize(rangeSeconds int64) int64 {
 	if rangeSeconds <= 2*3600 {
 		return 60
@@ -51,6 +53,62 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, results PollResults
 	_, err = tx.ExecContext(ctx,
 		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
 		results.PollEnd.UTC().Format(sqliteFormat),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update poll state: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// CommitObjectIngest atomically writes aggregates for one immutable object and
+// records the object key. If the object key already exists, the aggregates are
+// not applied again.
+func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectIngestResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	const sqliteFormat = "2006-01-02 15:04:05"
+	insertRes, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO ingested_objects (object_key, last_modified, size_bytes, flow_count, ingested_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, result.Key, result.LastModified.UTC().Format(sqliteFormat), result.Size, result.FlowCount)
+	if err != nil {
+		return fmt.Errorf("failed to mark object as ingested: %w", err)
+	}
+	rows, _ := insertRes.RowsAffected()
+	if rows == 0 {
+		if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
+		return err
+	}
+	if err := upsertNodePairsTx(ctx, tx, result.NodePairs); err != nil {
+		return err
+	}
+	if err := upsertBandwidthTx(ctx, tx, result.Bandwidth); err != nil {
+		return err
+	}
+	if err := upsertNodeBandwidthTx(ctx, tx, result.NodeBandwidth); err != nil {
+		return err
+	}
+	if err := upsertTrafficStatsTx(ctx, tx, result.TrafficStats); err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+		result.PollEnd.UTC().Format(sqliteFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
@@ -345,6 +403,55 @@ func (s *SQLiteStore) GetBandwidth(ctx context.Context, start, end time.Time) ([
 	return result, rows.Err()
 }
 
+// GetBandwidthByTrafficTypes retrieves network bandwidth from node-pair aggregates for selected traffic types.
+func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	startUnix := start.UTC().Unix()
+	endUnix := end.UTC().Unix()
+	if startUnix >= endUnix {
+		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
+	}
+	if len(trafficTypes) == 0 {
+		return []BandwidthBucket{}, nil
+	}
+
+	bs := resolveBucketSize(endUnix - startUnix)
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(trafficTypes)), ",")
+	query := fmt.Sprintf(`
+		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
+		FROM node_pairs
+		WHERE bucket >= ? AND bucket <= ? AND traffic_type IN (%s)
+		GROUP BY b
+		ORDER BY b ASC
+	`, bs, bs, placeholders)
+
+	args := make([]any, 0, 2+len(trafficTypes))
+	args = append(args, startUnix, endUnix)
+	for _, trafficType := range trafficTypes {
+		args = append(args, trafficType)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query bandwidth by traffic type: %w", err)
+	}
+	defer rows.Close()
+
+	var result []BandwidthBucket
+	for rows.Next() {
+		var bucket int64
+		var b BandwidthBucket
+		if err := rows.Scan(&bucket, &b.TxBytes, &b.RxBytes); err != nil {
+			return nil, fmt.Errorf("failed to scan bandwidth bucket: %w", err)
+		}
+		b.Time = time.Unix(bucket, 0).UTC()
+		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
 // GetNodeBandwidth retrieves bandwidth for a specific node, bucketed by window size.
 func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, start, end time.Time, nodeID string) ([]BandwidthBucket, error) {
 	s.mu.RLock()
@@ -450,6 +557,12 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 
 // GetTrafficStatsFromNodePairs synthesizes traffic stats from node_pairs (fallback for old data).
 func (s *SQLiteStore) GetTrafficStatsFromNodePairs(ctx context.Context, start, end time.Time) ([]TrafficStats, error) {
+	return s.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, start, end, nil)
+}
+
+// GetTrafficStatsFromNodePairsByTrafficTypes synthesizes traffic stats from node_pairs
+// and limits the result to the requested traffic types when provided.
+func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]TrafficStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -460,18 +573,20 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairs(ctx context.Context, start, e
 	}
 
 	bs := resolveBucketSize(endUnix - startUnix)
+	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	query := fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b, traffic_type,
 		       SUM(tx_bytes + rx_bytes) AS total_bytes,
 		       SUM(flow_count) AS total_flows,
 		       COUNT(DISTINCT src_node_id || '|' || dst_node_id) AS unique_pairs
 		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ?
+		WHERE bucket >= ? AND bucket <= ?%s
 		GROUP BY b, traffic_type
 		ORDER BY b ASC
-	`, bs, bs)
+	`, bs, bs, typeClause)
 
-	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix)
+	args := append([]any{startUnix, endUnix}, typeArgs...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pairs for traffic stats: %w", err)
 	}
@@ -511,10 +626,10 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairs(ctx context.Context, start, e
 	protoQuery := fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b, protocols, SUM(tx_bytes + rx_bytes)
 		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ? AND traffic_type != 'physical'
+		WHERE bucket >= ? AND bucket <= ? AND traffic_type != 'physical'%s
 		GROUP BY b, protocols
-	`, bs, bs)
-	protoRows, err := s.db.QueryContext(ctx, protoQuery, startUnix, endUnix)
+	`, bs, bs, typeClause)
+	protoRows, err := s.db.QueryContext(ctx, protoQuery, args...)
 	if err == nil {
 		for protoRows.Next() {
 			var b int64
@@ -549,6 +664,50 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairs(ctx context.Context, start, e
 			}
 		}
 		protoRows.Close()
+	}
+
+	// Rebuild top ports for the same bucket size and traffic-type filter. The
+	// traffic_stats table has this precomputed, but filtered analytics are
+	// synthesized from node_pairs and need to carry the same shape forward.
+	portQuery := fmt.Sprintf(`
+		WITH port_totals AS (
+			SELECT (bucket / %d) * %d AS b,
+			       CAST(json_extract(p.value, '$.proto') AS INTEGER) AS proto,
+			       CAST(json_extract(p.value, '$.port') AS INTEGER) AS port,
+			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
+			FROM node_pairs, json_each(ports) AS p
+			WHERE bucket >= ? AND bucket <= ?%s
+			  AND ports != '[]'
+			GROUP BY b, proto, port
+		),
+		ranked_ports AS (
+			SELECT b, proto, port, bytes,
+			       ROW_NUMBER() OVER (PARTITION BY b ORDER BY bytes DESC) AS rn
+			FROM port_totals
+		)
+		SELECT b, proto, port, bytes
+		FROM ranked_ports
+		WHERE rn <= 20
+		ORDER BY b ASC, bytes DESC
+	`, bs, bs, typeClause)
+	portRows, err := s.db.QueryContext(ctx, portQuery, args...)
+	if err == nil {
+		topPortsByBucket := make(map[int64][]PortStat)
+		for portRows.Next() {
+			var b int64
+			var port PortStat
+			if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
+				continue
+			}
+			topPortsByBucket[b] = append(topPortsByBucket[b], port)
+		}
+		portRows.Close()
+
+		for b, topPorts := range topPortsByBucket {
+			if encoded, err := json.Marshal(topPorts); err == nil {
+				bucketMap[b].TopPorts = string(encoded)
+			}
+		}
 	}
 
 	results := make([]TrafficStats, 0, len(bucketMap))
@@ -597,6 +756,61 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, start, end time.Time, l
 	return results, rows.Err()
 }
 
+// GetTopTalkersByTrafficTypes returns top talkers limited to selected traffic types.
+func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	startUnix := start.UTC().Unix()
+	endUnix := end.UTC().Unix()
+	if startUnix >= endUnix {
+		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	query := fmt.Sprintf(`
+		WITH node_bytes AS (
+			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket <= ?%s
+			GROUP BY src_node_id
+			UNION ALL
+			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket <= ?%s
+			GROUP BY dst_node_id
+		)
+		SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx, SUM(tx + rx) AS total
+		FROM node_bytes
+		GROUP BY node_id
+		ORDER BY total DESC
+		LIMIT ?
+	`, typeClause, typeClause)
+	args := append([]any{startUnix, endUnix}, typeArgs...)
+	args = append(args, startUnix, endUnix)
+	args = append(args, typeArgs...)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query top talkers by traffic types: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TopTalker
+	for rows.Next() {
+		var t TopTalker
+		if err := rows.Scan(&t.NodeID, &t.TxBytes, &t.RxBytes, &t.TotalBytes); err != nil {
+			return nil, fmt.Errorf("failed to scan filtered top talker: %w", err)
+		}
+		results = append(results, t)
+	}
+	return results, rows.Err()
+}
+
 // GetTopPairs returns node pairs ranked by total traffic volume.
 func (s *SQLiteStore) GetTopPairs(ctx context.Context, start, end time.Time, limit int) ([]TopPair, error) {
 	s.mu.RLock()
@@ -635,6 +849,63 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, start, end time.Time, lim
 		results = append(results, p)
 	}
 	return results, rows.Err()
+}
+
+// GetTopPairsByTrafficTypes returns node pairs limited to selected traffic types.
+func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	startUnix := start.UTC().Unix()
+	endUnix := end.UTC().Unix()
+	if startUnix >= endUnix {
+		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	query := fmt.Sprintf(`
+		SELECT src_node_id, dst_node_id,
+		       SUM(tx_bytes), SUM(rx_bytes),
+		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
+		FROM node_pairs
+		WHERE bucket >= ? AND bucket <= ?%s
+		GROUP BY src_node_id, dst_node_id
+		ORDER BY total DESC
+		LIMIT ?
+	`, typeClause)
+	args := append([]any{startUnix, endUnix}, typeArgs...)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query top pairs by traffic types: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TopPair
+	for rows.Next() {
+		var p TopPair
+		if err := rows.Scan(&p.SrcNodeID, &p.DstNodeID, &p.TxBytes, &p.RxBytes, &p.TotalBytes, &p.FlowCount); err != nil {
+			return nil, fmt.Errorf("failed to scan filtered top pair: %w", err)
+		}
+		results = append(results, p)
+	}
+	return results, rows.Err()
+}
+
+func trafficTypeWhereClause(trafficTypes []string) (string, []any) {
+	if len(trafficTypes) == 0 {
+		return "", nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(trafficTypes)), ",")
+	args := make([]any, 0, len(trafficTypes))
+	for _, trafficType := range trafficTypes {
+		args = append(args, trafficType)
+	}
+	return fmt.Sprintf(" AND traffic_type IN (%s)", placeholders), args
 }
 
 // GetNodeStats returns detailed traffic statistics for a single node.

@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { dataSourceStore } from '$lib/stores/data-source-store';
-	import { uiStore, filteredNodes, filterStore, timeRangeStore, TIME_RANGES, lastUpdated } from '$lib/stores';
-	import { tailscaleService, type BandwidthBucket } from '$lib/services';
+	import { queryTimeWindow } from '$lib/stores/data-source-store';
+	import { uiStore, filteredNodes, filterStore } from '$lib/stores';
+	import { tailscaleService } from '$lib/services';
 	import { formatBytes, formatBytesRate } from '$lib/utils';
 
 	// Chart dimensions
@@ -19,8 +18,9 @@
 	let rawTotals = $state<{ tx: number; rx: number }>({ tx: 0, rx: 0 });
 	let bucketSeconds = $state(60); // Duration of each bucket, from API metadata
 	let isLoading = $state(false);
-	let usingStoredFallback = $state(false); // True when live mode fell back to stored data
+	let emptyReason = $state('No bandwidth data available');
 	let bandwidthController: AbortController | null = null;
+	let lastBandwidthKey = '';
 
 	// Get selected node and its device ID for bandwidth queries
 	const selectedNode = $derived.by(() => {
@@ -49,6 +49,10 @@
 	const hasActiveTrafficFilter = $derived(
 		$filterStore.trafficTypes.length > 0 && $filterStore.trafficTypes.length < ALL_TRAFFIC_TYPES.length
 	);
+	const chartTrafficTypes = $derived.by(() => {
+		if (selectedDeviceId) return undefined;
+		return $filterStore.trafficTypes;
+	});
 
 	$effect(() => {
 		if (container) {
@@ -60,82 +64,48 @@
 		}
 	});
 
-	// Get current time range for live mode - use store values when available
-	const liveTimeRange = $derived.by(() => {
-		// Re-evaluate when network data refreshes so new Date() is fresh
-		void $lastUpdated;
-		// First check if store has values (set by other components)
-		const storeStart = $dataSourceStore.selectedStart;
-		const storeEnd = $dataSourceStore.selectedEnd;
-		if (storeStart && storeEnd) {
-			return { start: storeStart, end: storeEnd };
-		}
-		// Fall back to calculating from time range preset
-		const selected = $timeRangeStore.selected;
-		if (selected === 'custom' && $timeRangeStore.customStart && $timeRangeStore.customEnd) {
-			return { start: $timeRangeStore.customStart, end: $timeRangeStore.customEnd };
-		}
-		const preset = TIME_RANGES.find((r) => r.value === selected);
-		const minutes = preset?.minutes || 5;
-		const end = new Date();
-		const start = new Date(end.getTime() - minutes * 60 * 1000);
-		return { start, end };
-	});
+	const queryRange = $derived($queryTimeWindow);
 
-	// Ensure data range is loaded when the chart mounts
-	onMount(() => {
-		if (!$dataSourceStore.dataRange) {
-			dataSourceStore.fetchDataRange();
-		}
-	});
-
-	// Fetch bandwidth data when mode, time range, or selected node changes
+	// Fetch bandwidth data when the selected window, node, or traffic filters change.
 	$effect(() => {
-		const mode = $dataSourceStore.mode;
-		const dataRange = $dataSourceStore.dataRange;
+		const range = queryRange;
 		const deviceId = selectedDeviceId;
-
-		if (mode === 'historical') {
-			// Historical mode: fetch full stored range (selection highlight shows subset)
-			const hasValidRange = dataRange?.earliest && dataRange?.latest
-				&& dataRange.count > 0
-				&& new Date(dataRange.earliest).getFullYear() > 1970;
-			if (hasValidRange) {
-				fetchBandwidth(new Date(dataRange.earliest), new Date(dataRange.latest), deviceId);
-			}
-		} else {
-			// Live mode: fetch current time window, fall back to stored range if empty
-			const { start, end } = liveTimeRange;
-			fetchBandwidthWithFallback(start, end, deviceId, dataRange);
+		if (!range || !isValidRange(range.start, range.end)) {
+			clearBandwidth('Select a valid time range');
+			return;
 		}
+		const key = [
+			range.start.toISOString(),
+			range.end.toISOString(),
+			deviceId || 'network',
+			chartTrafficTypes?.join(',') || 'all'
+		].join('|');
+		if (key === lastBandwidthKey) return;
+		lastBandwidthKey = key;
+		fetchBandwidth(range.start, range.end, deviceId, chartTrafficTypes);
 	});
 
-	async function fetchBandwidthWithFallback(
-		start: Date, end: Date,
-		nodeId: string | null,
-		dataRange: { earliest: string; latest: string; count: number } | null
-	) {
-		usingStoredFallback = false;
-		const data = await fetchBandwidth(start, end, nodeId);
-		if (data === null) return; // aborted or errored — newer request in flight
-		if (data.length > 0) return;
-
-		// Live mode returned empty — fall back to stored data range
-		let range = dataRange;
-		if (!range || range.count === 0) {
-			range = await dataSourceStore.fetchDataRange();
-		}
-		if (range && range.count > 0) {
-			const rangeStart = new Date(range.earliest);
-			const rangeEnd = new Date(range.latest);
-			if (rangeStart.getFullYear() > 1970 && rangeEnd > rangeStart) {
-				await fetchBandwidth(rangeStart, rangeEnd, nodeId);
-				usingStoredFallback = true;
-			}
-		}
+	function isValidRange(start: Date, end: Date): boolean {
+		return start instanceof Date
+			&& end instanceof Date
+			&& Number.isFinite(start.getTime())
+			&& Number.isFinite(end.getTime())
+			&& start.getFullYear() > 1970
+			&& end > start;
 	}
 
-	async function fetchBandwidth(start: Date, end: Date, nodeId: string | null): Promise<typeof chartData | null> {
+	function clearBandwidth(reason: string) {
+		if (bandwidthController) {
+			bandwidthController.abort();
+			bandwidthController = null;
+		}
+		chartData = [];
+		rawTotals = { tx: 0, rx: 0 };
+		emptyReason = reason;
+		isLoading = false;
+	}
+
+	async function fetchBandwidth(start: Date, end: Date, nodeId: string | null, trafficTypes?: string[]): Promise<typeof chartData | null> {
 		// Cancel previous in-flight request
 		if (bandwidthController) {
 			bandwidthController.abort();
@@ -145,7 +115,7 @@
 
 		isLoading = true;
 		try {
-			const response = await tailscaleService.getBandwidth(start, end, nodeId || undefined, signal);
+			const response = await tailscaleService.getBandwidth(start, end, nodeId || undefined, signal, trafficTypes);
 			if (signal.aborted) return null;
 			const bs = Math.max(response.metadata?.bucketSeconds || 60, 1);
 			bucketSeconds = bs;
@@ -163,11 +133,14 @@
 					rxBytes: b.rxBytes / bs
 				}))
 				.sort((a, b) => a.time.getTime() - b.time.getTime());
+			emptyReason = 'No bandwidth data in the selected range';
 			return chartData;
 		} catch (err) {
 			if (signal.aborted) return null;
 			console.error('Failed to fetch bandwidth:', err);
 			chartData = [];
+			rawTotals = { tx: 0, rx: 0 };
+			emptyReason = 'Failed to load bandwidth data';
 			return null;
 		} finally {
 			if (!signal.aborted) {
@@ -243,22 +216,10 @@
 		return `M${scaleX(first.time.getTime())},${baseline}L${points.join('L')}L${scaleX(last.time.getTime())},${baseline}Z`;
 	});
 
-	// Selected range indicator (for both live and historical modes)
+	// Selected window indicator
 	const selectedRangeX = $derived.by(() => {
-		// No selection highlight when showing stored fallback data
-		if (usingStoredFallback) return null;
-
-		const mode = $dataSourceStore.mode;
-		let rangeStart: Date | null = null;
-		let rangeEnd: Date | null = null;
-
-		if (mode === 'live') {
-			rangeStart = liveTimeRange.start;
-			rangeEnd = liveTimeRange.end;
-		} else {
-			rangeStart = $dataSourceStore.selectedStart;
-			rangeEnd = $dataSourceStore.selectedEnd;
-		}
+		const rangeStart = queryRange?.start ?? null;
+		const rangeEnd = queryRange?.end ?? null;
 
 		if (!rangeStart || !rangeEnd) return null;
 		return {
@@ -287,20 +248,8 @@
 
 	// Calculate totals for selected range (raw bytes, un-normalized)
 	const totals = $derived.by(() => {
-		// When using stored fallback, the live time range doesn't overlap — show full totals
-		if (usingStoredFallback) return fullTotals;
-
-		const mode = $dataSourceStore.mode;
-		let rangeStart: Date | null = null;
-		let rangeEnd: Date | null = null;
-
-		if (mode === 'live') {
-			rangeStart = liveTimeRange.start;
-			rangeEnd = liveTimeRange.end;
-		} else {
-			rangeStart = $dataSourceStore.selectedStart;
-			rangeEnd = $dataSourceStore.selectedEnd;
-		}
+		const rangeStart = queryRange?.start ?? null;
+		const rangeEnd = queryRange?.end ?? null;
 
 		// Sum data within selected range (convert back from rate to raw bytes)
 		if (rangeStart && rangeEnd) {
@@ -317,7 +266,7 @@
 	});
 
 	// Check if we're showing a subset of data
-	const isShowingSubset = $derived(!usingStoredFallback && totals.total !== fullTotals.total);
+	const isShowingSubset = $derived(totals.total !== fullTotals.total);
 
 	// Generate time axis ticks
 	const timeAxisTicks = $derived.by(() => {
@@ -396,15 +345,7 @@
 				{:else}
 					Network Throughput
 				{/if}
-				{#if usingStoredFallback}
-					<span class="text-amber-500/80" title="Live data unavailable, showing most recent stored data">
-						(stored data)
-					</span>
-				{:else if $dataSourceStore.mode === 'live'}
-					<span class="text-primary/70">
-						({$timeRangeStore.selected})
-					</span>
-				{:else if isShowingSubset}
+				{#if isShowingSubset}
 					<span class="text-primary/70">
 						(selected range)
 					</span>
@@ -440,8 +381,8 @@
 		</div>
 		<div class="flex items-center gap-2">
 			{#if hasActiveTrafficFilter}
-				<span class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-500" title="Bandwidth chart shows all traffic types regardless of graph filters">
-					all types
+				<span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary" title={selectedNodeName ? 'Per-node bandwidth is not split by traffic type' : 'Network throughput follows the selected traffic types'}>
+					{selectedNodeName ? 'node all types' : $filterStore.trafficTypes.join(', ')}
 				</span>
 			{/if}
 			{#if chartData.length > 0}
@@ -600,7 +541,7 @@
 			{#if selectedNode?.isVIPService}
 				VIP service — per-service bandwidth tracking not yet available
 			{:else}
-				No bandwidth data available
+				{emptyReason}
 			{/if}
 		</div>
 	{/if}

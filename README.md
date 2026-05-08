@@ -152,13 +152,22 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TSFLOW_DB_PATH` | SQLite database path | `./data/tsflow.db` |
-| `TSFLOW_POLL_INTERVAL` | How often to poll Tailscale API for new logs | `5m` |
+| `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
-| `TSFLOW_RETENTION` | How long to keep flow data | `720h` (30 days) |
+| `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
+| `TSFLOW_FLOW_BACKEND` | Flow backend: `api` or `s3` | `api` |
+| `TSFLOW_S3_BUCKET` | S3/Garage bucket containing exported flow logs | `tailscale-logs` |
+| `TSFLOW_S3_PREFIX` | Object prefix for network flow objects | `network/` |
+| `TSFLOW_S3_ENDPOINT` | S3-compatible endpoint URL | - |
+| `TSFLOW_S3_REGION` | S3 region | `garage` |
+| `TSFLOW_S3_ACCESS_KEY_ID` | S3 access key ID | - |
+| `TSFLOW_S3_SECRET_ACCESS_KEY` | S3 secret access key | - |
+| `TSFLOW_S3_LOOKBACK` | Object-store listing overlap for late objects | `15m` |
+| `TSFLOW_S3_MAX_OBJECTS_PER_POLL` | Max objects imported per poll cycle | `500` |
 
 ### Data Storage
 
-TSFlow stores per-minute flow aggregates in SQLite with a rolling retention window (default 30 days). Charts over wider windows use query-time bucketing — no data loss from pre-aggregation.
+TSFlow stores per-minute flow aggregates in SQLite with a rolling retention window (default 30 days). Charts over wider windows use query-time bucketing — no data loss from pre-aggregation. When `TSFLOW_FLOW_BACKEND=s3`, TSFlow imports immutable `network/YYYY/MM/DD/*.ndjson`, `*.ndjson.zst`, `*.ndjson.zstd`, `*.ndjson.gz`, or `*.ndjson.gzip` objects from S3-compatible storage and tracks ingested object keys so repeated polling does not double count traffic.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`
 

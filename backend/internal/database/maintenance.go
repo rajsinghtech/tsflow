@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -44,6 +45,112 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, lastPollEnd time.Time
 	return nil
 }
 
+func (s *SQLiteStore) IsObjectIngested(ctx context.Context, key string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var exists int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT 1 FROM ingested_objects WHERE object_key = ? LIMIT 1",
+		key,
+	).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check ingested object: %w", err)
+	}
+	return true, nil
+}
+
+func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, nodes []NodeMetadata) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO node_metadata (node_id, name, hostname, owner, ips, tags, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(node_id) DO UPDATE SET
+			name = CASE WHEN excluded.name != '' THEN excluded.name ELSE node_metadata.name END,
+			hostname = CASE WHEN excluded.hostname != '' THEN excluded.hostname ELSE node_metadata.hostname END,
+			owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE node_metadata.owner END,
+			ips = CASE WHEN excluded.ips != '[]' THEN excluded.ips ELSE node_metadata.ips END,
+			tags = CASE WHEN excluded.tags != '[]' THEN excluded.tags ELSE node_metadata.tags END,
+			updated_at = CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare node metadata upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, node := range nodes {
+		if node.NodeID == "" {
+			continue
+		}
+		ips, err := json.Marshal(node.IPs)
+		if err != nil {
+			return fmt.Errorf("failed to marshal node metadata IPs: %w", err)
+		}
+		tags, err := json.Marshal(node.Tags)
+		if err != nil {
+			return fmt.Errorf("failed to marshal node metadata tags: %w", err)
+		}
+		if _, err := stmt.ExecContext(ctx, node.NodeID, node.Name, node.Hostname, node.Owner, string(ips), string(tags)); err != nil {
+			return fmt.Errorf("failed to upsert node metadata: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := upsertNodeMetadataTx(ctx, tx, nodes); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT node_id, name, hostname, owner, ips, tags, updated_at
+		FROM node_metadata
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var result []NodeMetadata
+	for rows.Next() {
+		var node NodeMetadata
+		var ipsJSON, tagsJSON string
+		var updated sql.NullString
+		if err := rows.Scan(&node.NodeID, &node.Name, &node.Hostname, &node.Owner, &ipsJSON, &tagsJSON, &updated); err != nil {
+			return nil, fmt.Errorf("failed to scan node metadata: %w", err)
+		}
+		_ = json.Unmarshal([]byte(ipsJSON), &node.IPs)
+		_ = json.Unmarshal([]byte(tagsJSON), &node.Tags)
+		if updated.Valid {
+			node.Updated = parseTime(updated.String)
+		}
+		result = append(result, node)
+	}
+	return result, rows.Err()
+}
+
 // GetDataRange returns the time range of data stored in node_pairs.
 func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
 	s.mu.RLock()
@@ -69,6 +176,10 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
 
 // Cleanup deletes rows older than retention from all four data tables.
 func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -86,6 +197,12 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int
 			total += n
 		}
 	}
+	if _, err := s.db.ExecContext(ctx,
+		"DELETE FROM ingested_objects WHERE ingested_at < datetime('now', '-' || ? || ' seconds')",
+		int64(retention.Seconds()),
+	); err != nil {
+		log.Printf("Warning: failed to cleanup ingested_objects: %v", err)
+	}
 	return total, nil
 }
 
@@ -95,7 +212,7 @@ func (s *SQLiteStore) GetStats(ctx context.Context) (map[string]any, error) {
 	defer s.mu.RUnlock()
 
 	tableCounts := make(map[string]int64)
-	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"} {
+	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats", "ingested_objects", "node_metadata"} {
 		var count int64
 		_ = s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
 		tableCounts[table] = count

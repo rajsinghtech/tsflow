@@ -9,12 +9,18 @@ import (
 )
 
 func (h *Handlers) GetDevices(c *gin.Context) {
+	if h.poller != nil {
+		cachedDevices := h.poller.GetDeviceCache().Devices()
+		if len(cachedDevices) > 0 {
+			c.JSON(http.StatusOK, gin.H{"devices": cachedDevices})
+			return
+		}
+	}
+
 	devices, err := h.tailscaleService.GetDevices()
 	if err != nil {
 		log.Printf("ERROR GetDevices: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to fetch devices",
-		})
+		c.JSON(http.StatusOK, gin.H{"devices": []services.Device{}})
 		return
 	}
 

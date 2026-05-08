@@ -258,12 +258,6 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		source = "database"
 	}
 
-	// Cap results to prevent unbounded responses
-	truncated := len(aggregates) > MaxAggregates
-	if truncated {
-		aggregates = aggregates[:MaxAggregates]
-	}
-
 	// Optional traffic type filter (comma-separated, e.g. "virtual,subnet")
 	trafficFilter := make(map[string]bool)
 	if tf := c.Query("trafficTypes"); tf != "" {
@@ -316,14 +310,9 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		}
 	}
 
-	// Only include flows where both endpoints are known devices
 	flows := make([]gin.H, 0, len(merged))
 	for _, flow := range merged {
-		hasSrc := (*flow)["srcDisplayName"] != nil
-		hasDst := (*flow)["dstDisplayName"] != nil
-		if hasSrc && hasDst {
-			flows = append(flows, *flow)
-		}
+		flows = append(flows, *flow)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -334,7 +323,7 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 			"end":        endTime,
 			"bucketSize": bucketSize,
 			"source":     source,
-			"truncated":  truncated,
+			"truncated":  false,
 		},
 	})
 }
