@@ -1,6 +1,6 @@
 module github.com/rajsinghtech/tsflow/backend
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
@@ -13,7 +13,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.18.6
 	modernc.org/sqlite v1.50.1
-	tailscale.com v1.98.1
+	tailscale.com v1.98.2
 	tailscale.com/client/tailscale/v2 v2.9.0
 )
 
