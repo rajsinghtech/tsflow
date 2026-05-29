@@ -13,7 +13,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.18.6
 	modernc.org/sqlite v1.51.0
-	tailscale.com v1.98.3
+	tailscale.com v1.98.4
 	tailscale.com/client/tailscale/v2 v2.9.0
 )
 
