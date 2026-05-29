@@ -14,7 +14,7 @@ require (
 	github.com/klauspost/compress v1.18.6
 	modernc.org/sqlite v1.51.0
 	tailscale.com v1.98.4
-	tailscale.com/client/tailscale/v2 v2.9.0
+	tailscale.com/client/tailscale/v2 v2.10.0
 )
 
 require (
