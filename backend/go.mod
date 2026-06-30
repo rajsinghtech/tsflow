@@ -11,7 +11,7 @@ require (
 	github.com/gin-contrib/gzip v1.2.6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	modernc.org/sqlite v1.53.0
 	tailscale.com v1.100.0
 	tailscale.com/client/tailscale/v2 v2.10.1
