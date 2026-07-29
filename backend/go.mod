@@ -12,7 +12,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.19.1
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 	tailscale.com v1.102.0
 	tailscale.com/client/tailscale/v2 v2.10.1
 )
