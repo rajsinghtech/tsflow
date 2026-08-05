@@ -13,7 +13,7 @@
 		{ key: 'showGrantEdges', label: 'Grants', color: '#0d9488', countKey: 'grant' },
 		{ key: 'showAclEdges', label: 'ACLs', color: '#0284c7', countKey: 'acl' },
 		{ key: 'showSshEdges', label: 'SSH', color: '#b45309', countKey: 'ssh' },
-		{ key: 'showRelationEdges', label: 'Relations', color: '#9ca3af', countKey: 'relation' }
+		{ key: 'showRelationEdges', label: 'Relations', color: 'var(--color-edge-relation)', countKey: 'relation' }
 	];
 
 	const nodeTypes: { key: keyof NodeVisibilityOptions; label: string; type: string }[] = [

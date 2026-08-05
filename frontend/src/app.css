@@ -34,6 +34,9 @@
 	--color-traffic-virtual: #3b82f6;
 	--color-traffic-subnet: #10b981;
 	--color-traffic-physical: #f59e0b;
+
+	/* Policy graph edge colors */
+	--color-edge-relation: #9ca3af;
 }
 
 :root.light {
@@ -67,6 +70,9 @@
 	--color-traffic-virtual: #2563eb;
 	--color-traffic-subnet: #059669;
 	--color-traffic-physical: #d97706;
+
+	/* Policy graph edge colors - darker for light mode contrast */
+	--color-edge-relation: #52525b;
 }
 
 html {

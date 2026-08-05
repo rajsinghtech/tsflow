@@ -68,7 +68,7 @@
 					<div class="flex items-center gap-2 rounded bg-secondary/50 px-2 py-1 text-xs">
 						<span
 							class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-							style="color: {edgeTypeColor[match.edgeType] ?? '#9ca3af'}; background: color-mix(in srgb, {edgeTypeColor[match.edgeType] ?? '#9ca3af'} 15%, transparent)"
+							style="color: {edgeTypeColor[match.edgeType] ?? 'var(--color-edge-relation)'}; background: color-mix(in srgb, {edgeTypeColor[match.edgeType] ?? 'var(--color-edge-relation)'} 15%, transparent)"
 						>
 							{match.edgeType}
 						</span>

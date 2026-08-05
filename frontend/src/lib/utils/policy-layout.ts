@@ -30,10 +30,10 @@ export const EDGE_STYLES: Record<string, { color: string; strokeDasharray?: stri
 	grant: { color: '#0d9488', width: 2, opacity: 1 },
 	acl: { color: '#0284c7', strokeDasharray: '6', width: 2, opacity: 1 },
 	ssh: { color: '#b45309', strokeDasharray: '2 4', width: 2, opacity: 1 },
-	'member-of': { color: '#9ca3af', width: 1, opacity: 0.4 },
-	'owns-tag': { color: '#9ca3af', width: 1, opacity: 0.4 },
-	contains: { color: '#9ca3af', width: 1, opacity: 0.4 },
-	'resolves-to': { color: '#9ca3af', width: 1, opacity: 0.4 }
+	'member-of': { color: 'var(--color-edge-relation)', width: 1, opacity: 0.6 },
+	'owns-tag': { color: 'var(--color-edge-relation)', width: 1, opacity: 0.6 },
+	contains: { color: 'var(--color-edge-relation)', width: 1, opacity: 0.6 },
+	'resolves-to': { color: 'var(--color-edge-relation)', width: 1, opacity: 0.6 }
 };
 
 const FAST_RENDER_NODE_THRESHOLD = 1500;
