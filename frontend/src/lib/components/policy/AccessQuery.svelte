@@ -149,7 +149,7 @@
 						<div class="flex items-start gap-1">
 							<span
 								class="mt-0.5 inline-block shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold uppercase"
-								style="color: {edgeColor[gm.edgeType] ?? '#9ca3af'}; background: color-mix(in srgb, {edgeColor[gm.edgeType] ?? '#9ca3af'} 15%, transparent)"
+								style="color: {edgeColor[gm.edgeType] ?? 'var(--color-edge-relation)'}; background: color-mix(in srgb, {edgeColor[gm.edgeType] ?? 'var(--color-edge-relation)'} 15%, transparent)"
 							>{gm.edgeType}</span>
 							<span class="text-muted-foreground">{gm.fullLabel}</span>
 						</div>
