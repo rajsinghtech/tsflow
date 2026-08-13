@@ -231,7 +231,7 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 	}
 
 	// Fallback to old implementation
-	endpoint := fmt.Sprintf("/tailnet/%s/devices", ts.tailnet)
+	endpoint := fmt.Sprintf("/tailnet/%s/devices", url.PathEscape(ts.tailnet))
 
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
@@ -259,7 +259,7 @@ func (ts *TailscaleService) GetUsersWithContext(parent context.Context) ([]byte,
 	if parent == nil {
 		parent = context.Background()
 	}
-	endpoint := fmt.Sprintf("/tailnet/%s/users", ts.tailnet)
+	endpoint := fmt.Sprintf("/tailnet/%s/users", url.PathEscape(ts.tailnet))
 
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
@@ -276,7 +276,7 @@ func (ts *TailscaleService) GetPolicyWithContext(parent context.Context) ([]byte
 	if parent == nil {
 		parent = context.Background()
 	}
-	endpoint := fmt.Sprintf("/tailnet/%s/acl", ts.tailnet)
+	endpoint := fmt.Sprintf("/tailnet/%s/acl", url.PathEscape(ts.tailnet))
 
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
@@ -341,7 +341,7 @@ func (ts *TailscaleService) getNetworkLogsWithContext(parent context.Context, st
 
 	// Fallback to old implementation
 	endpoint := fmt.Sprintf("/tailnet/%s/logging/network?start=%s&end=%s",
-		ts.tailnet, url.QueryEscape(start), url.QueryEscape(end))
+		url.PathEscape(ts.tailnet), url.QueryEscape(start), url.QueryEscape(end))
 
 	body, err := ts.makeRequest(ctx, endpoint)
 	if err != nil {
@@ -651,7 +651,7 @@ func (ts *TailscaleService) GetDNSNameserversWithContext(parent context.Context)
 	defer cancel()
 
 	// Get nameservers
-	nameserversBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/nameservers", ts.tailnet))
+	nameserversBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/nameservers", url.PathEscape(ts.tailnet)))
 	if err != nil {
 		return nil, err
 	}
@@ -662,7 +662,7 @@ func (ts *TailscaleService) GetDNSNameserversWithContext(parent context.Context)
 	}
 
 	// Get preferences
-	prefsBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/preferences", ts.tailnet))
+	prefsBody, err := ts.makeRequest(ctx, fmt.Sprintf("/tailnet/%s/dns/preferences", url.PathEscape(ts.tailnet)))
 	if err == nil {
 		var prefs map[string]any
 		if json.Unmarshal(prefsBody, &prefs) == nil {

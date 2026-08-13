@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -68,6 +67,75 @@ func (s *SQLiteStore) IsObjectIngested(ctx context.Context, key string) (bool, e
 	return true, nil
 }
 
+// GetObjectsNeedingMetadata returns ingested objects whose embedded node
+// metadata has not been hydrated, or whose previously recorded nodes are
+// missing from node_metadata. The latter makes hydration repair partial
+// metadata-table loss without rescanning the entire object store.
+func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, limit int) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT o.object_key
+		FROM ingested_objects o
+		WHERE o.metadata_hydrated = 0
+		   OR EXISTS (
+				SELECT 1
+				FROM object_metadata_nodes m
+				WHERE m.object_key = o.object_key
+				  AND NOT EXISTS (
+					SELECT 1 FROM node_metadata n WHERE n.node_id = m.node_id
+				  )
+			)
+		ORDER BY o.ingested_at ASC, o.object_key ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query objects needing metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("failed to scan object needing metadata: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read objects needing metadata: %w", err)
+	}
+	return keys, nil
+}
+
+// MarkObjectMetadataHydrated records the node IDs found while rereading an
+// already-ingested object. It is transactional so a failed metadata upsert
+// never makes the object look complete on the next poll.
+func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, key string, nodeIDs []string) error {
+	if key == "" {
+		return fmt.Errorf("object key is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin metadata hydration transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := recordObjectMetadataTx(ctx, tx, key, nodeIDs); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit metadata hydration: %w", err)
+	}
+	return nil
+}
+
 func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, nodes []NodeMetadata) error {
 	if len(nodes) == 0 {
 		return nil
@@ -103,6 +171,46 @@ func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, nodes []NodeMetadata)
 		if _, err := stmt.ExecContext(ctx, node.NodeID, node.Name, node.Hostname, node.Owner, string(ips), string(tags)); err != nil {
 			return fmt.Errorf("failed to upsert node metadata: %w", err)
 		}
+	}
+	return nil
+}
+
+func recordObjectMetadataTx(ctx context.Context, tx *sql.Tx, key string, nodeIDs []string) error {
+	if key == "" {
+		return fmt.Errorf("object key is required")
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR IGNORE INTO object_metadata_nodes (object_key, node_id)
+		VALUES (?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare object metadata index: %w", err)
+	}
+	defer stmt.Close()
+
+	seen := make(map[string]struct{}, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		if nodeID == "" {
+			continue
+		}
+		if _, ok := seen[nodeID]; ok {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		if _, err := stmt.ExecContext(ctx, key, nodeID); err != nil {
+			return fmt.Errorf("failed to index metadata for object %q: %w", key, err)
+		}
+	}
+	result, err := tx.ExecContext(ctx,
+		`UPDATE ingested_objects SET metadata_hydrated = 1 WHERE object_key = ?`, key,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark object metadata hydrated: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("failed to verify object metadata hydration: %w", err)
+	} else if affected != 1 {
+		return fmt.Errorf("object %q is not recorded as ingested", key)
 	}
 	return nil
 }
@@ -146,8 +254,12 @@ func (s *SQLiteStore) GetNodeMetadata(ctx context.Context) ([]NodeMetadata, erro
 		if err := rows.Scan(&node.NodeID, &node.Name, &node.Hostname, &node.Owner, &ipsJSON, &tagsJSON, &updated); err != nil {
 			return nil, fmt.Errorf("failed to scan node metadata: %w", err)
 		}
-		_ = json.Unmarshal([]byte(ipsJSON), &node.IPs)
-		_ = json.Unmarshal([]byte(tagsJSON), &node.Tags)
+		if err := json.Unmarshal([]byte(ipsJSON), &node.IPs); err != nil {
+			return nil, fmt.Errorf("failed to decode IP metadata for node %q: %w", node.NodeID, err)
+		}
+		if err := json.Unmarshal([]byte(tagsJSON), &node.Tags); err != nil {
+			return nil, fmt.Errorf("failed to decode tag metadata for node %q: %w", node.NodeID, err)
+		}
 		if updated.Valid {
 			node.Updated = parseTime(updated.String)
 		}
@@ -191,25 +303,47 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin cleanup transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	cutoff := time.Now().UTC().Unix() - int64(retention.Seconds())
 	var total int64
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"} {
-		result, err := s.db.ExecContext(ctx,
+		result, err := tx.ExecContext(ctx,
 			fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), cutoff,
 		)
 		if err != nil {
-			log.Printf("Warning: failed to cleanup %s: %v", table, err)
-			continue
+			return 0, fmt.Errorf("failed to cleanup %s: %w", table, err)
 		}
-		if n, _ := result.RowsAffected(); n > 0 {
+		n, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to count cleanup rows for %s: %w", table, err)
+		}
+		if n > 0 {
 			total += n
 		}
 	}
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM object_metadata_nodes
+		 WHERE object_key IN (
+			SELECT object_key FROM ingested_objects
+			WHERE ingested_at < datetime('now', '-' || ? || ' seconds')
+		 )`,
+		int64(retention.Seconds()),
+	); err != nil {
+		return 0, fmt.Errorf("failed to cleanup object metadata index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM ingested_objects WHERE ingested_at < datetime('now', '-' || ? || ' seconds')",
 		int64(retention.Seconds()),
 	); err != nil {
-		log.Printf("Warning: failed to cleanup ingested_objects: %v", err)
+		return 0, fmt.Errorf("failed to cleanup ingested_objects: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit cleanup: %w", err)
 	}
 	return total, nil
 }

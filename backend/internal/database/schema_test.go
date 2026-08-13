@@ -292,7 +292,7 @@ func TestCommitObjectIngest_Idempotent(t *testing.T) {
 		t.Fatal("expected object to be marked ingested")
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, pollEnd.Add(-time.Minute), pollEnd.Add(time.Minute), 60)
+	pairs, err := store.GetNodePairAggregates(ctx, pollEnd.Add(-time.Minute), pollEnd.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,6 +315,49 @@ func TestCommitObjectIngest_Idempotent(t *testing.T) {
 	}
 	if len(nodes[0].IPs) != 1 || nodes[0].IPs[0] != "100.64.1.2" {
 		t.Fatalf("unexpected node metadata IPs: %+v", nodes[0].IPs)
+	}
+}
+
+func TestObjectMetadataHydrationStateRepairsMissingNodes(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	result := ObjectIngestResult{
+		Key:          "network/test.ndjson",
+		NodeMetadata: []NodeMetadata{{NodeID: "node-a"}, {NodeID: "node-b"}},
+		PollEnd:      time.Unix(60, 0).UTC(),
+	}
+	if err := store.CommitObjectIngest(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := store.GetObjectsNeedingMetadata(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("newly ingested object needs metadata hydration: %v", keys)
+	}
+	if _, err := store.db.ExecContext(ctx, "DELETE FROM node_metadata WHERE node_id = ?", "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = store.GetObjectsNeedingMetadata(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0] != result.Key {
+		t.Fatalf("objects needing repair = %v, want %q", keys, result.Key)
+	}
+	if err := store.UpsertNodeMetadata(ctx, []NodeMetadata{{NodeID: "node-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkObjectMetadataHydrated(ctx, result.Key, []string{"node-a", "node-b"}); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = store.GetObjectsNeedingMetadata(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("repaired object still needs metadata: %v", keys)
 	}
 }
 

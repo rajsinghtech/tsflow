@@ -49,6 +49,9 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			buckets, err = h.store.GetTrafficStats(ctx, startTime, endTime)
 		}
 		if err != nil {
+			if writeContextError(c, err) {
+				return
+			}
 			log.Printf("ERROR GetStatsOverview: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to fetch traffic stats",
@@ -61,7 +64,14 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		if len(buckets) == 0 && len(trafficTypes) == 0 {
 			buckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
 			if err != nil {
+				if writeContextError(c, err) {
+					return
+				}
 				log.Printf("ERROR GetStatsOverview (fallback): %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Failed to fetch derived traffic stats",
+				})
+				return
 			} else {
 				source = "database (derived)"
 			}
@@ -134,6 +144,9 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		talkers, err = h.store.GetTopTalkers(ctx, startTime, endTime, limit*10)
 	}
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetTopTalkers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch top talkers",
@@ -235,6 +248,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		pairs, err = h.store.GetTopPairs(ctx, startTime, endTime, limit*10)
 	}
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetTopPairs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch top pairs",
@@ -354,6 +370,9 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 
 	stats, err := h.store.GetNodeStats(ctx, nodeID, startTime, endTime)
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetNodeDetailStats: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch node stats",

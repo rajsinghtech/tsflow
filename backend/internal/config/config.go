@@ -2,12 +2,14 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds the application configuration
@@ -42,6 +44,9 @@ type Config struct {
 	FlowObjectStorePathStyle  bool
 	FlowObjectStoreLookback   string
 	FlowObjectStoreMaxObjects int
+	PollInterval              string
+	InitialBackfill           string
+	Retention                 string
 }
 
 // Load loads configuration from environment variables
@@ -75,6 +80,9 @@ func Load() *Config {
 		FlowObjectStorePathStyle:   parseBool(getEnvWithDefault("TSFLOW_S3_PATH_STYLE", "true"), true),
 		FlowObjectStoreLookback:    getEnvWithDefault("TSFLOW_S3_LOOKBACK", "15m"),
 		FlowObjectStoreMaxObjects:  parsePositiveInt(getEnvWithDefault("TSFLOW_S3_MAX_OBJECTS_PER_POLL", "500")),
+		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
+		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
+		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 	}
 }
 
@@ -109,6 +117,21 @@ func (c *Config) Validate() error {
 	if effectiveBackend == "s3" && !hasObjectCredentials {
 		return errors.New("s3 flow backend requires TSFLOW_S3_BUCKET, TSFLOW_S3_ENDPOINT, TSFLOW_S3_ACCESS_KEY_ID, and TSFLOW_S3_SECRET_ACCESS_KEY")
 	}
+	if effectiveBackend == "s3" {
+		parsedEndpoint, err := url.Parse(c.FlowObjectStoreEndpoint)
+		if err != nil || parsedEndpoint.Scheme == "" || parsedEndpoint.Host == "" {
+			return errors.New("TSFLOW_S3_ENDPOINT must be a valid absolute URL")
+		}
+		if parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https" {
+			return errors.New("TSFLOW_S3_ENDPOINT must use http or https")
+		}
+		if err := validateDuration("TSFLOW_S3_LOOKBACK", c.FlowObjectStoreLookback, false); err != nil {
+			return err
+		}
+		if c.FlowObjectStoreMaxObjects <= 0 {
+			return errors.New("TSFLOW_S3_MAX_OBJECTS_PER_POLL must be a positive integer")
+		}
+	}
 
 	if c.TailscaleAPIURL == "" {
 		return errors.New("TAILSCALE_API_URL must not be empty")
@@ -119,6 +142,17 @@ func (c *Config) Validate() error {
 	}
 	if parsedAPIURL.Scheme != "http" && parsedAPIURL.Scheme != "https" {
 		return errors.New("TAILSCALE_API_URL must use http or https")
+	}
+	if err := validateDuration("TSFLOW_POLL_INTERVAL", c.PollInterval, false); err != nil {
+		return err
+	}
+	if err := validateDuration("TSFLOW_INITIAL_BACKFILL", c.InitialBackfill, false); err != nil {
+		return err
+	}
+	if c.Retention != "" {
+		if err := validateDuration("TSFLOW_RETENTION", c.Retention, true); err != nil {
+			return err
+		}
 	}
 	port, err := strconv.Atoi(c.Port)
 	if err != nil || port < 1 || port > 65535 {
@@ -185,6 +219,17 @@ func parsePositiveInt(s string) int {
 		return 0
 	}
 	return n
+}
+
+func validateDuration(name, value string, allowZero bool) error {
+	d, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || (allowZero && d < 0) || (!allowZero && d <= 0) {
+		if allowZero {
+			return fmt.Errorf("%s must be a duration of zero or greater", name)
+		}
+		return fmt.Errorf("%s must be a positive duration", name)
+	}
+	return nil
 }
 
 // parseScopes parses a comma-separated string of OAuth scopes

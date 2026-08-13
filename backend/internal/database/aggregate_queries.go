@@ -127,10 +127,16 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 		if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
 			return err
 		}
+		if err := recordObjectMetadataTx(ctx, tx, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 
 	if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
+		return err
+	}
+	if err := recordObjectMetadataTx(ctx, tx, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
 		return err
 	}
 	if err := upsertNodePairsTx(ctx, tx, result.NodePairs); err != nil {
@@ -160,6 +166,16 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 	}
 
 	return tx.Commit()
+}
+
+func nodeMetadataIDs(nodes []NodeMetadata) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.NodeID != "" {
+			ids = append(ids, node.NodeID)
+		}
+	}
+	return ids
 }
 
 func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, aggregates []NodePairAggregate) error {
@@ -380,7 +396,7 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, aggregates [
 }
 
 // GetNodePairAggregates retrieves node-pair aggregates for a time range.
-func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time.Time, bucketSize int64) ([]NodePairAggregate, error) {
+func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time.Time) ([]NodePairAggregate, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -857,7 +873,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
-			WHERE np.bucket >= ? AND np.bucket < ? AND np.traffic_type != 'physical'%s
+			WHERE np.bucket >= ? AND np.bucket < ?%s
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
 			       CAST(j.value AS INTEGER) AS proto,
@@ -868,7 +884,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 				         ELSE 0 END AS bytes
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
-			WHERE np.bucket >= ? AND np.bucket < ? AND np.traffic_type != 'physical'%s
+			WHERE np.bucket >= ? AND np.bucket < ?%s
 			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
 			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0

@@ -131,3 +131,24 @@ func TestPollerStopIsSafeWhenCalledConcurrently(t *testing.T) {
 		}
 	}
 }
+
+func TestPollerStartRejectsUnsafeIntervals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*PollerConfig)
+	}{
+		{name: "zero poll interval", edit: func(c *PollerConfig) { c.PollInterval = 0 }},
+		{name: "negative cleanup interval", edit: func(c *PollerConfig) { c.CleanupInterval = -time.Second }},
+		{name: "negative backfill", edit: func(c *PollerConfig) { c.InitialBackfill = -time.Second }},
+		{name: "zero backfill", edit: func(c *PollerConfig) { c.InitialBackfill = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultPollerConfig()
+			tc.edit(&cfg)
+			poller := NewPoller(nil, nil, cfg)
+			if err := poller.Start(context.Background()); err == nil {
+				t.Fatal("Start() unexpectedly accepted unsafe configuration")
+			}
+		})
+	}
+}

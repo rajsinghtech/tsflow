@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,6 +13,22 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
+
+// writeContextError converts request cancellation and query deadlines into
+// transport-level statuses consistently across handlers. A canceled request
+// must not be reported as a successful empty response.
+func writeContextError(c *gin.Context, err error) bool {
+	requestErr := c.Request.Context().Err()
+	if errors.Is(err, context.Canceled) || errors.Is(requestErr, context.Canceled) {
+		c.Status(499)
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(requestErr, context.DeadlineExceeded) {
+		c.Status(http.StatusGatewayTimeout)
+		return true
+	}
+	return false
+}
 
 const (
 	// ChunkThreshold is the duration above which log queries are chunked

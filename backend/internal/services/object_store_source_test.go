@@ -51,6 +51,17 @@ func TestObjectTimeRejectsUnknownSuffix(t *testing.T) {
 	}
 }
 
+func TestNewObjectStoreSourceRejectsInvalidEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"object-store.test", "ftp://object-store.test"} {
+		if _, err := NewObjectStoreSource(context.Background(), ObjectStoreConfig{
+			Bucket:   "bucket",
+			Endpoint: endpoint,
+		}); err == nil {
+			t.Fatalf("endpoint %q was accepted", endpoint)
+		}
+	}
+}
+
 type testObject struct {
 	key  string
 	body []byte
@@ -228,7 +239,7 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 		t.Fatalf("expected cap to defer %s", objects[0].key)
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, start, end, 60)
+	pairs, err := store.GetNodePairAggregates(ctx, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +265,7 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 	if !seen {
 		t.Fatalf("expected deferred object %s to be ingested on repoll", objects[0].key)
 	}
-	pairs, err = store.GetNodePairAggregates(ctx, start, end, 60)
+	pairs, err = store.GetNodePairAggregates(ctx, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +322,7 @@ func TestObjectStoreRepollAndRestartAreIdempotentAndBackfillMetadata(t *testing.
 		t.Fatal(err)
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, start, end, 60)
+	pairs, err := store.GetNodePairAggregates(ctx, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,12 +347,53 @@ func TestObjectStoreRepollAndRestartAreIdempotentAndBackfillMetadata(t *testing.
 	if err := restarted.pollObjectStore(ctx, state.LastPollEnd, end); err != nil {
 		t.Fatal(err)
 	}
-	pairs, err = store.GetNodePairAggregates(ctx, start, end, 60)
+	pairs, err = store.GetNodePairAggregates(ctx, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pairs) != 1 || pairs[0].TxBytes != 25 || pairs[0].FlowCount != 1 {
 		t.Fatalf("second repoll double-counted object: %+v", pairs)
+	}
+}
+
+func TestObjectStoreRepairsPartiallyMissingMetadataOutsideLookback(t *testing.T) {
+	key := "network/2026/05/08/2026-05-08-13-45-00.ndjson"
+	source, server := newTestObjectStore(t, []testObject{
+		testFlowObject(t, key, "node-a", 25, true),
+	}, 10)
+	defer server.Close()
+	poller, db := newObjectStoreTestPoller(t, source, 10)
+	store := db.store
+	ctx := context.Background()
+	start := time.Date(2026, 5, 8, 13, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+
+	if err := poller.pollObjectStore(ctx, start, end); err != nil {
+		t.Fatal(err)
+	}
+	metadataDB, err := sql.Open("sqlite", db.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadataDB.Close()
+	if _, err := metadataDB.ExecContext(ctx, "DELETE FROM node_metadata WHERE node_id = ?", "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metadataDB.ExecContext(ctx, "UPDATE ingested_objects SET metadata_hydrated = 1 WHERE object_key = ?", key); err != nil {
+		t.Fatal(err)
+	}
+
+	// The object is outside the requested range and the source lookback. The
+	// metadata index must still identify it for repair before listing objects.
+	if err := poller.pollObjectStore(ctx, end, end.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.GetNodeMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata) != 2 {
+		t.Fatalf("metadata rows = %+v, want both nodes after repair", metadata)
 	}
 }
 

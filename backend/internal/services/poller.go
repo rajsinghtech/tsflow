@@ -80,6 +80,25 @@ func NewPoller(tsService *TailscaleService, store database.Store, config PollerC
 	}
 }
 
+func (c PollerConfig) validate() error {
+	if c.PollInterval <= 0 {
+		return fmt.Errorf("poll interval must be positive")
+	}
+	if c.InitialBackfill <= 0 {
+		return fmt.Errorf("initial backfill must be positive")
+	}
+	if c.Retention < 0 {
+		return fmt.Errorf("retention must not be negative")
+	}
+	if c.CleanupInterval <= 0 {
+		return fmt.Errorf("cleanup interval must be positive")
+	}
+	if c.DeviceCacheRefresh <= 0 {
+		return fmt.Errorf("device cache refresh interval must be positive")
+	}
+	return nil
+}
+
 func (p *Poller) ConfigureObjectStore(source *ObjectStoreSource) {
 	p.objectStore = source
 	if source != nil {
@@ -91,6 +110,9 @@ func (p *Poller) ConfigureObjectStore(source *ObjectStoreSource) {
 func (p *Poller) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := p.config.validate(); err != nil {
+		return fmt.Errorf("invalid poller configuration: %w", err)
 	}
 
 	p.mu.Lock()
@@ -311,8 +333,9 @@ func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 	if p.store != nil {
 		nodeMetadata, err := p.store.GetNodeMetadata(ctx)
 		if err != nil {
-			log.Printf("Warning: node metadata cache hydration failed: %v", err)
-		} else if len(nodeMetadata) > 0 {
+			return fmt.Errorf("node metadata cache hydration failed: %w", err)
+		}
+		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
 		}
 	}

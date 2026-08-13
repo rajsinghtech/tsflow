@@ -99,21 +99,11 @@ func main() {
 	// Create and start background poller
 	pollerConfig := services.DefaultPollerConfig()
 
-	// Allow configuration via environment variables
-	if interval := os.Getenv("TSFLOW_POLL_INTERVAL"); interval != "" {
-		if d, err := time.ParseDuration(interval); err == nil {
-			pollerConfig.PollInterval = d
-		}
-	}
-	if backfill := os.Getenv("TSFLOW_INITIAL_BACKFILL"); backfill != "" {
-		if d, err := time.ParseDuration(backfill); err == nil {
-			pollerConfig.InitialBackfill = d
-		}
-	}
-	if retention := os.Getenv("TSFLOW_RETENTION"); retention != "" {
-		if d, err := time.ParseDuration(retention); err == nil {
-			pollerConfig.Retention = d
-		}
+	// Configuration values have already been syntax-checked by Config.Validate.
+	pollerConfig.PollInterval, _ = time.ParseDuration(cfg.PollInterval)
+	pollerConfig.InitialBackfill, _ = time.ParseDuration(cfg.InitialBackfill)
+	if cfg.Retention != "" {
+		pollerConfig.Retention, _ = time.ParseDuration(cfg.Retention)
 	}
 	pollerConfig.FlowBackend = cfg.FlowBackend
 	if pollerConfig.FlowBackend == "" {
@@ -122,13 +112,10 @@ func main() {
 			pollerConfig.FlowBackend = "s3"
 		}
 	}
-	if pollerConfig.FlowBackend == "s3" && os.Getenv("TSFLOW_RETENTION") == "" {
+	if pollerConfig.FlowBackend == "s3" && cfg.Retention == "" {
 		pollerConfig.Retention = 0
 	}
-	lookback, err := time.ParseDuration(cfg.FlowObjectStoreLookback)
-	if err != nil {
-		lookback = 15 * time.Minute
-	}
+	lookback, _ := time.ParseDuration(cfg.FlowObjectStoreLookback)
 	pollerConfig.ObjectStore = services.ObjectStoreConfig{
 		Bucket:       cfg.FlowObjectStoreBucket,
 		Prefix:       cfg.FlowObjectStorePrefix,

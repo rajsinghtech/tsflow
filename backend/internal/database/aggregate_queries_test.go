@@ -32,7 +32,7 @@ func TestAggregateQueriesUseHalfOpenRangesAndMergeMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	aggregates, err := store.GetNodePairAggregates(ctx, time.Unix(base, 0), time.Unix(base+120, 0), 60)
+	aggregates, err := store.GetNodePairAggregates(ctx, time.Unix(base, 0), time.Unix(base+120, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestAggregateQueriesUseHalfOpenRangesAndMergeMetadata(t *testing.T) {
 		t.Fatalf("ports = %+v", ports)
 	}
 
-	boundary, err := store.GetNodePairAggregates(ctx, time.Unix(base+120, 0), time.Unix(base+180, 0), 60)
+	boundary, err := store.GetNodePairAggregates(ctx, time.Unix(base+120, 0), time.Unix(base+180, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +167,26 @@ func TestDerivedTrafficStatsFallsBackForMalformedProtocolBytes(t *testing.T) {
 	}
 	if stats[0].TCPBytes != 50 || stats[0].UDPBytes != 50 {
 		t.Fatalf("protocol stats = %+v, want 50 TCP and 50 UDP", stats[0])
+	}
+}
+
+func TestDerivedTrafficStatsIncludesPhysicalProtocolBytes(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 125, Protocols: "[6]", ProtocolBytes: `{"6":125}`},
+		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 50, Protocols: "[17]", ProtocolBytes: `{"17":50}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].TCPBytes != 125 || stats[0].UDPBytes != 50 || stats[0].PhysicalBytes != 125 {
+		t.Fatalf("stats = %+v, want physical TCP bytes included", stats)
 	}
 }
 

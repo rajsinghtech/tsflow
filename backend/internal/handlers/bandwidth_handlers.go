@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"log"
 	"math"
 	"net"
@@ -83,8 +82,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		}
 
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
-				c.Status(499)
+			if writeContextError(c, err) {
 				return
 			}
 			log.Printf("ERROR GetBandwidthAggregated: %v", err)
@@ -126,15 +124,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 			bucketSeconds = 60
 		}
 	} else {
-		// Fallback heuristic for 0-1 data points
-		rangeSeconds := int64(endTime.Sub(startTime).Seconds())
-		if rangeSeconds <= 24*3600 {
-			bucketSeconds = 60
-		} else if rangeSeconds <= 7*24*3600 {
-			bucketSeconds = 3600
-		} else {
-			bucketSeconds = 86400
-		}
+		bucketSeconds = bucketSizeForRange(startTime, endTime)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -231,12 +221,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	for nodeID := range nodeIDs {
 		buckets, err := h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
-				c.Status(499)
-				return
-			}
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
-				c.Status(http.StatusGatewayTimeout)
+			if writeContextError(c, err) {
 				return
 			}
 			log.Printf("ERROR GetBandwidthByIPs for node %q: %v", nodeID, err)
@@ -284,14 +269,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 			bucketSeconds = 60
 		}
 	} else {
-		rangeSeconds := int64(endTime.Sub(startTime).Seconds())
-		if rangeSeconds <= 24*3600 {
-			bucketSeconds = 60
-		} else if rangeSeconds <= 7*24*3600 {
-			bucketSeconds = 3600
-		} else {
-			bucketSeconds = 86400
-		}
+		bucketSeconds = bucketSizeForRange(startTime, endTime)
 	}
 
 	if allBuckets == nil {

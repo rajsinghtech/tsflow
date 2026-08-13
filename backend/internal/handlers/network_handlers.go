@@ -10,6 +10,9 @@ import (
 func (h *Handlers) GetNetworkMap(c *gin.Context) {
 	networkMap, err := h.tailscaleService.GetNetworkMapWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetNetworkMap: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch network map",

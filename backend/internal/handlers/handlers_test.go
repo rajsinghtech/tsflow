@@ -155,3 +155,27 @@ func TestGetServicesAndRecordsPropagatesCancellation(t *testing.T) {
 		t.Fatalf("status = %d, want 499 for canceled request", w.Code)
 	}
 }
+
+func TestWriteContextError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "canceled", err: context.Canceled, want: 499},
+		{name: "deadline", err: context.DeadlineExceeded, want: http.StatusGatewayTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("GET", "/test", nil)
+			if !writeContextError(c, tc.err) {
+				t.Fatal("writeContextError returned false")
+			}
+			c.Writer.WriteHeaderNow()
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}

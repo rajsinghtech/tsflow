@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -49,6 +50,15 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("object-store bucket is required")
 	}
+	if cfg.Endpoint != "" {
+		endpoint, err := url.Parse(cfg.Endpoint)
+		if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+			return nil, fmt.Errorf("object-store endpoint must be a valid absolute URL")
+		}
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return nil, fmt.Errorf("object-store endpoint must use http or https")
+		}
+	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = "network/"
 	}
@@ -86,6 +96,13 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 }
 
 func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time.Time) (int, int, time.Time, error) {
+	if p == nil || p.store == nil {
+		return 0, 0, start, fmt.Errorf("poller store is required")
+	}
+	if err := s.hydrateMissingMetadata(ctx, p); err != nil {
+		return 0, 0, start, err
+	}
+
 	objects, err := s.listObjects(ctx, start.Add(-s.cfg.Lookback), end)
 	if err != nil {
 		return 0, 0, time.Time{}, err
@@ -100,10 +117,6 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	processedObjects := 0
 	processedFlows := 0
 	lastProcessed := start
-	shouldBackfillMetadata := false
-	if existingMetadata, err := p.store.GetNodeMetadata(ctx); err == nil && len(existingMetadata) == 0 {
-		shouldBackfillMetadata = true
-	}
 	// Select un-ingested objects after checking the ingestion guard. This keeps
 	// a timestamp-only cursor progressing even when more than MaxObjects share
 	// the same timestamp and the first page has already been seen.
@@ -114,17 +127,6 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			return processedObjects, processedFlows, lastProcessed, err
 		}
 		if seen {
-			if shouldBackfillMetadata {
-				_, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
-				if err != nil {
-					log.Printf("Warning: failed to backfill node metadata from %s: %v", obj.key, err)
-				} else if len(nodeMetadata) > 0 {
-					p.deviceCache.UpsertNodeMetadata(nodeMetadata)
-					if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
-						log.Printf("Warning: failed to persist node metadata from %s: %v", obj.key, err)
-					}
-				}
-			}
 			if obj.logTime.After(lastProcessed) {
 				lastProcessed = obj.logTime
 			}
@@ -173,6 +175,42 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	}
 
 	return processedObjects, processedFlows, lastProcessed, nil
+}
+
+// hydrateMissingMetadata repairs historical node identities independently of
+// the flow cursor and S3 lookback. This matters after a partial metadata-table
+// loss or when a database created before metadata hydration is upgraded.
+func (s *ObjectStoreSource) hydrateMissingMetadata(ctx context.Context, p *Poller) error {
+	keys, err := p.store.GetObjectsNeedingMetadata(ctx, s.cfg.MaxObjects)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		_, nodeMetadata, err := s.readFlowLogs(ctx, p, key)
+		if err != nil {
+			return fmt.Errorf("failed to hydrate metadata from %s: %w", key, err)
+		}
+		if len(nodeMetadata) > 0 {
+			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
+			if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
+				return fmt.Errorf("failed to persist metadata from %s: %w", key, err)
+			}
+		}
+		if err := p.store.MarkObjectMetadataHydrated(ctx, key, objectMetadataIDs(nodeMetadata)); err != nil {
+			return fmt.Errorf("failed to mark metadata hydrated for %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func objectMetadataIDs(nodes []database.NodeMetadata) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.NodeID != "" {
+			ids = append(ids, node.NodeID)
+		}
+	}
+	return ids
 }
 
 func minInt(left, right int) int {

@@ -9,6 +9,9 @@ import (
 func (h *Handlers) GetUsers(c *gin.Context) {
 	users, err := h.tailscaleService.GetUsersWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -18,6 +21,9 @@ func (h *Handlers) GetUsers(c *gin.Context) {
 func (h *Handlers) GetPolicy(c *gin.Context) {
 	policy, err := h.tailscaleService.GetPolicyWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

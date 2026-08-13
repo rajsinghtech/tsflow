@@ -58,6 +58,28 @@ func TestTailscaleServiceUsesConfiguredAPIURL(t *testing.T) {
 	}
 }
 
+func TestTailscaleServiceEscapesTailnetPathSegments(t *testing.T) {
+	var requestPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"users":[]}`))
+	}))
+	defer server.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleAPIKey:  "test-key",
+		TailscaleTailnet: "team/example",
+	})
+	if _, err := service.GetUsers(); err != nil {
+		t.Fatal(err)
+	}
+	if requestPath != "/api/v2/tailnet/team%2Fexample/users" {
+		t.Fatalf("request path = %q, want escaped tailnet segment", requestPath)
+	}
+}
+
 func TestTailscaleServiceRequestsHonorCallerContext(t *testing.T) {
 	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

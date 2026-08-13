@@ -164,7 +164,7 @@ type Store interface {
 
 	// Pre-aggregated data operations
 	UpsertNodePairAggregates(ctx context.Context, aggregates []NodePairAggregate) error
-	GetNodePairAggregates(ctx context.Context, start, end time.Time, bucketSize int64) ([]NodePairAggregate, error)
+	GetNodePairAggregates(ctx context.Context, start, end time.Time) ([]NodePairAggregate, error)
 
 	// Bandwidth operations
 	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket) error
@@ -188,6 +188,8 @@ type Store interface {
 	CommitPollResults(ctx context.Context, results PollResults) error
 	CommitObjectIngest(ctx context.Context, result ObjectIngestResult) error
 	IsObjectIngested(ctx context.Context, key string) (bool, error)
+	GetObjectsNeedingMetadata(ctx context.Context, limit int) ([]string, error)
+	MarkObjectMetadataHydrated(ctx context.Context, key string, nodeIDs []string) error
 	UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error
 	GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error)
 

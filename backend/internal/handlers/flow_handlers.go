@@ -146,6 +146,9 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 	if duration > ChunkThreshold {
 		chunks, err := h.tailscaleService.GetNetworkLogsChunkedParallelWithContext(c.Request.Context(), start, end, ChunkSize, MaxParallelChunks)
 		if err != nil {
+			if writeContextError(c, err) {
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to fetch network logs",
 				"hint":  "Try selecting a smaller time range",
@@ -208,6 +211,9 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 
 	logs, err := h.tailscaleService.GetNetworkLogsWithContext(c.Request.Context(), start, end)
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetNetworkLogs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch network logs",
@@ -254,15 +260,10 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		return
 	}
 
-	// Calculate bucket size based on time range
+	// Keep the public metadata aligned with the database's query-time bucket
+	// thresholds. The store owns the actual grouping policy.
 	duration := endTime.Sub(startTime)
-	var bucketSize int64 = 60 // 1 minute
-	if duration > 24*time.Hour {
-		bucketSize = 3600 // 1 hour
-	}
-	if duration > 7*24*time.Hour {
-		bucketSize = 86400 // 1 day
-	}
+	bucketSize := bucketSizeForRange(startTime, endTime)
 
 	var aggregates []database.NodePairAggregate
 	source := "database"
@@ -282,8 +283,11 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		defer cancel()
 
 		// Use pre-computed node pair aggregates
-		aggregates, err = h.store.GetNodePairAggregates(ctx, startTime, endTime, bucketSize)
+		aggregates, err = h.store.GetNodePairAggregates(ctx, startTime, endTime)
 		if err != nil {
+			if writeContextError(c, err) {
+				return
+			}
 			log.Printf("ERROR GetAggregatedFlowLogs: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to fetch aggregated flows",
@@ -401,6 +405,17 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 	})
 }
 
+func bucketSizeForRange(start, end time.Time) int64 {
+	seconds := end.UTC().Unix() - start.UTC().Unix()
+	if seconds <= 2*3600 {
+		return 60
+	}
+	if seconds <= 48*3600 {
+		return 3600
+	}
+	return 86400
+}
+
 func dominantProtocolFromMap(bytesByProtocol map[int]int64, ports []database.PortStat, fallbackProtocols string) int {
 	var dominant, dominantBytes int64
 	for protocol, bytes := range bytesByProtocol {
@@ -429,6 +444,9 @@ func (h *Handlers) GetDataRange(c *gin.Context) {
 
 	dataRange, err := h.store.GetDataRange(ctx)
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetDataRange: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to get data range",

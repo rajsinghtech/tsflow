@@ -21,6 +21,9 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 
 	devices, err := h.tailscaleService.GetDevicesWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetDevices: %v", err)
 		c.JSON(http.StatusOK, gin.H{"devices": []services.Device{}})
 		return
@@ -83,6 +86,9 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 func (h *Handlers) GetDNSNameservers(c *gin.Context) {
 	nameservers, err := h.tailscaleService.GetDNSNameserversWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetDNSNameservers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch DNS nameservers",

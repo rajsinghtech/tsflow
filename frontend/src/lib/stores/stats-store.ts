@@ -173,6 +173,11 @@ export function stopStatsRefresh() {
 		clearInterval(refreshTimer);
 		refreshTimer = null;
 	}
+	if (statsController) {
+		statsController.abort();
+		statsController = null;
+	}
+	clearStatsRetryState();
 }
 
 export const statsSummary = derived(statsState, ($s) => $s.summary);
@@ -202,7 +207,7 @@ export const topPorts = derived(statsState, ($s): PortStat[] => {
 		}
 	}
 	return Array.from(portMap.values())
-		.sort((a, b) => b.bytes - a.bytes)
+		.sort((a, b) => b.bytes - a.bytes || a.proto - b.proto || a.port - b.port)
 		.slice(0, 15);
 });
 

@@ -145,11 +145,12 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	INSERT OR IGNORE INTO poll_state (id, last_poll_end, updated_at) VALUES (1, NULL, CURRENT_TIMESTAMP);
 
 	CREATE TABLE IF NOT EXISTS ingested_objects (
-		object_key    TEXT PRIMARY KEY,
-		last_modified DATETIME,
-		size_bytes    INTEGER DEFAULT 0,
-		flow_count    INTEGER DEFAULT 0,
-		ingested_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+		object_key          TEXT PRIMARY KEY,
+		last_modified       DATETIME,
+		size_bytes          INTEGER DEFAULT 0,
+		flow_count          INTEGER DEFAULT 0,
+		ingested_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+		metadata_hydrated   INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_ingested_objects_ingested_at ON ingested_objects(ingested_at);
 
@@ -162,6 +163,13 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		tags       TEXT DEFAULT '[]',
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS object_metadata_nodes (
+		object_key TEXT NOT NULL,
+		node_id    TEXT NOT NULL,
+		PRIMARY KEY (object_key, node_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_object_metadata_nodes_node ON object_metadata_nodes(node_id);
 	`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -178,6 +186,17 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if !protocolBytesExists {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE node_pairs ADD COLUMN protocol_bytes TEXT DEFAULT '{}'`); err != nil {
 			return fmt.Errorf("failed to add node_pairs.protocol_bytes: %w", err)
+		}
+	}
+	metadataHydratedExists, err := s.columnExists(ctx, "ingested_objects", "metadata_hydrated")
+	if err != nil {
+		return fmt.Errorf("failed to inspect ingested_objects columns: %w", err)
+	}
+	if !metadataHydratedExists {
+		// Existing ingestion rows were written before the per-object metadata
+		// index existed, so schedule them for bounded hydration on upgrade.
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE ingested_objects ADD COLUMN metadata_hydrated INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("failed to add ingested_objects.metadata_hydrated: %w", err)
 		}
 	}
 	if err := s.backfillProtocolBytes(ctx); err != nil {

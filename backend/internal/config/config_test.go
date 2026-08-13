@@ -6,7 +6,12 @@ import (
 )
 
 func validConfig() *Config {
-	return &Config{TailscaleAPIURL: "https://api.tailscale.com", Port: "8080"}
+	return &Config{
+		TailscaleAPIURL: "https://api.tailscale.com",
+		Port:            "8080",
+		PollInterval:    "5m",
+		InitialBackfill: "6h",
+	}
 }
 
 func objectStoreConfig(c *Config) {
@@ -14,6 +19,8 @@ func objectStoreConfig(c *Config) {
 	c.FlowObjectStoreEndpoint = "http://object-store.test"
 	c.FlowObjectStoreAccessKey = "access"
 	c.FlowObjectStoreSecretKey = "secret"
+	c.FlowObjectStoreLookback = "15m"
+	c.FlowObjectStoreMaxObjects = 500
 }
 
 func TestValidateExplicitBackends(t *testing.T) {
@@ -75,6 +82,7 @@ func TestLoadParsesValidatedEnvironmentValues(t *testing.T) {
 		"TAILSCALE_API_KEY", "VITE_TAILSCALE_API_KEY", "TAILSCALE_API_URL", "VITE_TAILSCALE_API_URL",
 		"PORT", "VITE_PORT", "TSFLOW_SERVE", "TSFLOW_FUNNEL", "TSFLOW_S3_PATH_STYLE",
 		"TSFLOW_S3_MAX_OBJECTS_PER_POLL", "TAILSCALE_OAUTH_SCOPES", "TSFLOW_TAGS",
+		"TSFLOW_POLL_INTERVAL", "TSFLOW_INITIAL_BACKFILL", "TSFLOW_RETENTION", "TSFLOW_S3_LOOKBACK",
 		"TAILSCALE_OAUTH_CLIENT_ID", "TAILSCALE_OAUTH_CLIENT_SECRET",
 		"TSFLOW_FLOW_BACKEND", "VITE_TSFLOW_FLOW_BACKEND", "TSFLOW_S3_BUCKET", "TSFLOW_S3_PREFIX",
 		"TSFLOW_S3_ENDPOINT", "TSFLOW_S3_REGION", "TSFLOW_S3_ACCESS_KEY_ID", "TSFLOW_S3_SECRET_ACCESS_KEY",
@@ -114,6 +122,37 @@ func TestLoadParsesValidatedEnvironmentValues(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("loaded config should validate: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeDurationsAndObjectStoreValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "zero poll interval", mutate: func(c *Config) { c.PollInterval = "0s" }, want: "TSFLOW_POLL_INTERVAL"},
+		{name: "negative poll interval", mutate: func(c *Config) { c.PollInterval = "-1s" }, want: "TSFLOW_POLL_INTERVAL"},
+		{name: "negative backfill", mutate: func(c *Config) { c.InitialBackfill = "-1m" }, want: "TSFLOW_INITIAL_BACKFILL"},
+		{name: "zero backfill", mutate: func(c *Config) { c.InitialBackfill = "0s" }, want: "TSFLOW_INITIAL_BACKFILL"},
+		{name: "negative retention", mutate: func(c *Config) { c.Retention = "-1m" }, want: "TSFLOW_RETENTION"},
+		{name: "invalid S3 lookback", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreLookback = "nope" }, want: "TSFLOW_S3_LOOKBACK"},
+		{name: "zero S3 object cap", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreMaxObjects = 0 }, want: "TSFLOW_S3_MAX_OBJECTS_PER_POLL"},
+		{name: "invalid S3 endpoint", mutate: func(c *Config) {
+			objectStoreConfig(c)
+			c.FlowBackend = "s3"
+			c.FlowObjectStoreEndpoint = "object-store.test"
+		}, want: "TSFLOW_S3_ENDPOINT"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.TailscaleAPIKey = "test-key"
+			tc.mutate(cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want mention %q", err, tc.want)
+			}
+		})
 	}
 }
 
