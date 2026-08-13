@@ -414,8 +414,12 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 				dst: flow.srcNodeId,
 				txBytes: flow.totalRxBytes,
 				rxBytes: 0,
-					txPkts: flow.totalRxPkts || 0,
-					rxPkts: 0
+				txPkts: flow.totalRxPkts || 0,
+				rxPkts: 0,
+				// Aggregated historical flows have one combined top-port list.
+				// Preserve it on the reverse entry too so reverse-only traffic still
+				// exposes its port metadata to the graph and log viewer.
+				ports: flow.ports || []
 			});
 		}
 	}

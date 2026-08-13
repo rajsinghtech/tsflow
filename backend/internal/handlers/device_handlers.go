@@ -53,7 +53,7 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 }
 
 func (h *Handlers) GetDNSNameservers(c *gin.Context) {
-	nameservers, err := h.tailscaleService.GetDNSNameservers()
+	nameservers, err := h.tailscaleService.GetDNSNameserversWithContext(c.Request.Context())
 	if err != nil {
 		log.Printf("ERROR GetDNSNameservers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

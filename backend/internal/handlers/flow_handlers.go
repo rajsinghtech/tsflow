@@ -382,7 +382,10 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		if flows[i].SrcNodeID != flows[j].SrcNodeID {
 			return flows[i].SrcNodeID < flows[j].SrcNodeID
 		}
-		return flows[i].DstNodeID < flows[j].DstNodeID
+		if flows[i].DstNodeID != flows[j].DstNodeID {
+			return flows[i].DstNodeID < flows[j].DstNodeID
+		}
+		return flows[i].TrafficType < flows[j].TrafficType
 	})
 
 	c.JSON(http.StatusOK, gin.H{

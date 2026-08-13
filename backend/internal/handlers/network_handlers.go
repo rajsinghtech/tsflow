@@ -8,7 +8,7 @@ import (
 )
 
 func (h *Handlers) GetNetworkMap(c *gin.Context) {
-	networkMap, err := h.tailscaleService.GetNetworkMap()
+	networkMap, err := h.tailscaleService.GetNetworkMapWithContext(c.Request.Context())
 	if err != nil {
 		log.Printf("ERROR GetNetworkMap: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

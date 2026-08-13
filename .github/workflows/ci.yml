@@ -40,6 +40,10 @@ jobs:
         working-directory: ./backend
         run: go test -tags exclude_frontend ./...
 
+      - name: Race test
+        working-directory: ./backend
+        run: go test -race -tags exclude_frontend ./...
+
       - name: Vet
         working-directory: ./backend
         run: go vet -tags exclude_frontend ./...

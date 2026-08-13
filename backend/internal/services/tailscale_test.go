@@ -57,3 +57,59 @@ func TestTailscaleServiceUsesConfiguredAPIURL(t *testing.T) {
 		t.Fatalf("base URL=%q", service.baseURL)
 	}
 }
+
+func TestTailscaleServiceRequestsHonorCallerContext(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleAPIKey:  "test-key",
+		TailscaleTailnet: "example.com",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.GetUsersWithContext(ctx)
+		result <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request did not reach test server")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("request error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not stop after context cancellation")
+	}
+}
+
+func TestTailscaleServiceNilChunkContextIsSafe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[]}`))
+	}))
+	defer server.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleAPIKey:  "test-key",
+		TailscaleTailnet: "example.com",
+	})
+	start := "2026-01-01T00:00:00Z"
+	end := "2026-01-01T00:30:00Z"
+	if _, err := service.GetNetworkLogsChunkedParallelWithContext(nil, start, end, time.Hour, 1); err != nil {
+		t.Fatalf("nil context request failed: %v", err)
+	}
+}

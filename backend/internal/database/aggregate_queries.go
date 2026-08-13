@@ -428,7 +428,8 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time
 		FROM node_pairs main
 		WHERE bucket >= ? AND bucket < ?
 		GROUP BY src_node_id, dst_node_id, traffic_type
-		ORDER BY SUM(tx_bytes) + SUM(rx_bytes) DESC
+		ORDER BY SUM(tx_bytes) + SUM(rx_bytes) DESC,
+		         src_node_id ASC, dst_node_id ASC, traffic_type ASC
 	`
 	rows, err := s.db.QueryContext(ctx, query,
 		startUnix, endUnix,
@@ -653,17 +654,39 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 
 	bs := resolveBucketSize(endUnix - startUnix)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b,
-		       SUM(tcp_bytes), SUM(udp_bytes), SUM(other_proto_bytes),
-		       SUM(virtual_bytes), SUM(subnet_bytes), SUM(physical_bytes),
-		       SUM(total_flows), MAX(unique_pairs)
-		FROM traffic_stats
-		WHERE bucket >= ? AND bucket < ?
-		GROUP BY b
-		ORDER BY b ASC
-	`, bs, bs)
+		WITH stat_buckets AS (
+			SELECT (bucket / %d) * %d AS b,
+			       SUM(tcp_bytes) AS tcp_bytes,
+			       SUM(udp_bytes) AS udp_bytes,
+			       SUM(other_proto_bytes) AS other_proto_bytes,
+			       SUM(virtual_bytes) AS virtual_bytes,
+			       SUM(subnet_bytes) AS subnet_bytes,
+			       SUM(physical_bytes) AS physical_bytes,
+			       SUM(total_flows) AS total_flows,
+			       MAX(unique_pairs) AS stored_unique_pairs
+			FROM traffic_stats
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY b
+		), pair_buckets AS (
+			SELECT b, COUNT(*) AS unique_pairs
+			FROM (
+				SELECT (bucket / %d) * %d AS b, src_node_id, dst_node_id
+				FROM node_pairs
+				WHERE bucket >= ? AND bucket < ?
+				GROUP BY b, src_node_id, dst_node_id
+			)
+			GROUP BY b
+		)
+		SELECT sb.b, sb.tcp_bytes, sb.udp_bytes, sb.other_proto_bytes,
+		       sb.virtual_bytes, sb.subnet_bytes, sb.physical_bytes,
+		       sb.total_flows,
+		       MAX(COALESCE(pb.unique_pairs, 0), COALESCE(sb.stored_unique_pairs, 0))
+		FROM stat_buckets sb
+		LEFT JOIN pair_buckets pb ON pb.b = sb.b
+		ORDER BY sb.b ASC
+	`, bs, bs, bs, bs)
 
-	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix)
+	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, startUnix, endUnix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traffic stats: %w", err)
 	}
@@ -769,13 +792,18 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bs := resolveBucketSize(endUnix - startUnix)
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, traffic_type,
-		       SUM(tx_bytes + rx_bytes) AS total_bytes,
+		SELECT (bucket / %d) * %d AS b,
+		       SUM(CASE WHEN traffic_type IN ('virtual', 'exit')
+		                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
+		       SUM(CASE WHEN traffic_type = 'subnet'
+		                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
+		       SUM(CASE WHEN traffic_type = 'physical'
+		                THEN tx_bytes + rx_bytes ELSE 0 END) AS physical_bytes,
 		       SUM(flow_count) AS total_flows,
 		       COUNT(DISTINCT src_node_id || '|' || dst_node_id) AS unique_pairs
 		FROM node_pairs
 		WHERE bucket >= ? AND bucket < ?%s
-		GROUP BY b, traffic_type
+		GROUP BY b
 		ORDER BY b ASC
 	`, bs, bs, typeClause)
 
@@ -789,9 +817,8 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bucketMap := make(map[int64]*TrafficStats)
 	for rows.Next() {
 		var bucket int64
-		var trafficType string
-		var totalBytes, totalFlows, uniquePairs int64
-		if err := rows.Scan(&bucket, &trafficType, &totalBytes, &totalFlows, &uniquePairs); err != nil {
+		var virtualBytes, subnetBytes, physicalBytes, totalFlows, uniquePairs int64
+		if err := rows.Scan(&bucket, &virtualBytes, &subnetBytes, &physicalBytes, &totalFlows, &uniquePairs); err != nil {
 			return nil, fmt.Errorf("failed to scan: %w", err)
 		}
 		st, ok := bucketMap[bucket]
@@ -799,18 +826,11 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			st = &TrafficStats{Bucket: bucket, TopPorts: "[]"}
 			bucketMap[bucket] = st
 		}
-		switch trafficType {
-		case "virtual", "exit":
-			st.VirtualBytes += totalBytes
-		case "subnet":
-			st.SubnetBytes += totalBytes
-		case "physical":
-			st.PhysicalBytes += totalBytes
-		}
+		st.VirtualBytes = virtualBytes
+		st.SubnetBytes = subnetBytes
+		st.PhysicalBytes = physicalBytes
 		st.TotalFlows += totalFlows
-		if uniquePairs > st.UniquePairs {
-			st.UniquePairs = uniquePairs
-		}
+		st.UniquePairs = uniquePairs
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -850,28 +870,36 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	protoArgs = append(protoArgs, startUnix, endUnix)
 	protoArgs = append(protoArgs, typeArgs...)
 	protoRows, err := s.db.QueryContext(ctx, protoQuery, protoArgs...)
-	if err == nil {
-		for protoRows.Next() {
-			var b int64
-			var protocol int
-			var totalBytes int64
-			if err := protoRows.Scan(&b, &protocol, &totalBytes); err != nil {
-				continue
-			}
-			st, ok := bucketMap[b]
-			if !ok {
-				continue
-			}
-			switch protocol {
-			case 6:
-				st.TCPBytes += totalBytes
-			case 17:
-				st.UDPBytes += totalBytes
-			default:
-				st.OtherProtoBytes += totalBytes
-			}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair protocols: %w", err)
+	}
+	for protoRows.Next() {
+		var b int64
+		var protocol int
+		var totalBytes int64
+		if err := protoRows.Scan(&b, &protocol, &totalBytes); err != nil {
+			protoRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair protocol: %w", err)
 		}
+		st, ok := bucketMap[b]
+		if !ok {
+			continue
+		}
+		switch protocol {
+		case 6:
+			st.TCPBytes += totalBytes
+		case 17:
+			st.UDPBytes += totalBytes
+		default:
+			st.OtherProtoBytes += totalBytes
+		}
+	}
+	if err := protoRows.Err(); err != nil {
 		protoRows.Close()
+		return nil, fmt.Errorf("failed to read node pair protocols: %w", err)
+	}
+	if err := protoRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair protocol rows: %w", err)
 	}
 
 	// Rebuild top ports for the same bucket size and traffic-type filter. The
@@ -900,22 +928,32 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
 	`, bs, bs, typeClause)
 	portRows, err := s.db.QueryContext(ctx, portQuery, args...)
-	if err == nil {
-		topPortsByBucket := make(map[int64][]PortStat)
-		for portRows.Next() {
-			var b int64
-			var port PortStat
-			if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
-				continue
-			}
-			topPortsByBucket[b] = append(topPortsByBucket[b], port)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair ports: %w", err)
+	}
+	topPortsByBucket := make(map[int64][]PortStat)
+	for portRows.Next() {
+		var b int64
+		var port PortStat
+		if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
+			portRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair port: %w", err)
 		}
+		topPortsByBucket[b] = append(topPortsByBucket[b], port)
+	}
+	if err := portRows.Err(); err != nil {
 		portRows.Close()
+		return nil, fmt.Errorf("failed to read node pair ports: %w", err)
+	}
+	if err := portRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair port rows: %w", err)
+	}
 
-		for b, topPorts := range topPortsByBucket {
-			if encoded, err := json.Marshal(topPorts); err == nil {
-				bucketMap[b].TopPorts = string(encoded)
-			}
+	for b, topPorts := range topPortsByBucket {
+		if encoded, err := json.Marshal(topPorts); err != nil {
+			return nil, fmt.Errorf("failed to encode node pair ports: %w", err)
+		} else if st := bucketMap[b]; st != nil {
+			st.TopPorts = string(encoded)
 		}
 	}
 
@@ -1156,7 +1194,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 			GROUP BY src_node_id
 		)
 		GROUP BY peer_id
-		ORDER BY total DESC
+		ORDER BY total DESC, peer_id ASC
 		LIMIT 10
 	`, nodeID, startUnix, endUnix, nodeID, startUnix, endUnix)
 	if err != nil {

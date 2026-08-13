@@ -101,6 +101,10 @@ func (ts *TailscaleService) makeRequest(ctx context.Context, endpoint string) ([
 }
 
 func (ts *TailscaleService) makeRequestWithRetry(ctx context.Context, endpoint string, maxRetries int, initialDelay time.Duration) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var lastErr error
 	delay := initialDelay
 
@@ -245,18 +249,35 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 }
 
 func (ts *TailscaleService) GetUsers() ([]byte, error) {
+	return ts.GetUsersWithContext(context.Background())
+}
+
+// GetUsersWithContext allows HTTP handlers to cancel an in-flight request
+// when the client disconnects or the server is shutting down.
+func (ts *TailscaleService) GetUsersWithContext(parent context.Context) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	endpoint := fmt.Sprintf("/tailnet/%s/users", ts.tailnet)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	return ts.makeRequest(ctx, endpoint)
 }
 
 func (ts *TailscaleService) GetPolicy() ([]byte, error) {
+	return ts.GetPolicyWithContext(context.Background())
+}
+
+// GetPolicyWithContext allows HTTP handlers to cancel an in-flight request.
+func (ts *TailscaleService) GetPolicyWithContext(parent context.Context) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	endpoint := fmt.Sprintf("/tailnet/%s/acl", ts.tailnet)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	return ts.makeRequest(ctx, endpoint)
@@ -411,6 +432,10 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallel(start, end string, chu
 
 // GetNetworkLogsChunkedParallelWithContext retrieves network logs in parallel chunks with context support
 func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context.Context, start, end string, chunkSize time.Duration, maxConcurrency int) ([]any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	startTime, err := time.Parse(time.RFC3339, start)
 	if err != nil {
 		return nil, fmt.Errorf("invalid start time: %w", err)
@@ -545,6 +570,9 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 			results[res.index] = res.logs
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Filter out nil results and maintain order
 	var allLogs []any
@@ -571,8 +599,14 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 
 // GetNetworkMap retrieves the network map (simplified version)
 func (ts *TailscaleService) GetNetworkMap() (map[string]any, error) {
+	return ts.GetNetworkMapWithContext(context.Background())
+}
+
+// GetNetworkMapWithContext retrieves the network map using the caller's
+// context for cancellation.
+func (ts *TailscaleService) GetNetworkMapWithContext(ctx context.Context) (map[string]any, error) {
 	// Get devices as the basis for network map
-	devices, err := ts.GetDevices()
+	devices, err := ts.GetDevicesWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +637,16 @@ func (ts *TailscaleService) GetDeviceFlows(deviceID string) (map[string]any, err
 
 // GetDNSNameservers retrieves DNS config for the tailnet
 func (ts *TailscaleService) GetDNSNameservers() (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return ts.GetDNSNameserversWithContext(context.Background())
+}
+
+// GetDNSNameserversWithContext allows HTTP handlers to cancel both DNS API
+// requests when the client disconnects or the server is shutting down.
+func (ts *TailscaleService) GetDNSNameserversWithContext(parent context.Context) (map[string]any, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
 	// Get nameservers
@@ -627,6 +670,8 @@ func (ts *TailscaleService) GetDNSNameservers() (map[string]any, error) {
 				result["domains"] = domains
 			}
 		}
+	} else if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	// Default values

@@ -62,3 +62,23 @@ func TestRollingCacheMergesProtocolAndPortMetadata(t *testing.T) {
 		t.Fatalf("merged ports = %+v", ports)
 	}
 }
+
+func TestRollingCacheCountsUniquePairsAcrossTrafficTypes(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	cache := NewRollingWindowCache(10 * time.Minute)
+	cache.Update(
+		[]database.NodePairAggregate{{Bucket: now.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual"}},
+		nil, nil,
+		[]database.TrafficStats{{Bucket: now.Unix(), VirtualBytes: 10, UniquePairs: 1}},
+	)
+	cache.Update(
+		[]database.NodePairAggregate{{Bucket: now.Unix(), SrcNodeID: "c", DstNodeID: "d", TrafficType: "subnet"}},
+		nil, nil,
+		[]database.TrafficStats{{Bucket: now.Unix(), SubnetBytes: 20, UniquePairs: 1}},
+	)
+
+	stats := cache.GetTrafficStats(now, now.Add(time.Minute))
+	if len(stats) != 1 || stats[0].UniquePairs != 2 {
+		t.Fatalf("traffic stats = %+v, want two unique pairs", stats)
+	}
+}

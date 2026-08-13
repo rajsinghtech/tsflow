@@ -54,6 +54,7 @@ type Poller struct {
 	stopChan    chan struct{}
 	doneChan    chan struct{}
 	triggerChan chan struct{}
+	cancel      context.CancelFunc
 
 	// Stats
 	lastPollTime       time.Time
@@ -88,6 +89,10 @@ func (p *Poller) ConfigureObjectStore(source *ObjectStoreSource) {
 
 // Start begins the background polling loop
 func (p *Poller) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	p.mu.Lock()
 	if p.running {
 		p.mu.Unlock()
@@ -98,19 +103,24 @@ func (p *Poller) Start(ctx context.Context) error {
 	p.stopChan = make(chan struct{})
 	p.doneChan = make(chan struct{})
 	p.triggerChan = make(chan struct{}, 1)
+	stopChan := p.stopChan
+	doneChan := p.doneChan
+	triggerChan := p.triggerChan
+	runCtx, cancel := context.WithCancel(ctx)
+	p.cancel = cancel
 	p.mu.Unlock()
 
 	log.Printf("Starting background poller (backend: %s, interval: %v, retention: %v)",
 		p.config.FlowBackend, p.config.PollInterval, p.config.Retention)
 
-	// Initial device cache refresh
-	if err := p.refreshDeviceCache(ctx); err != nil {
+	// Keep the initial device refresh synchronous for startup callers, but run it
+	// under the owned context so a concurrent Stop can cancel it.
+	if err := p.refreshDeviceCache(runCtx); err != nil && runCtx.Err() == nil {
 		log.Printf("Warning: initial device cache refresh failed: %v", err)
 	}
 
-	// Start background goroutine (initial poll happens asynchronously
-	// so the server can start accepting requests immediately)
-	go p.run(ctx)
+	// Start the background goroutine. The initial poll happens asynchronously.
+	go p.run(runCtx, stopChan, doneChan, triggerChan)
 
 	return nil
 }
@@ -125,9 +135,14 @@ func (p *Poller) Stop() {
 	p.running = false
 	stopChan := p.stopChan
 	doneChan := p.doneChan
+	cancel := p.cancel
 	p.stopChan = nil
+	p.cancel = nil
 	p.mu.Unlock()
 
+	if cancel != nil {
+		cancel()
+	}
 	if stopChan != nil {
 		close(stopChan)
 	}
@@ -171,28 +186,34 @@ func (p *Poller) GetRollingCache() *RollingWindowCache {
 // TriggerPoll signals the background loop to poll immediately.
 // Non-blocking: if a trigger is already pending, this is a no-op.
 func (p *Poller) TriggerPoll() {
+	p.mu.RLock()
+	triggerChan := p.triggerChan
+	p.mu.RUnlock()
+	if triggerChan == nil {
+		return
+	}
 	select {
-	case p.triggerChan <- struct{}{}:
+	case triggerChan <- struct{}{}:
 	default:
 	}
 }
 
-func (p *Poller) run(ctx context.Context) {
-	// Capture channels at start to avoid race with Stop() setting them to nil
-	p.mu.RLock()
-	stopChan := p.stopChan
-	doneChan := p.doneChan
-	p.mu.RUnlock()
-
+func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan chan<- struct{}, triggerChan <-chan struct{}) {
 	defer close(doneChan)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Run cleanup before initial poll to purge any stale raw flow logs from prior runs
-	if err := p.cleanup(ctx); err != nil {
+	if err := p.cleanup(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("Pre-poll cleanup failed: %v", err)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	// Initial poll (runs asynchronously so the server isn't blocked)
-	if err := p.poll(ctx); err != nil {
+	if err := p.poll(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("Initial poll failed: %v", err)
 		p.mu.Lock()
 		p.pollErrors++
@@ -213,7 +234,7 @@ func (p *Poller) run(ctx context.Context) {
 			return
 		case <-stopChan:
 			return
-		case <-p.triggerChan:
+		case <-triggerChan:
 			// Manual trigger — same logic as scheduled poll
 			if p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
 				if err := p.refreshDeviceCache(ctx); err != nil {

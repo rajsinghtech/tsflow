@@ -319,16 +319,40 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 	for _, agg := range nodePairMap {
 		nodePairs = append(nodePairs, *agg)
 	}
+	sort.Slice(nodePairs, func(i, j int) bool {
+		if nodePairs[i].Bucket != nodePairs[j].Bucket {
+			return nodePairs[i].Bucket < nodePairs[j].Bucket
+		}
+		if nodePairs[i].SrcNodeID != nodePairs[j].SrcNodeID {
+			return nodePairs[i].SrcNodeID < nodePairs[j].SrcNodeID
+		}
+		if nodePairs[i].DstNodeID != nodePairs[j].DstNodeID {
+			return nodePairs[i].DstNodeID < nodePairs[j].DstNodeID
+		}
+		return nodePairs[i].TrafficType < nodePairs[j].TrafficType
+	})
 
 	totalBandwidth := make([]database.BandwidthBucket, 0, len(bandwidthMap))
 	for _, bw := range bandwidthMap {
 		totalBandwidth = append(totalBandwidth, *bw)
 	}
+	sort.Slice(totalBandwidth, func(i, j int) bool {
+		return totalBandwidth[i].Time.Before(totalBandwidth[j].Time)
+	})
 
 	nodeBandwidth := make([]database.NodeBandwidth, 0, len(nodeBwMap))
 	for _, bw := range nodeBwMap {
 		nodeBandwidth = append(nodeBandwidth, *bw)
 	}
+	sort.Slice(nodeBandwidth, func(i, j int) bool {
+		if nodeBandwidth[i].Bucket != nodeBandwidth[j].Bucket {
+			return nodeBandwidth[i].Bucket < nodeBandwidth[j].Bucket
+		}
+		return nodeBandwidth[i].NodeID < nodeBandwidth[j].NodeID
+	})
+	sort.Slice(trafficStats, func(i, j int) bool {
+		return trafficStats[i].Bucket < trafficStats[j].Bucket
+	})
 
 	return nodePairs, totalBandwidth, nodeBandwidth, trafficStats
 }

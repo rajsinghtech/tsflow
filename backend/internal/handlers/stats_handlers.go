@@ -186,7 +186,11 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 
 	// Sort by totalBytes descending and cap to requested limit
 	sort.Slice(enriched, func(i, j int) bool {
-		return enriched[i]["totalBytes"].(int64) > enriched[j]["totalBytes"].(int64)
+		left, right := enriched[i]["totalBytes"].(int64), enriched[j]["totalBytes"].(int64)
+		if left != right {
+			return left > right
+		}
+		return enriched[i]["nodeId"].(string) < enriched[j]["nodeId"].(string)
 	})
 	if len(enriched) > limit {
 		enriched = enriched[:limit]
@@ -301,7 +305,14 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 
 	// Sort by totalBytes descending and cap to requested limit
 	sort.Slice(enriched, func(i, j int) bool {
-		return enriched[i]["totalBytes"].(int64) > enriched[j]["totalBytes"].(int64)
+		left, right := enriched[i]["totalBytes"].(int64), enriched[j]["totalBytes"].(int64)
+		if left != right {
+			return left > right
+		}
+		if enriched[i]["srcNodeId"].(string) != enriched[j]["srcNodeId"].(string) {
+			return enriched[i]["srcNodeId"].(string) < enriched[j]["srcNodeId"].(string)
+		}
+		return enriched[i]["dstNodeId"].(string) < enriched[j]["dstNodeId"].(string)
 	})
 	if len(enriched) > limit {
 		enriched = enriched[:limit]

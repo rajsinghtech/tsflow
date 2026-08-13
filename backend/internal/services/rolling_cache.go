@@ -18,6 +18,11 @@ type RollingWindowCache struct {
 	// Node pair aggregates by minute bucket
 	nodePairs map[int64][]database.NodePairAggregate
 
+	// Unique node pairs contributing to network-wide traffic stats by bucket.
+	// Keeping the set avoids undercounting when separate polls or traffic types
+	// contain disjoint pairs.
+	trafficStatPairs map[int64]map[string]struct{}
+
 	// Total bandwidth by minute bucket
 	bandwidth map[int64]*database.BandwidthBucket
 
@@ -33,11 +38,12 @@ type RollingWindowCache struct {
 
 func NewRollingWindowCache(maxAge time.Duration) *RollingWindowCache {
 	return &RollingWindowCache{
-		nodePairs:     make(map[int64][]database.NodePairAggregate),
-		bandwidth:     make(map[int64]*database.BandwidthBucket),
-		nodeBandwidth: make(map[int64]map[string]*database.NodeBandwidth),
-		trafficStats:  make(map[int64]*database.TrafficStats),
-		maxAge:        maxAge,
+		nodePairs:        make(map[int64][]database.NodePairAggregate),
+		trafficStatPairs: make(map[int64]map[string]struct{}),
+		bandwidth:        make(map[int64]*database.BandwidthBucket),
+		nodeBandwidth:    make(map[int64]map[string]*database.NodeBandwidth),
+		trafficStats:     make(map[int64]*database.TrafficStats),
+		maxAge:           maxAge,
 	}
 }
 
@@ -53,6 +59,11 @@ func (c *RollingWindowCache) Update(
 
 	// Add node pairs by bucket, deduplicating by (src, dst, trafficType)
 	for _, np := range nodePairs {
+		if c.trafficStatPairs[np.Bucket] == nil {
+			c.trafficStatPairs[np.Bucket] = make(map[string]struct{})
+		}
+		c.trafficStatPairs[np.Bucket][np.SrcNodeID+"|"+np.DstNodeID] = struct{}{}
+
 		existing := c.nodePairs[np.Bucket]
 		found := false
 		for i := range existing {
@@ -124,12 +135,21 @@ func (c *RollingWindowCache) Update(
 			existing.SubnetBytes += ts.SubnetBytes
 			existing.PhysicalBytes += ts.PhysicalBytes
 			existing.TotalFlows += ts.TotalFlows
-			if ts.UniquePairs > existing.UniquePairs {
-				existing.UniquePairs = ts.UniquePairs // max, consistent with DB upsert
+			if pairs := c.trafficStatPairs[ts.Bucket]; len(pairs) > 0 {
+				if pairCount := int64(len(pairs)); pairCount > existing.UniquePairs {
+					existing.UniquePairs = pairCount
+				}
+			} else if ts.UniquePairs > existing.UniquePairs {
+				existing.UniquePairs = ts.UniquePairs
 			}
 			existing.TopPorts = mergePortJSON(existing.TopPorts, ts.TopPorts)
 		} else {
 			copied := ts
+			if pairs := c.trafficStatPairs[ts.Bucket]; len(pairs) > 0 {
+				if pairCount := int64(len(pairs)); pairCount > copied.UniquePairs {
+					copied.UniquePairs = pairCount
+				}
+			}
 			c.trafficStats[ts.Bucket] = &copied
 		}
 	}
@@ -145,6 +165,12 @@ func (c *RollingWindowCache) prune() {
 	for bucket := range c.nodePairs {
 		if bucket < cutoff {
 			delete(c.nodePairs, bucket)
+		}
+	}
+
+	for bucket := range c.trafficStatPairs {
+		if bucket < cutoff {
+			delete(c.trafficStatPairs, bucket)
 		}
 	}
 
@@ -181,6 +207,18 @@ func (c *RollingWindowCache) GetNodePairs(start, end time.Time) []database.NodeP
 			result = append(result, pairs...)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Bucket != result[j].Bucket {
+			return result[i].Bucket < result[j].Bucket
+		}
+		if result[i].SrcNodeID != result[j].SrcNodeID {
+			return result[i].SrcNodeID < result[j].SrcNodeID
+		}
+		if result[i].DstNodeID != result[j].DstNodeID {
+			return result[i].DstNodeID < result[j].DstNodeID
+		}
+		return result[i].TrafficType < result[j].TrafficType
+	})
 
 	return result
 }

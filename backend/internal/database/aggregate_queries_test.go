@@ -114,3 +114,59 @@ func TestTrafficStatsUpsertMergesTopPorts(t *testing.T) {
 		t.Fatalf("top ports = %+v", ports)
 	}
 }
+
+func TestDerivedTrafficStatsUnionPairsAcrossTrafficTypes(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, FlowCount: 2, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
+		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "subnet", TxBytes: 200, FlowCount: 3, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("stats = %+v, want one bucket", stats)
+	}
+	if stats[0].VirtualBytes != 100 || stats[0].SubnetBytes != 200 || stats[0].TotalFlows != 5 || stats[0].UniquePairs != 2 {
+		t.Fatalf("stats = %+v", stats[0])
+	}
+
+	filtered, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].VirtualBytes != 100 || filtered[0].SubnetBytes != 0 || filtered[0].UniquePairs != 1 {
+		t.Fatalf("filtered stats = %+v", filtered)
+	}
+}
+
+func TestTrafficStatsRecomputesUniquePairsFromNodePairs(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
+		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "subnet", TxBytes: 200, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTrafficStats(ctx, []TrafficStats{{
+		Bucket: base, TCPBytes: 100, TotalFlows: 2, UniquePairs: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetTrafficStats(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].UniquePairs != 2 {
+		t.Fatalf("stats = %+v, want two unique pairs", stats)
+	}
+}

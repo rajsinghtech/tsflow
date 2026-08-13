@@ -2,6 +2,8 @@ package services
 
 import (
 	"log"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -187,53 +189,68 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 
 // Helper functions
 func extractIP(addr string) string {
-	// Handle IPv6 with brackets: [::1]:443
-	if strings.HasPrefix(addr, "[") {
-		end := strings.Index(addr, "]")
-		if end > 0 {
-			return addr[1:end]
-		}
-	}
-	// Handle IPv4: 192.168.1.1:443
-	if idx := strings.LastIndex(addr, ":"); idx > 0 {
-		return addr[:idx]
+	host, _, ok := splitEndpoint(addr)
+	if ok {
+		return host
 	}
 	return addr
 }
 
 func extractPort(addr string) int {
-	// Handle IPv6 with brackets: [::1]:443
-	if strings.HasPrefix(addr, "[") {
-		end := strings.Index(addr, "]:")
-		if end > 0 {
-			var port int
-			_, _ = parsePort(addr[end+2:], &port)
-			return port
-		}
+	_, port, ok := splitEndpoint(addr)
+	if !ok {
 		return 0
 	}
-	// Handle IPv4: 192.168.1.1:443
-	if idx := strings.LastIndex(addr, ":"); idx > 0 {
-		var port int
-		_, _ = parsePort(addr[idx+1:], &port)
-		return port
-	}
-	return 0
+	return port
 }
 
-func parsePort(s string, port *int) (bool, error) {
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false, nil
-		}
-		*port = *port*10 + int(c-'0')
-		// Prevent overflow and validate port range
-		if *port > 65535 {
-			*port = 0
-			return false, nil
-		}
+// splitEndpoint separates an address from an optional port without treating
+// an unbracketed IPv6 address as host:port. Tailscale normally emits
+// bracketed IPv6 endpoints when a port is present, but exported logs can also
+// contain bare IPs and opaque node/host identifiers.
+func splitEndpoint(addr string) (host string, port int, ok bool) {
+	if addr == "" {
+		return "", 0, false
 	}
-	return *port > 0 && *port <= 65535, nil
+
+	// A complete IP address is never interpreted as having a port. This is
+	// essential for IPv6, where the final colon-separated segment is not a
+	// port delimiter unless the address is bracketed.
+	if net.ParseIP(addr) != nil {
+		return addr, 0, true
+	}
+
+	if strings.HasPrefix(addr, "[") {
+		end := strings.IndexByte(addr, ']')
+		if end <= 1 || net.ParseIP(addr[1:end]) == nil {
+			return "", 0, false
+		}
+		host = addr[1:end]
+		suffix := addr[end+1:]
+		if suffix == "" {
+			return host, 0, true
+		}
+		if !strings.HasPrefix(suffix, ":") {
+			return "", 0, false
+		}
+		return host, validPort(suffix[1:]), true
+	}
+
+	// SplitHostPort handles IPv4 and host names. It rejects bare IPv6, which
+	// was already handled above by ParseIP.
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, false
+	}
+	return host, validPort(portText), true
+}
+
+func validPort(raw string) int {
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0
+	}
+	return port
 }
 
 func getString(m map[string]any, key string) string {
