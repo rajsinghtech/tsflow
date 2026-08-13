@@ -260,3 +260,24 @@ func TestGetNodeStatsDoesNotDoubleCountSelfTraffic(t *testing.T) {
 		t.Fatalf("self peer stats = %+v, want one unduplicated peer", stats.TopPeers)
 	}
 }
+
+func TestGetTopTalkersByTrafficTypesDoesNotDoubleCountSelfTraffic(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+		Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual",
+		TxBytes: 100, RxBytes: 50, FlowCount: 1, Protocols: "[6]", Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	talkers, err := store.GetTopTalkersByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(talkers) != 1 || talkers[0].NodeID != "a" ||
+		talkers[0].TxBytes != 100 || talkers[0].RxBytes != 50 || talkers[0].TotalBytes != 150 {
+		t.Fatalf("self talker stats = %+v, want one unduplicated self row", talkers)
+	}
+}

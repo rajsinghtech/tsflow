@@ -234,9 +234,15 @@ volumes:
 
 ```bash
 cd k8s
-# Edit kustomization.yaml with your credentials
-kubectl apply -k .
+# Requires envsubst (provided by gettext). Export the variables referenced by
+# secret.yaml, then expand the template before applying the rendered manifests.
+kubectl kustomize . | envsubst | kubectl apply -f -
 ```
+
+Alternatively, replace the `${...}` placeholders in `k8s/secret.yaml` with
+your credentials and run `kubectl apply -k k8s` directly. Do not apply the
+template unchanged: Kubernetes does not expand shell-style environment
+variables in manifests.
 
 ## Star History
 

@@ -1057,7 +1057,8 @@ func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, start, en
 			UNION ALL
 			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
 			FROM node_pairs
-			WHERE bucket >= ? AND bucket < ?%s
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id%s
 			GROUP BY dst_node_id
 		)
 		SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx, SUM(tx + rx) AS total
