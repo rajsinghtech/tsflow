@@ -78,6 +78,19 @@ func mergePortStats(existing, incoming []database.PortStat) []database.PortStat 
 	return result
 }
 
+func mergeProtocolByteStats(existing, incoming map[int]int64) map[int]int64 {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	if existing == nil {
+		existing = make(map[int]int64, len(incoming))
+	}
+	for protocol, bytes := range incoming {
+		existing[protocol] += bytes
+	}
+	return existing
+}
+
 func dominantProtocol(protocolsJSON string, ports []database.PortStat) int {
 	if protocol := parseDominantProtocol(protocolsJSON); protocol != 0 {
 		return protocol
@@ -311,19 +324,24 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 	// and filter by traffic type
 	type mergeKey struct{ src, dst, ttype string }
 	type mergedFlow struct {
-		SrcNodeID      string              `json:"srcNodeId"`
-		DstNodeID      string              `json:"dstNodeId"`
-		SrcDisplayName string              `json:"srcDisplayName,omitempty"`
-		DstDisplayName string              `json:"dstDisplayName,omitempty"`
-		TrafficType    string              `json:"trafficType"`
-		TotalTxBytes   int64               `json:"totalTxBytes"`
-		TotalRxBytes   int64               `json:"totalRxBytes"`
-		TotalTxPkts    int64               `json:"totalTxPkts"`
-		TotalRxPkts    int64               `json:"totalRxPkts"`
-		FlowCount      int64               `json:"flowCount"`
-		Protocol       int                 `json:"protocol"`
-		Ports          []database.PortStat `json:"ports,omitempty"`
-		protocolBytes  map[int]int64
+		SrcNodeID       string              `json:"srcNodeId"`
+		DstNodeID       string              `json:"dstNodeId"`
+		SrcDisplayName  string              `json:"srcDisplayName,omitempty"`
+		DstDisplayName  string              `json:"dstDisplayName,omitempty"`
+		TrafficType     string              `json:"trafficType"`
+		TotalTxBytes    int64               `json:"totalTxBytes"`
+		TotalRxBytes    int64               `json:"totalRxBytes"`
+		TotalTxPkts     int64               `json:"totalTxPkts"`
+		TotalRxPkts     int64               `json:"totalRxPkts"`
+		FlowCount       int64               `json:"flowCount"`
+		Protocol        int                 `json:"protocol"`
+		Ports           []database.PortStat `json:"ports,omitempty"`
+		Directional     bool                `json:"directional"`
+		TxProtocolBytes map[int]int64       `json:"txProtocolBytes,omitempty"`
+		RxProtocolBytes map[int]int64       `json:"rxProtocolBytes,omitempty"`
+		TxPorts         []database.PortStat `json:"txPorts,omitempty"`
+		RxPorts         []database.PortStat `json:"rxPorts,omitempty"`
+		protocolBytes   map[int]int64
 	}
 	merged := make(map[mergeKey]*mergedFlow)
 
@@ -338,6 +356,17 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		key := mergeKey{srcID, dstID, agg.TrafficType}
 		ports := parsePortStats(agg.Ports)
 		protocolBytes := parseProtocolBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes)
+		var txProtocolBytes, rxProtocolBytes map[int]int64
+		var txPorts, rxPorts []database.PortStat
+		if agg.DirectionalPorts {
+			// Directional metadata is trustworthy only when the aggregate says
+			// that every row contributing to it preserved direction. Do not
+			// infer direction from legacy union metadata.
+			txProtocolBytes = parseProtocolBytes(agg.TxProtocolBytes, "", 0)
+			rxProtocolBytes = parseProtocolBytes(agg.RxProtocolBytes, "", 0)
+			txPorts = parsePortStats(agg.TxPorts)
+			rxPorts = parsePortStats(agg.RxPorts)
+		}
 
 		if existing, ok := merged[key]; ok {
 			// Merge into existing entry
@@ -351,19 +380,38 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 			}
 			existing.Ports = mergePortStats(existing.Ports, ports)
 			existing.Protocol = dominantProtocolFromMap(existing.protocolBytes, existing.Ports, agg.Protocols)
+			if existing.Directional && agg.DirectionalPorts {
+				existing.TxProtocolBytes = mergeProtocolByteStats(existing.TxProtocolBytes, txProtocolBytes)
+				existing.RxProtocolBytes = mergeProtocolByteStats(existing.RxProtocolBytes, rxProtocolBytes)
+				existing.TxPorts = mergePortStats(existing.TxPorts, txPorts)
+				existing.RxPorts = mergePortStats(existing.RxPorts, rxPorts)
+			} else {
+				// A single legacy contribution makes the merged directional
+				// metadata unreliable for the complete response range.
+				existing.Directional = false
+				existing.TxProtocolBytes = nil
+				existing.RxProtocolBytes = nil
+				existing.TxPorts = nil
+				existing.RxPorts = nil
+			}
 		} else {
 			flow := &mergedFlow{
-				SrcNodeID:     srcID,
-				DstNodeID:     dstID,
-				TrafficType:   agg.TrafficType,
-				TotalTxBytes:  agg.TxBytes,
-				TotalRxBytes:  agg.RxBytes,
-				TotalTxPkts:   agg.TxPkts,
-				TotalRxPkts:   agg.RxPkts,
-				FlowCount:     agg.FlowCount,
-				Protocol:      dominantProtocolFromBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes, ports),
-				Ports:         ports,
-				protocolBytes: protocolBytes,
+				SrcNodeID:       srcID,
+				DstNodeID:       dstID,
+				TrafficType:     agg.TrafficType,
+				TotalTxBytes:    agg.TxBytes,
+				TotalRxBytes:    agg.RxBytes,
+				TotalTxPkts:     agg.TxPkts,
+				TotalRxPkts:     agg.RxPkts,
+				FlowCount:       agg.FlowCount,
+				Protocol:        dominantProtocolFromBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes, ports),
+				Ports:           ports,
+				Directional:     agg.DirectionalPorts,
+				TxProtocolBytes: txProtocolBytes,
+				RxProtocolBytes: rxProtocolBytes,
+				TxPorts:         txPorts,
+				RxPorts:         rxPorts,
+				protocolBytes:   protocolBytes,
 			}
 			if name := h.resolveNodeName(srcID); name != "" {
 				flow.SrcDisplayName = name

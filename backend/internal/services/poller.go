@@ -238,7 +238,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 		return
 	}
 
-	if p.tsService != nil {
+	if p.canRefreshDeviceCache() {
 		if err := p.refreshDeviceCache(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("Warning: initial device cache refresh failed: %v", err)
 		}
@@ -284,7 +284,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 			return
 		case <-triggerChan:
 			// Manual trigger — same logic as scheduled poll
-			if p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
+			if p.canRefreshDeviceCache() && p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
 				if err := p.refreshDeviceCache(ctx); err != nil {
 					log.Printf("Warning: device cache refresh failed: %v", err)
 				}
@@ -299,7 +299,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 			}
 		case <-pollTicker.C:
 			// Refresh device cache if stale
-			if p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
+			if p.canRefreshDeviceCache() && p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
 				if err := p.refreshDeviceCache(ctx); err != nil {
 					log.Printf("Warning: device cache refresh failed: %v", err)
 					p.mu.Lock()
@@ -322,6 +322,10 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 			}
 		}
 	}
+}
+
+func (p *Poller) canRefreshDeviceCache() bool {
+	return p != nil && p.tsService != nil && p.tsService.HasCredentials()
 }
 
 func (p *Poller) refreshDeviceCache(ctx context.Context) error {

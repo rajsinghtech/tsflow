@@ -103,6 +103,11 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		protocols    TEXT    DEFAULT '[]',
 		protocol_bytes TEXT  DEFAULT '{}',
 		ports        TEXT    DEFAULT '[]',
+		tx_ports     TEXT    DEFAULT '[]',
+		rx_ports     TEXT    DEFAULT '[]',
+		tx_protocol_bytes TEXT DEFAULT '{}',
+		rx_protocol_bytes TEXT DEFAULT '{}',
+		directional_ports INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY (bucket, src_node_id, dst_node_id, traffic_type)
 	);
 	CREATE INDEX IF NOT EXISTS idx_node_pairs_bucket ON node_pairs(bucket);
@@ -187,6 +192,26 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if !protocolBytesExists {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE node_pairs ADD COLUMN protocol_bytes TEXT DEFAULT '{}'`); err != nil {
 			return fmt.Errorf("failed to add node_pairs.protocol_bytes: %w", err)
+		}
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "tx_ports", ddl: `ALTER TABLE node_pairs ADD COLUMN tx_ports TEXT DEFAULT '[]'`},
+		{name: "rx_ports", ddl: `ALTER TABLE node_pairs ADD COLUMN rx_ports TEXT DEFAULT '[]'`},
+		{name: "tx_protocol_bytes", ddl: `ALTER TABLE node_pairs ADD COLUMN tx_protocol_bytes TEXT DEFAULT '{}'`},
+		{name: "rx_protocol_bytes", ddl: `ALTER TABLE node_pairs ADD COLUMN rx_protocol_bytes TEXT DEFAULT '{}'`},
+		{name: "directional_ports", ddl: `ALTER TABLE node_pairs ADD COLUMN directional_ports INTEGER NOT NULL DEFAULT 0`},
+	} {
+		exists, err := s.columnExists(ctx, "node_pairs", column.name)
+		if err != nil {
+			return fmt.Errorf("failed to inspect node_pairs.%s: %w", column.name, err)
+		}
+		if !exists {
+			if _, err := s.db.ExecContext(ctx, column.ddl); err != nil {
+				return fmt.Errorf("failed to add node_pairs.%s: %w", column.name, err)
+			}
 		}
 	}
 	metadataHydratedExists, err := s.columnExists(ctx, "ingested_objects", "metadata_hydrated")

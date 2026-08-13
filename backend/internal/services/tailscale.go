@@ -27,6 +27,14 @@ type TailscaleService struct {
 	tsClient *tailscale.Client
 }
 
+// HasCredentials reports whether this service can make authenticated
+// requests to the Tailscale API. Object-store-only deployments intentionally
+// construct the service so handlers can share the same dependency, but they
+// do not need (or have) API credentials.
+func (ts *TailscaleService) HasCredentials() bool {
+	return ts != nil && (ts.apiKey != "" || ts.tsClient != nil)
+}
+
 type Device struct {
 	ID                        string   `json:"id"`
 	Name                      string   `json:"name"`

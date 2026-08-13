@@ -33,6 +33,24 @@ func TestRollingCacheUsesHalfOpenRangesAndCompleteCoverage(t *testing.T) {
 	}
 }
 
+func TestRollingCacheUnalignedRangeMatchesGetterCoverage(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	cache := NewRollingWindowCache(10 * time.Minute)
+	cache.Update(
+		[]database.NodePairAggregate{{Bucket: now.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual"}},
+		nil, nil, nil,
+	)
+
+	start := now.Add(30 * time.Second)
+	end := now.Add(time.Minute)
+	if got := cache.GetNodePairs(start, end); len(got) != 0 {
+		t.Fatalf("getter returned %d bucket(s), want none before the bucket start", len(got))
+	}
+	if cache.HasNodePairDataFor(start, end) {
+		t.Fatal("unaligned range must not report coverage for an excluded bucket")
+	}
+}
+
 func TestRollingCacheMergesProtocolAndPortMetadata(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Minute)
 	cache := NewRollingWindowCache(10 * time.Minute)
@@ -60,6 +78,39 @@ func TestRollingCacheMergesProtocolAndPortMetadata(t *testing.T) {
 	}
 	if len(ports) != 2 || ports[0].Port != 53 || ports[1].Port != 443 {
 		t.Fatalf("merged ports = %+v", ports)
+	}
+}
+
+func TestRollingCacheMergesDirectionalMetadata(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	cache := NewRollingWindowCache(10 * time.Minute)
+	cache.Update([]database.NodePairAggregate{{
+		Bucket: now.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
+		TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`,
+		TxProtocolBytes: `{"6":100}`, TxPorts: `[{"port":443,"proto":6,"bytes":100}]`, DirectionalPorts: true,
+	}}, nil, nil, nil)
+	cache.Update([]database.NodePairAggregate{{
+		Bucket: now.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
+		RxBytes: 40, Protocols: "[17]", ProtocolBytes: `{"17":40}`,
+		RxProtocolBytes: `{"17":40}`, RxPorts: `[{"port":53,"proto":17,"bytes":40}]`, DirectionalPorts: true,
+	}}, nil, nil, nil)
+
+	pairs := cache.GetNodePairs(now, now.Add(time.Minute))
+	if len(pairs) != 1 || !pairs[0].DirectionalPorts {
+		t.Fatalf("cached pair = %+v", pairs)
+	}
+	if pairs[0].TxProtocolBytes != `{"6":100}` || pairs[0].RxProtocolBytes != `{"17":40}` {
+		t.Fatalf("directional protocol bytes = tx %s rx %s", pairs[0].TxProtocolBytes, pairs[0].RxProtocolBytes)
+	}
+	var txPorts, rxPorts []database.PortStat
+	if err := json.Unmarshal([]byte(pairs[0].TxPorts), &txPorts); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(pairs[0].RxPorts), &rxPorts); err != nil {
+		t.Fatal(err)
+	}
+	if len(txPorts) != 1 || txPorts[0].Port != 443 || len(rxPorts) != 1 || rxPorts[0].Port != 53 {
+		t.Fatalf("directional cached ports = tx %+v rx %+v", txPorts, rxPorts)
 	}
 }
 

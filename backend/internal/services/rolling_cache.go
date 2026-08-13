@@ -68,6 +68,8 @@ func (c *RollingWindowCache) Update(
 		found := false
 		for i := range existing {
 			if existing[i].SrcNodeID == np.SrcNodeID && existing[i].DstNodeID == np.DstNodeID && existing[i].TrafficType == np.TrafficType {
+				existingDirectional := existing[i].DirectionalPorts
+				incomingDirectional := np.DirectionalPorts
 				existing[i].TxBytes += np.TxBytes
 				existing[i].RxBytes += np.RxBytes
 				existing[i].TxPkts += np.TxPkts
@@ -81,6 +83,20 @@ func (c *RollingWindowCache) Update(
 				)
 				existing[i].Protocols = protocolJSONFromBytes(existing[i].ProtocolBytes, existing[i].Protocols, np.Protocols)
 				existing[i].Ports = mergePortJSON(existing[i].Ports, np.Ports)
+				if existingDirectional && incomingDirectional {
+					existing[i].TxProtocolBytes = mergeDirectionalProtocolByteJSON(existing[i].TxProtocolBytes, np.TxProtocolBytes)
+					existing[i].RxProtocolBytes = mergeDirectionalProtocolByteJSON(existing[i].RxProtocolBytes, np.RxProtocolBytes)
+					existing[i].TxPorts = mergePortJSON(existing[i].TxPorts, np.TxPorts)
+					existing[i].RxPorts = mergePortJSON(existing[i].RxPorts, np.RxPorts)
+				} else {
+					// A legacy contribution has no reliable direction metadata. Keep
+					// the cache response on the legacy path for the whole pair.
+					existing[i].DirectionalPorts = false
+					existing[i].TxProtocolBytes = "{}"
+					existing[i].RxProtocolBytes = "{}"
+					existing[i].TxPorts = "[]"
+					existing[i].RxPorts = "[]"
+				}
 				found = true
 				break
 			}
@@ -305,7 +321,14 @@ func cacheWindowCovers(now time.Time, maxAge time.Duration, start, end time.Time
 	if start.Before(now.Add(-maxAge)) || end.After(now.Add(time.Minute)) {
 		return false
 	}
-	firstBucket := (start.Unix() / 60) * 60
+	// Getters use the exact Unix-second range (`bucket >= start.Unix()`), so a
+	// query beginning partway through a minute cannot be covered by the bucket
+	// that began before it. Start at the first bucket the getter can return.
+	startUnix := start.Unix()
+	firstBucket := (startUnix / 60) * 60
+	if firstBucket < startUnix {
+		firstBucket += 60
+	}
 	lastBucket := ((end.Unix() - 1) / 60) * 60
 	if lastBucket < firstBucket {
 		return false
@@ -395,6 +418,27 @@ func mergeProtocolByteJSON(existing, incoming, existingProtocols, incomingProtoc
 	}
 	add(existing, existingProtocols, existingTotal)
 	add(incoming, incomingProtocols, incomingTotal)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func mergeDirectionalProtocolByteJSON(existing, incoming string) string {
+	merged := make(map[int]int64)
+	for _, raw := range []string{existing, incoming} {
+		var values map[string]int64
+		if json.Unmarshal([]byte(raw), &values) != nil {
+			continue
+		}
+		for rawProtocol, bytes := range values {
+			var protocol int
+			if _, err := fmt.Sscanf(rawProtocol, "%d", &protocol); err == nil {
+				merged[protocol] += bytes
+			}
+		}
+	}
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return "{}"

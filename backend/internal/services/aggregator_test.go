@@ -46,6 +46,55 @@ func TestAggregateOrdersProtocolsByBytesAndPortsDeterministically(t *testing.T) 
 	}
 }
 
+func TestAggregatePreservesDirectionalProtocolAndPortOrientation(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	base := time.Now().UTC().Truncate(time.Minute)
+	logs := []database.FlowLog{
+		{LoggedAt: base.Add(5 * time.Second), SrcIP: "100.64.0.1", DstIP: "100.64.0.2", TrafficType: "virtual", Protocol: 6, DstPort: 443, TxBytes: 100},
+		{LoggedAt: base.Add(10 * time.Second), SrcIP: "100.64.0.2", DstIP: "100.64.0.1", TrafficType: "virtual", Protocol: 17, DstPort: 53, TxBytes: 40},
+	}
+
+	pairs, _, _, _ := poller.aggregate(logs)
+	if len(pairs) != 1 {
+		t.Fatalf("expected one normalized pair, got %d", len(pairs))
+	}
+	pair := pairs[0]
+	if pair.SrcNodeID != "100.64.0.1" || pair.DstNodeID != "100.64.0.2" {
+		t.Fatalf("normalized pair = %s -> %s", pair.SrcNodeID, pair.DstNodeID)
+	}
+	if pair.TxBytes != 100 || pair.RxBytes != 40 || !pair.DirectionalPorts {
+		t.Fatalf("directional totals = %+v", pair)
+	}
+
+	var txProtocols, rxProtocols map[string]int64
+	if err := json.Unmarshal([]byte(pair.TxProtocolBytes), &txProtocols); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(pair.RxProtocolBytes), &rxProtocols); err != nil {
+		t.Fatal(err)
+	}
+	if txProtocols["6"] != 100 || len(txProtocols) != 1 {
+		t.Fatalf("forward protocols = %+v", txProtocols)
+	}
+	if rxProtocols["17"] != 40 || len(rxProtocols) != 1 {
+		t.Fatalf("reverse protocols = %+v", rxProtocols)
+	}
+
+	var txPorts, rxPorts []database.PortStat
+	if err := json.Unmarshal([]byte(pair.TxPorts), &txPorts); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(pair.RxPorts), &rxPorts); err != nil {
+		t.Fatal(err)
+	}
+	if len(txPorts) != 1 || txPorts[0].Port != 443 || txPorts[0].Proto != 6 {
+		t.Fatalf("forward ports = %+v", txPorts)
+	}
+	if len(rxPorts) != 1 || rxPorts[0].Port != 53 || rxPorts[0].Proto != 17 {
+		t.Fatalf("reverse ports = %+v", rxPorts)
+	}
+}
+
 func TestAggregateCapsTopPortsAtTwenty(t *testing.T) {
 	poller := NewPoller(nil, nil, DefaultPollerConfig())
 	base := time.Now().UTC().Truncate(time.Minute)

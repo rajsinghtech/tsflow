@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import type { Device, NetworkLog, NetworkNode, NetworkLink } from '$lib/types';
+import type { Device, NetworkLog, NetworkNode, NetworkLink, PortStat, TrafficEntry } from '$lib/types';
 import { tailscaleService, type AggregatedFlow } from '$lib/services';
 import { processNetworkLogs } from '$lib/utils/network-processor';
 import { filterStore, debouncedFilterStore } from './filter-store';
@@ -333,6 +333,72 @@ function formatSyntheticDeviceName(id: string, displayName?: string): string {
 	return raw;
 }
 
+function normalizeProtocolBytes(protocolBytes: Record<string, number> | undefined, fallbackProtocol: number, fallbackBytes: number) {
+	const normalized: Record<string, number> = {};
+	for (const [rawProtocol, bytes] of Object.entries(protocolBytes || {})) {
+		const protocol = Number(rawProtocol);
+		if (!Number.isInteger(protocol) || protocol < 0 || !Number.isFinite(bytes)) continue;
+		normalized[String(protocol)] = bytes;
+	}
+	if (Object.keys(normalized).length === 0 && fallbackBytes > 0) {
+		normalized[String(fallbackProtocol || 0)] = fallbackBytes;
+	}
+	return normalized;
+}
+
+function dominantProtocol(protocolBytes: Record<string, number>, fallbackProtocol: number): number {
+	let dominant = fallbackProtocol || 0;
+	let dominantBytes = -1;
+	for (const [rawProtocol, bytes] of Object.entries(protocolBytes)) {
+		const protocol = Number(rawProtocol);
+		if (!Number.isInteger(protocol) || !Number.isFinite(bytes)) continue;
+		if (bytes > dominantBytes || (bytes === dominantBytes && protocol < dominant)) {
+			dominant = protocol;
+			dominantBytes = bytes;
+		}
+	}
+	return dominant;
+}
+
+function mergePortStats(...lists: (PortStat[] | undefined)[]): PortStat[] {
+	const merged = new Map<string, PortStat>();
+	for (const list of lists) {
+		for (const stat of list || []) {
+			if (stat.port <= 0) continue;
+			const key = `${stat.proto}:${stat.port}`;
+			const existing = merged.get(key);
+			if (existing) existing.bytes += stat.bytes || 0;
+			else merged.set(key, { ...stat });
+		}
+	}
+	return Array.from(merged.values());
+}
+
+function makeAggregateTrafficEntry(
+	src: string,
+	dst: string,
+	bytes: number,
+	packets: number,
+	protocolBytes: Record<string, number>,
+	ports: PortStat[],
+	directional: boolean
+): TrafficEntry {
+	const entry: TrafficEntry = {
+		proto: dominantProtocol(protocolBytes, 0),
+		src,
+		dst,
+		txBytes: bytes,
+		rxBytes: 0,
+		txPkts: packets,
+		rxPkts: 0,
+		ports
+	};
+	if (directional) {
+		entry.directional = { protocolBytes, ports };
+	}
+	return entry;
+}
+
 // Manual retry with reset backoff
 export function retryLoadNetworkData() {
 	clearRetryState();
@@ -388,7 +454,7 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 	}
 
 	for (const flow of flows) {
-		const proto = flow.protocol || 0;
+		const directional = flow.directional === true;
 		if (flow.srcNodeId === flow.dstNodeId) {
 			// A self-pair is represented by one graph endpoint. Collapse both
 			// normalized directions into one TX-only entry so the graph does not
@@ -396,15 +462,28 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 			const totalBytes = (flow.totalTxBytes || 0) + (flow.totalRxBytes || 0);
 			if (totalBytes > 0) {
 				const selfLog = getOrCreateLog(flow.srcNodeId);
+				const protocolBytes = directional
+					? normalizeProtocolBytes(flow.txProtocolBytes, flow.protocol || 0, flow.totalTxBytes || 0)
+					: normalizeProtocolBytes(undefined, flow.protocol || 0, totalBytes);
+				if (directional) {
+					const reverseProtocolBytes = normalizeProtocolBytes(flow.rxProtocolBytes, flow.protocol || 0, flow.totalRxBytes || 0);
+					for (const [protocol, bytes] of Object.entries(reverseProtocolBytes)) {
+						protocolBytes[protocol] = (protocolBytes[protocol] || 0) + bytes;
+					}
+				}
+				const ports = directional
+					? mergePortStats(flow.txPorts, flow.rxPorts)
+					: flow.ports || [];
 				pushTraffic(selfLog, flow.trafficType, {
-					proto,
-					src: flow.srcNodeId,
-					dst: flow.dstNodeId,
-					txBytes: totalBytes,
-					rxBytes: 0,
-					txPkts: (flow.totalTxPkts || 0) + (flow.totalRxPkts || 0),
-					rxPkts: 0,
-					ports: flow.ports || []
+					...makeAggregateTrafficEntry(
+						flow.srcNodeId,
+						flow.dstNodeId,
+						totalBytes,
+						(flow.totalTxPkts || 0) + (flow.totalRxPkts || 0),
+						protocolBytes,
+						ports,
+						directional
+					)
 				});
 			}
 			continue;
@@ -413,34 +492,41 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 		// Forward direction: src sent txBytes to dst
 		if (flow.totalTxBytes > 0) {
 			const fwdLog = getOrCreateLog(flow.srcNodeId);
-			pushTraffic(fwdLog, flow.trafficType, {
-				proto,
-					src: flow.srcNodeId,
-					dst: flow.dstNodeId,
-					txBytes: flow.totalTxBytes,
-					rxBytes: 0,
-					txPkts: flow.totalTxPkts || 0,
-					rxPkts: 0,
-					ports: flow.ports || []
-			});
+			const protocolBytes = normalizeProtocolBytes(flow.txProtocolBytes, flow.protocol || 0, flow.totalTxBytes);
+			const ports = directional ? flow.txPorts || [] : flow.ports || [];
+			pushTraffic(
+				fwdLog,
+				flow.trafficType,
+				makeAggregateTrafficEntry(
+					flow.srcNodeId,
+					flow.dstNodeId,
+					flow.totalTxBytes,
+					flow.totalTxPkts || 0,
+					protocolBytes,
+					ports,
+					directional
+				)
+			);
 		}
 
 		// Reverse direction: dst sent rxBytes back to src
 		if (flow.totalRxBytes > 0) {
 			const revLog = getOrCreateLog(flow.dstNodeId);
-			pushTraffic(revLog, flow.trafficType, {
-				proto,
-				src: flow.dstNodeId,
-				dst: flow.srcNodeId,
-				txBytes: flow.totalRxBytes,
-				rxBytes: 0,
-				txPkts: flow.totalRxPkts || 0,
-				rxPkts: 0,
-				// Aggregated historical ports are not directional. Keep them on the
-				// forward entry only; copying the same list here falsely attributes
-				// destination/service ports to the reverse endpoint.
-				ports: []
-			});
+			const protocolBytes = normalizeProtocolBytes(flow.rxProtocolBytes, flow.protocol || 0, flow.totalRxBytes);
+			const ports = directional ? flow.rxPorts || [] : [];
+			pushTraffic(
+				revLog,
+				flow.trafficType,
+				makeAggregateTrafficEntry(
+					flow.dstNodeId,
+					flow.srcNodeId,
+					flow.totalRxBytes,
+					flow.totalRxPkts || 0,
+					protocolBytes,
+					ports,
+					directional
+				)
+			);
 		}
 	}
 

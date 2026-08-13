@@ -34,8 +34,12 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		port  int
 	}
 	type pairProtoData struct {
-		protocols map[int]int64          // proto number -> total bytes
-		ports     map[protoPortKey]int64 // (proto, port) -> total bytes
+		protocols   map[int]int64          // proto number -> total bytes
+		ports       map[protoPortKey]int64 // (proto, port) -> total bytes
+		txProtocols map[int]int64          // nodeA -> nodeB
+		rxProtocols map[int]int64          // nodeB -> nodeA
+		txPorts     map[protoPortKey]int64 // nodeA -> nodeB
+		rxPorts     map[protoPortKey]int64 // nodeB -> nodeA
 	}
 	pairProtoMap := make(map[nodePairKey]*pairProtoData)
 
@@ -134,14 +138,29 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		ppData, ok := pairProtoMap[npKey]
 		if !ok {
 			ppData = &pairProtoData{
-				protocols: make(map[int]int64),
-				ports:     make(map[protoPortKey]int64),
+				protocols:   make(map[int]int64),
+				ports:       make(map[protoPortKey]int64),
+				txProtocols: make(map[int]int64),
+				rxProtocols: make(map[int]int64),
+				txPorts:     make(map[protoPortKey]int64),
+				rxPorts:     make(map[protoPortKey]int64),
 			}
 			pairProtoMap[npKey] = ppData
 		}
 		ppData.protocols[log.Protocol] += log.TxBytes
+		if isReverse {
+			ppData.rxProtocols[log.Protocol] += log.TxBytes
+		} else {
+			ppData.txProtocols[log.Protocol] += log.TxBytes
+		}
 		if log.DstPort > 0 {
-			ppData.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
+			portKey := protoPortKey{proto: log.Protocol, port: log.DstPort}
+			ppData.ports[portKey] += log.TxBytes
+			if isReverse {
+				ppData.rxPorts[portKey] += log.TxBytes
+			} else {
+				ppData.txPorts[portKey] += log.TxBytes
+			}
 		}
 
 		// Accumulate network-wide traffic stats
@@ -245,6 +264,12 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			if b, err := json.Marshal(ppData.protocols); err == nil {
 				agg.ProtocolBytes = string(b)
 			}
+			if b, err := json.Marshal(ppData.txProtocols); err == nil {
+				agg.TxProtocolBytes = string(b)
+			}
+			if b, err := json.Marshal(ppData.rxProtocols); err == nil {
+				agg.RxProtocolBytes = string(b)
+			}
 
 			// Ports: top 20 by bytes as [{port, proto, bytes}, ...]
 			type portEntry struct {
@@ -271,6 +296,33 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			if b, err := json.Marshal(portEntries); err == nil {
 				agg.Ports = string(b)
 			}
+
+			serializeDirectionalPorts := func(entries map[protoPortKey]int64) string {
+				portEntries := make([]portEntry, 0, len(entries))
+				for ppk, bytes := range entries {
+					portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
+				}
+				sort.Slice(portEntries, func(i, j int) bool {
+					if portEntries[i].Bytes != portEntries[j].Bytes {
+						return portEntries[i].Bytes > portEntries[j].Bytes
+					}
+					if portEntries[i].Proto != portEntries[j].Proto {
+						return portEntries[i].Proto < portEntries[j].Proto
+					}
+					return portEntries[i].Port < portEntries[j].Port
+				})
+				if len(portEntries) > 20 {
+					portEntries = portEntries[:20]
+				}
+				encoded, err := json.Marshal(portEntries)
+				if err != nil {
+					return "[]"
+				}
+				return string(encoded)
+			}
+			agg.TxPorts = serializeDirectionalPorts(ppData.txPorts)
+			agg.RxPorts = serializeDirectionalPorts(ppData.rxPorts)
+			agg.DirectionalPorts = true
 		}
 	}
 

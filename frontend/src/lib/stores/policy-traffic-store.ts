@@ -279,42 +279,86 @@ export function matchPolicyRulesForEdge(
 	addEffectiveGroups(dstSelectors);
 
 	const matches: PolicyRuleMatch[] = [];
-	const trafficProto = edge.protocol; // 'tcp', 'udp', etc
-	const trafficPorts = edge.ports; // Set<number> of destination ports
+	const matchedPolicyEdges = new Set<string>();
+	const observedDirections = edge.directions?.length
+		? edge.directions
+		: [{ source: edge.source, target: edge.target, protocol: edge.protocol, ports: edge.ports }];
 
-	for (const pEdge of graph.edges) {
-		if (RELATION_TYPES.has(pEdge.type)) continue;
+	function selectorsForDirection(source: string, target: string) {
+		const sourceIsEdgeSource = source === edge.source && target === edge.target;
+		return {
+			sourceTags: sourceIsEdgeSource ? srcTags : dstTags,
+			sourceUser: sourceIsEdgeSource ? srcUser : dstUser,
+			sourceIps: sourceIsEdgeSource ? srcIps : dstIps,
+			targetTags: sourceIsEdgeSource ? dstTags : srcTags,
+			targetUser: sourceIsEdgeSource ? dstUser : srcUser,
+			targetIps: sourceIsEdgeSource ? dstIps : srcIps
+		};
+	}
 
-		if (!srcSelectors.has(pEdge.source) || !dstSelectors.has(pEdge.target)) continue;
-
-		const meta = pEdge.meta as AccessEdgeMeta | undefined;
-
-		if (pEdge.type === 'grant') {
-			// Grant rules use meta.ip for protocol:port specifiers
-			// ip: ["*"] = all traffic allowed
-			// ip: ["tcp:443", "tcp:8080"] = specific proto:port combos
-			if (meta?.ip?.length) {
-				const allowed = parseGrantIpSpecs(meta.ip);
-				if (!matchesProtoPort(trafficProto, trafficPorts, allowed)) continue;
-			}
-		} else if (pEdge.type === 'acl') {
-			// ACL rules: meta.proto for protocol, meta.ports for destination ports
-			// Check protocol match
-			if (meta?.proto && meta.proto !== '*' && trafficProto && meta.proto !== trafficProto) continue;
-			// Check port match
-			if (meta?.ports?.length && !meta.ports.includes('*') && !portsOverlap(meta.ports, trafficPorts)) continue;
-		} else if (pEdge.type === 'ssh') {
-			// SSH policy applies to TCP/22 only.
-			if (trafficProto !== 'tcp' || !trafficPorts.has(22)) continue;
+	function buildSelectors(tags: string[], user: string | undefined, ips: string[]) {
+		const selectors = new Set<string>([...tags, ...(user ? [user] : []), '*']);
+		for (const ip of ips) {
+			const ctx = devCtx.get(ip);
+			if (!ctx) continue;
+			for (const ag of ctx.autogroups) selectors.add(ag);
+			for (const g of ctx.groups) selectors.add(g);
 		}
+		addEffectiveGroups(selectors);
+		return selectors;
+	}
 
-		matches.push({
-			edgeType: pEdge.type,
-			source: pEdge.source,
-			target: pEdge.target,
-			meta,
-			ruleIndex: meta?.ruleRef?.index ?? -1
-		});
+	for (const direction of observedDirections) {
+		const directionSelectors = selectorsForDirection(direction.source, direction.target);
+		const directionSrcSelectors = buildSelectors(
+			directionSelectors.sourceTags,
+			directionSelectors.sourceUser,
+			directionSelectors.sourceIps || []
+		);
+		const directionDstSelectors = buildSelectors(
+			directionSelectors.targetTags,
+			directionSelectors.targetUser,
+			directionSelectors.targetIps || []
+		);
+		const trafficProto = direction.protocol;
+		const trafficPorts = direction.ports;
+
+		for (const pEdge of graph.edges) {
+			if (RELATION_TYPES.has(pEdge.type)) continue;
+
+			if (!directionSrcSelectors.has(pEdge.source) || !directionDstSelectors.has(pEdge.target)) continue;
+			if (matchedPolicyEdges.has(pEdge.id)) continue;
+
+			const meta = pEdge.meta as AccessEdgeMeta | undefined;
+
+			if (pEdge.type === 'grant') {
+				// Grant rules use meta.ip for protocol:port specifiers
+				// ip: ["*"] = all traffic allowed
+				// ip: ["tcp:443", "tcp:8080"] = specific proto:port combos
+				if (meta?.ip?.length) {
+					const allowed = parseGrantIpSpecs(meta.ip);
+					if (!matchesProtoPort(trafficProto, trafficPorts, allowed)) continue;
+				}
+			} else if (pEdge.type === 'acl') {
+				// ACL rules: meta.proto for protocol, meta.ports for destination ports
+				// Check protocol match
+				if (meta?.proto && meta.proto !== '*' && trafficProto && meta.proto !== trafficProto) continue;
+				// Check port match
+				if (meta?.ports?.length && !meta.ports.includes('*') && !portsOverlap(meta.ports, trafficPorts)) continue;
+			} else if (pEdge.type === 'ssh') {
+				// SSH policy applies to TCP/22 only.
+				if (trafficProto !== 'tcp' || !trafficPorts.has(22)) continue;
+			}
+
+			matchedPolicyEdges.add(pEdge.id);
+			matches.push({
+				edgeType: pEdge.type,
+				source: pEdge.source,
+				target: pEdge.target,
+				meta,
+				ruleIndex: meta?.ruleRef?.index ?? -1
+			});
+		}
 	}
 
 	return matches;

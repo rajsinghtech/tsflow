@@ -163,6 +163,47 @@ function resolveToNodeID(
 	return ip;
 }
 
+function addDirectionalObservation(
+	link: NetworkLink,
+	source: string,
+	target: string,
+	protocol: ReturnType<typeof getProtocolName>,
+	ports: Set<number>
+) {
+	if (!link.directions) link.directions = [];
+
+	const existing = link.directions.find(
+		(direction) =>
+			direction.source === source && direction.target === target && direction.protocol === protocol
+	);
+	if (existing) {
+		for (const port of ports) existing.ports.add(port);
+		return;
+	}
+
+	link.directions.push({ source, target, protocol, ports: new Set(ports) });
+}
+
+function addDirectionalTraffic(link: NetworkLink, traffic: NetworkLog['virtualTraffic'][number], source: string, target: string) {
+	const protocolNumbers = new Set<number>();
+	for (const rawProtocol of Object.keys(traffic.directional?.protocolBytes || {})) {
+		const protocol = Number(rawProtocol);
+		if (Number.isInteger(protocol) && protocol >= 0) protocolNumbers.add(protocol);
+	}
+	for (const port of traffic.directional?.ports || []) {
+		if (Number.isInteger(port.proto) && port.proto >= 0) protocolNumbers.add(port.proto);
+	}
+	if (protocolNumbers.size === 0) protocolNumbers.add(traffic.proto || 0);
+
+	for (const protocolNumber of protocolNumbers) {
+		const ports = new Set<number>();
+		for (const port of traffic.directional?.ports || []) {
+			if (port.port > 0 && port.proto === protocolNumber) ports.add(port.port);
+		}
+		addDirectionalObservation(link, source, target, getProtocolName(protocolNumber), ports);
+	}
+}
+
 // Process network logs to create nodes and links
 export function processNetworkLogs(
 	logs: NetworkLog[],
@@ -376,6 +417,9 @@ export function processNetworkLogs(
 			const link = linkMap.get(linkKey)!;
 			for (const port of traffic.ports || []) {
 				if (port.port > 0) link.ports.add(port.port);
+			}
+			if (traffic.directional) {
+				addDirectionalTraffic(link, traffic, srcNodeId, dstNodeId);
 			}
 			const isSrcFirst = srcNodeId === sortedIds[0];
 			if (isSrcFirst) {

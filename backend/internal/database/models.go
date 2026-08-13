@@ -23,6 +23,18 @@ type NodePairAggregate struct {
 	// aggregate response; callers receive the derived Protocol field instead.
 	ProtocolBytes string `json:"-"`
 	Ports         string `json:"ports"` // JSON array of top ports
+	// TxPorts and RxPorts preserve destination-port observations for each
+	// direction of the normalized pair. They are internal storage fields; the
+	// aggregated-flow handler exposes them only when DirectionalPorts is true.
+	TxPorts         string `json:"-"`
+	RxPorts         string `json:"-"`
+	TxProtocolBytes string `json:"-"`
+	RxProtocolBytes string `json:"-"`
+	// DirectionalPorts indicates that all metadata contributing to this
+	// aggregate has direction-preserving protocol/port information. It is
+	// intentionally false for legacy rows so callers can use the old union
+	// metadata without attributing it to the wrong direction.
+	DirectionalPorts bool `json:"-"`
 }
 
 // BandwidthBucket represents aggregated bandwidth for a time bucket

@@ -94,6 +94,42 @@ func TestPollerStartDoesNotWaitForDeviceRefresh(t *testing.T) {
 	poller.Stop()
 }
 
+func TestPollerS3OnlySkipsUnauthenticatedDeviceRefresh(t *testing.T) {
+	requests := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- struct{}{}
+		http.Error(w, "unexpected API request", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleTailnet: "example.com",
+	})
+	if service.HasCredentials() {
+		t.Fatal("service without API credentials reported usable credentials")
+	}
+
+	poller := NewPoller(service, nil, PollerConfig{
+		PollInterval:       time.Hour,
+		InitialBackfill:    time.Hour,
+		Retention:          0,
+		CleanupInterval:    time.Hour,
+		DeviceCacheRefresh: time.Hour,
+		FlowBackend:        "s3",
+	})
+	if err := poller.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	poller.Stop()
+
+	select {
+	case <-requests:
+		t.Fatal("S3-only poller attempted an unauthenticated device refresh")
+	default:
+	}
+}
+
 func TestPollerStartWithCanceledContextStopsCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

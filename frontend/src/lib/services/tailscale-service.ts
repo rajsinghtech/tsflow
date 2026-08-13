@@ -1,5 +1,5 @@
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '$lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '$lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];
@@ -28,7 +28,14 @@ export interface AggregatedFlow {
 	totalTxPkts: number;
 	totalRxPkts: number;
 	flowCount: number;
-	ports?: { port: number; proto: number; bytes: number }[];
+	ports?: PortStat[];
+	// Directional aggregate metadata. These fields are omitted by older
+	// backends/legacy rows and must not be inferred from the union ports field.
+	directional?: boolean;
+	txProtocolBytes?: Record<string, number>;
+	rxProtocolBytes?: Record<string, number>;
+	txPorts?: PortStat[];
+	rxPorts?: PortStat[];
 	// Legacy fields for backwards compatibility
 	nodeId?: string;
 	protocol?: number;
