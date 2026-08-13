@@ -139,6 +139,7 @@
 		if (!s) return [];
 		return [
 			{ label: 'Virtual', value: s.virtualBytes, color: 'var(--color-traffic-virtual)' },
+			{ label: 'Exit Node', value: s.exitBytes, color: 'var(--color-traffic-exit)' },
 			{ label: 'Subnet', value: s.subnetBytes, color: 'var(--color-traffic-subnet)' },
 			{ label: 'Physical', value: s.physicalBytes, color: 'var(--color-traffic-physical)' }
 		];
@@ -162,7 +163,7 @@
 		// Use protocol breakdown when available, otherwise fall back to traffic type totals
 		const protoTotal = $statsSummary.tcpBytes + $statsSummary.udpBytes + $statsSummary.otherProtoBytes;
 		if (protoTotal > 0) return protoTotal;
-		return $statsSummary.virtualBytes + $statsSummary.subnetBytes;
+		return $statsSummary.virtualBytes + $statsSummary.exitBytes + $statsSummary.subnetBytes + $statsSummary.physicalBytes;
 	});
 
 	const timeWindowLabel = $derived.by(() => {

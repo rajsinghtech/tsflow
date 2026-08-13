@@ -51,6 +51,7 @@
 		if (!selectedNode) return { stats: [], totalCount: 0 };
 
 		const nodeIPs = new Set(selectedNode.ips || []);
+		nodeIPs.add(selectedNode.id);
 		const portMap = new Map<string, PortStat>();
 
 		$rawLogs.forEach((log: NetworkLog) => {
@@ -71,26 +72,39 @@
 				const nodeIsSrc = nodeIPs.has(srcIP);
 				const nodeIsDst = nodeIPs.has(dstIP);
 				if (!nodeIsSrc && !nodeIsDst) return;
-				if (dstPort === 0) return;
 
-				const key = `${dstPort}-${proto}`;
-				const existing = portMap.get(key);
-				const txAdd = nodeIsSrc ? (t.txBytes || 0) : 0;
-				const rxAdd = nodeIsDst ? (t.txBytes || 0) : 0;
+				const addPort = (port: number, protocol: string, bytes: number) => {
+					if (port <= 0) return;
+					const key = `${port}-${protocol}`;
+					const existing = portMap.get(key);
+					const txAdd = nodeIsSrc ? bytes : 0;
+					// If both endpoints belong to the selected node, this is a self-flow;
+					// count it once as TX instead of also attributing it as RX.
+					const rxAdd = nodeIsDst && !nodeIsSrc ? bytes : 0;
 
-				if (existing) {
-					existing.txBytes += txAdd;
-					existing.rxBytes += rxAdd;
-					existing.connections += 1;
+					if (existing) {
+						existing.txBytes += txAdd;
+						existing.rxBytes += rxAdd;
+						existing.connections += 1;
+					} else {
+						portMap.set(key, {
+							port,
+							name: getPortName(port),
+							protocol,
+							txBytes: txAdd,
+							rxBytes: rxAdd,
+							connections: 1
+						});
+					}
+				};
+
+				if (t.ports?.length) {
+					for (const stat of t.ports) {
+						addPort(stat.port, getProtocolName(stat.proto), stat.bytes || 0);
+					}
 				} else {
-					portMap.set(key, {
-						port: dstPort,
-						name: getPortName(dstPort),
-						protocol: proto,
-						txBytes: txAdd,
-						rxBytes: rxAdd,
-						connections: 1
-					});
+					if (dstPort === 0) return;
+					addPort(dstPort, proto, t.txBytes || 0);
 				}
 			});
 		});
@@ -111,6 +125,7 @@
 		if (!selectedNode) return { tx: 0, rx: 0, total: 0 };
 
 		const nodeIPs = new Set(selectedNode.ips || []);
+		nodeIPs.add(selectedNode.id);
 		let tx = 0;
 		let rx = 0;
 

@@ -26,6 +26,17 @@ export interface TrafficEntry {
 	txBytes: number;
 	rxPkts?: number;
 	rxBytes?: number;
+	// Aggregated historical flows may carry destination port totals directly
+	// because they no longer contain one raw event per port.
+	ports?: PortStat[];
+	// Directional aggregate metadata is present only for aggregate flows whose
+	// protocol and destination-port observations were preserved by direction.
+	directional?: DirectionalTrafficMetadata;
+}
+
+export interface DirectionalTrafficMetadata {
+	protocolBytes?: Record<string, number>;
+	ports?: PortStat[];
 }
 
 export interface NetworkLog {
@@ -77,6 +88,16 @@ export interface NetworkLink {
 	protocol: Protocol;
 	trafficType: TrafficType;
 	ports: Set<number>;
+	// Historical aggregate flows may retain separate observations for each
+	// direction. Legacy/live entries leave this unset and use the fields above.
+	directions?: NetworkLinkDirection[];
+}
+
+export interface NetworkLinkDirection {
+	source: string;
+	target: string;
+	protocol: Protocol;
+	ports: Set<number>;
 }
 
 // Filter types
@@ -116,6 +137,7 @@ export interface TrafficStatsBucket {
 	udpBytes: number;
 	otherProtoBytes: number;
 	virtualBytes: number;
+	exitBytes: number;
 	subnetBytes: number;
 	physicalBytes: number;
 	totalFlows: number;
@@ -128,6 +150,7 @@ export interface TrafficStatsSummary {
 	udpBytes: number;
 	otherProtoBytes: number;
 	virtualBytes: number;
+	exitBytes: number;
 	subnetBytes: number;
 	physicalBytes: number;
 	totalFlows: number;

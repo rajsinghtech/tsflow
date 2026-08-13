@@ -26,13 +26,17 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	var buckets []database.TrafficStats
 	source := "database"
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	// Try rolling cache first for recent data
 	duration := endTime.Sub(startTime)
 	if h.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
-		if cache.HasDataFor(startTime, endTime) {
+		if cache.HasTrafficStatsDataFor(startTime, endTime) {
 			buckets = cache.GetTrafficStats(startTime, endTime)
 			source = "cache"
 		}
@@ -49,6 +53,9 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			buckets, err = h.store.GetTrafficStats(ctx, startTime, endTime)
 		}
 		if err != nil {
+			if writeContextError(c, err) {
+				return
+			}
 			log.Printf("ERROR GetStatsOverview: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to fetch traffic stats",
@@ -57,26 +64,38 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 		source = "database"
 
-		// Fallback: synthesize from node_pairs when traffic_stats tables are empty
-		if len(buckets) == 0 && len(trafficTypes) == 0 {
-			buckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
+		// Merge derived buckets for unfiltered requests so node_pairs can fill
+		// gaps in traffic_stats without replacing its authoritative values.
+		if len(trafficTypes) == 0 {
+			var derivedBuckets []database.TrafficStats
+			derivedBuckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
 			if err != nil {
-				log.Printf("ERROR GetStatsOverview (fallback): %v", err)
-			} else {
+				if writeContextError(c, err) {
+					return
+				}
+				log.Printf("ERROR GetStatsOverview (derived): %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Failed to fetch supplemental traffic stats",
+				})
+				return
+			}
+			if len(buckets) == 0 {
 				source = "database (derived)"
 			}
+			buckets = mergeTrafficStatsBuckets(buckets, derivedBuckets)
 		}
 	}
 
 	// Aggregate buckets into summary
 	var tcpBytes, udpBytes, otherProtoBytes int64
-	var virtualBytes, subnetBytes, physicalBytes int64
+	var virtualBytes, exitBytes, subnetBytes, physicalBytes int64
 	var totalFlows, maxUniquePairs int64
 	for _, b := range buckets {
 		tcpBytes += b.TCPBytes
 		udpBytes += b.UDPBytes
 		otherProtoBytes += b.OtherProtoBytes
 		virtualBytes += b.VirtualBytes
+		exitBytes += b.ExitBytes
 		subnetBytes += b.SubnetBytes
 		physicalBytes += b.PhysicalBytes
 		totalFlows += b.TotalFlows
@@ -91,6 +110,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"udpBytes":        udpBytes,
 			"otherProtoBytes": otherProtoBytes,
 			"virtualBytes":    virtualBytes,
+			"exitBytes":       exitBytes,
 			"subnetBytes":     subnetBytes,
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,
@@ -107,6 +127,33 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 	})
 }
 
+// mergeTrafficStatsBuckets adds derived buckets that are absent from the
+// primary traffic_stats result. Primary buckets always win on overlap.
+func mergeTrafficStatsBuckets(primary, derived []database.TrafficStats) []database.TrafficStats {
+	if len(primary) == 0 && len(derived) == 0 {
+		return nil
+	}
+
+	byBucket := make(map[int64]database.TrafficStats, len(primary)+len(derived))
+	for _, bucket := range primary {
+		byBucket[bucket.Bucket] = bucket
+	}
+	for _, bucket := range derived {
+		if _, exists := byBucket[bucket.Bucket]; !exists {
+			byBucket[bucket.Bucket] = bucket
+		}
+	}
+
+	merged := make([]database.TrafficStats, 0, len(byBucket))
+	for _, bucket := range byBucket {
+		merged = append(merged, bucket)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Bucket < merged[j].Bucket
+	})
+	return merged
+}
+
 // GetTopTalkers returns the top N nodes by total traffic
 func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	if h.store == nil {
@@ -121,7 +168,11 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
@@ -134,6 +185,9 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		talkers, err = h.store.GetTopTalkers(ctx, startTime, endTime, limit*10)
 	}
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetTopTalkers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch top talkers",
@@ -186,7 +240,11 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 
 	// Sort by totalBytes descending and cap to requested limit
 	sort.Slice(enriched, func(i, j int) bool {
-		return enriched[i]["totalBytes"].(int64) > enriched[j]["totalBytes"].(int64)
+		left, right := enriched[i]["totalBytes"].(int64), enriched[j]["totalBytes"].(int64)
+		if left != right {
+			return left > right
+		}
+		return enriched[i]["nodeId"].(string) < enriched[j]["nodeId"].(string)
 	})
 	if len(enriched) > limit {
 		enriched = enriched[:limit]
@@ -218,7 +276,11 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
@@ -231,6 +293,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		pairs, err = h.store.GetTopPairs(ctx, startTime, endTime, limit*10)
 	}
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetTopPairs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch top pairs",
@@ -301,7 +366,14 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 
 	// Sort by totalBytes descending and cap to requested limit
 	sort.Slice(enriched, func(i, j int) bool {
-		return enriched[i]["totalBytes"].(int64) > enriched[j]["totalBytes"].(int64)
+		left, right := enriched[i]["totalBytes"].(int64), enriched[j]["totalBytes"].(int64)
+		if left != right {
+			return left > right
+		}
+		if enriched[i]["srcNodeId"].(string) != enriched[j]["srcNodeId"].(string) {
+			return enriched[i]["srcNodeId"].(string) < enriched[j]["srcNodeId"].(string)
+		}
+		return enriched[i]["dstNodeId"].(string) < enriched[j]["dstNodeId"].(string)
 	})
 	if len(enriched) > limit {
 		enriched = enriched[:limit]
@@ -343,6 +415,9 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 
 	stats, err := h.store.GetNodeStats(ctx, nodeID, startTime, endTime)
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetNodeDetailStats: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch node stats",

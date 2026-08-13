@@ -86,7 +86,7 @@ export async function loadStats(currentAttempt = 0) {
 
 	try {
 		if (get(dataSourceStore).followLatest) {
-			await dataSourceStore.fetchDataRange();
+			await dataSourceStore.fetchDataRange(signal);
 			if (signal.aborted) return;
 		}
 		const { start, end } = get(queryTimeWindow);
@@ -99,6 +99,7 @@ export async function loadStats(currentAttempt = 0) {
 					udpBytes: 0,
 					otherProtoBytes: 0,
 					virtualBytes: 0,
+					exitBytes: 0,
 					subnetBytes: 0,
 					physicalBytes: 0,
 					totalFlows: 0,
@@ -173,6 +174,11 @@ export function stopStatsRefresh() {
 		clearInterval(refreshTimer);
 		refreshTimer = null;
 	}
+	if (statsController) {
+		statsController.abort();
+		statsController = null;
+	}
+	clearStatsRetryState();
 }
 
 export const statsSummary = derived(statsState, ($s) => $s.summary);
@@ -202,7 +208,7 @@ export const topPorts = derived(statsState, ($s): PortStat[] => {
 		}
 	}
 	return Array.from(portMap.values())
-		.sort((a, b) => b.bytes - a.bytes)
+		.sort((a, b) => b.bytes - a.bytes || a.proto - b.proto || a.port - b.port)
 		.slice(0, 15);
 });
 

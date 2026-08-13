@@ -1,8 +1,13 @@
 import { writable, derived, get } from 'svelte/store';
 import { policyGraph, tailnetUsers } from './policy-store';
 import { filteredEdges, filteredNodes, devices } from './network-store';
-import type { PolicyGraph, GraphEdge, AccessEdgeMeta } from '$lib/policy-engine/types';
+import type { PolicyGraph, GraphEdge } from '$lib/policy-engine/types';
 import type { NetworkLink, NetworkNode } from '$lib/types';
+import {
+	matchPolicyRulesForEdge as matchPolicyRulesForEdgePure,
+	type PolicyRuleMatch
+} from './policy-traffic-matcher';
+export type { PolicyRuleMatch } from './policy-traffic-matcher';
 
 // --- View Mode ---
 
@@ -10,14 +15,6 @@ export type ViewMode = 'traffic' | 'combined';
 export const viewMode = writable<ViewMode>('traffic');
 
 const RELATION_TYPES = new Set(['member-of', 'owns-tag', 'contains', 'resolves-to']);
-
-export interface PolicyRuleMatch {
-	edgeType: string;
-	source: string;
-	target: string;
-	meta?: AccessEdgeMeta;
-	ruleIndex: number;
-}
 
 // --- Policy context for nodes ---
 // Builds a complete picture of each entity's policy associations
@@ -146,67 +143,6 @@ export const devicePolicyContext = derived(
 // Backward compat — expose the simple group map for NetworkNode badges
 export const policyGroupMap = derived(policyRelations, ($rels) => $rels.memberOf);
 
-// --- Port/Protocol matching helpers ---
-
-interface ProtoPort {
-	proto?: string; // 'tcp', 'udp', or undefined for any
-	port?: number; // specific port, or undefined for any
-	portEnd?: number; // end of range if range specified
-}
-
-// Parse grant "ip" field specifiers like ["tcp:443", "udp:53", "*"]
-function parseGrantIpSpecs(ipSpecs: string[]): ProtoPort[] {
-	return ipSpecs.map((spec) => {
-		if (spec === '*') return {};
-		const colonIdx = spec.indexOf(':');
-		if (colonIdx === -1) return { proto: spec };
-		const proto = spec.slice(0, colonIdx).toLowerCase();
-		const portStr = spec.slice(colonIdx + 1);
-		if (portStr === '*') return { proto };
-		const dashIdx = portStr.indexOf('-');
-		if (dashIdx !== -1) {
-			return { proto, port: parseInt(portStr.slice(0, dashIdx)), portEnd: parseInt(portStr.slice(dashIdx + 1)) };
-		}
-		return { proto, port: parseInt(portStr) };
-	});
-}
-
-// Check if traffic proto:port matches any of the allowed specs
-function matchesProtoPort(trafficProto: string, trafficPorts: Set<number>, allowed: ProtoPort[]): boolean {
-	for (const spec of allowed) {
-		if (!spec.proto && !spec.port) return true; // wildcard
-		if (spec.proto && spec.proto !== trafficProto) continue;
-		if (!spec.port) return true; // proto match, any port
-		for (const tp of trafficPorts) {
-			if (spec.portEnd) {
-				if (tp >= spec.port && tp <= spec.portEnd) return true;
-			} else if (tp === spec.port) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-// Check if any ACL port spec overlaps with traffic ports
-// ACL ports are strings like "22", "443", "1024-65535", "*"
-function portsOverlap(rulePorts: string[], trafficPorts: Set<number>): boolean {
-	for (const rp of rulePorts) {
-		if (rp === '*') return true;
-		const dashIdx = rp.indexOf('-');
-		if (dashIdx !== -1) {
-			const start = parseInt(rp.slice(0, dashIdx));
-			const end = parseInt(rp.slice(dashIdx + 1));
-			for (const tp of trafficPorts) {
-				if (tp >= start && tp <= end) return true;
-			}
-		} else {
-			if (trafficPorts.has(parseInt(rp))) return true;
-		}
-	}
-	return false;
-}
-
 // Match a traffic edge against policy rules
 // Uses tag/user selectors from the traffic nodes rather than IP matching
 export function matchPolicyRulesForEdge(
@@ -218,93 +154,20 @@ export function matchPolicyRulesForEdge(
 	srcIps?: string[],
 	dstIps?: string[]
 ): PolicyRuleMatch[] {
-	const graph = get(policyGraph);
-	if (!graph) return [];
-
-	const srcSelectors = new Set<string>([
-		...srcTags,
-		...(srcUser ? [srcUser] : []),
-		'*'
-	]);
-	const dstSelectors = new Set<string>([
-		...dstTags,
-		...(dstUser ? [dstUser] : []),
-		'*'
-	]);
-
-	// Add groups that these selectors belong to
-	const groupMap = get(policyGroupMap);
-	for (const sel of [...srcSelectors]) {
-		for (const group of groupMap.get(sel) ?? []) {
-			srcSelectors.add(group);
-		}
-	}
-	for (const sel of [...dstSelectors]) {
-		for (const group of groupMap.get(sel) ?? []) {
-			dstSelectors.add(group);
-		}
-	}
-
-	// Add autogroups from device context
-	const devCtx = get(devicePolicyContext);
-	for (const ip of srcIps ?? []) {
-		const ctx = devCtx.get(ip);
-		if (ctx) {
-			for (const ag of ctx.autogroups) srcSelectors.add(ag);
-			for (const g of ctx.groups) srcSelectors.add(g);
-		}
-	}
-	for (const ip of dstIps ?? []) {
-		const ctx = devCtx.get(ip);
-		if (ctx) {
-			for (const ag of ctx.autogroups) dstSelectors.add(ag);
-			for (const g of ctx.groups) dstSelectors.add(g);
-		}
-	}
-
-	const matches: PolicyRuleMatch[] = [];
-	const trafficProto = edge.protocol; // 'tcp', 'udp', etc
-	const trafficPorts = edge.ports; // Set<number> of destination ports
-
-	for (const pEdge of graph.edges) {
-		if (RELATION_TYPES.has(pEdge.type)) continue;
-
-		if (!srcSelectors.has(pEdge.source) || !dstSelectors.has(pEdge.target)) continue;
-
-		const meta = pEdge.meta as AccessEdgeMeta | undefined;
-
-		if (pEdge.type === 'grant') {
-			// Grant rules use meta.ip for protocol:port specifiers
-			// ip: ["*"] = all traffic allowed
-			// ip: ["tcp:443", "tcp:8080"] = specific proto:port combos
-			if (meta?.ip?.length) {
-				const hasWildcard = meta.ip.includes('*');
-				if (!hasWildcard && trafficPorts.size > 0) {
-					const allowed = parseGrantIpSpecs(meta.ip);
-					if (!matchesProtoPort(trafficProto, trafficPorts, allowed)) continue;
-				}
-			}
-		} else if (pEdge.type === 'acl') {
-			// ACL rules: meta.proto for protocol, meta.ports for destination ports
-			// Check protocol match
-			if (meta?.proto && trafficProto && meta.proto !== trafficProto) continue;
-			// Check port match
-			if (meta?.ports?.length && trafficPorts.size > 0) {
-				if (!meta.ports.includes('*') && !portsOverlap(meta.ports, trafficPorts)) continue;
-			}
-		}
-		// SSH rules: always match on port 22 implicitly, no port check needed
-
-		matches.push({
-			edgeType: pEdge.type,
-			source: pEdge.source,
-			target: pEdge.target,
-			meta,
-			ruleIndex: meta?.ruleRef?.index ?? -1
-		});
-	}
-
-	return matches;
+	return matchPolicyRulesForEdgePure(
+		edge,
+		{
+			graph: get(policyGraph),
+			groupMap: get(policyGroupMap),
+			deviceContext: get(devicePolicyContext)
+		},
+		srcTags,
+		srcUser,
+		dstTags,
+		dstUser,
+		srcIps,
+		dstIps
+	);
 }
 
 // --- Combined Mode: Policy overlay edges for the traffic graph ---
@@ -328,6 +191,21 @@ function buildSelectorToNodeIds(
 ): Map<string, Set<string>> {
 	const map = new Map<string, Set<string>>();
 
+	function effectiveGroups(member: string): Set<string> {
+		const groups = new Set<string>();
+		const pending = [member];
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			for (const group of groupMap.get(current) ?? []) {
+				if (!groups.has(group)) {
+					groups.add(group);
+					pending.push(group);
+				}
+			}
+		}
+		return groups;
+	}
+
 	function addMapping(selector: string, nodeId: string) {
 		const set = map.get(selector) ?? new Set();
 		set.add(nodeId);
@@ -347,13 +225,13 @@ function buildSelectorToNodeIds(
 		addMapping('*', node.id);
 		// Groups (via user membership)
 		if (node.user) {
-			for (const group of groupMap.get(node.user) ?? []) {
+			for (const group of effectiveGroups(node.user)) {
 				addMapping(group, node.id);
 			}
 		}
 		// Groups (via tag membership)
 		for (const tag of node.tags ?? []) {
-			for (const group of groupMap.get(tag) ?? []) {
+			for (const group of effectiveGroups(tag)) {
 				addMapping(group, node.id);
 			}
 		}
@@ -366,6 +244,9 @@ function buildSelectorToNodeIds(
 			}
 			for (const g of ctx.groups) {
 				addMapping(g, node.id);
+				for (const group of effectiveGroups(g)) {
+					addMapping(group, node.id);
+				}
 			}
 		}
 	}

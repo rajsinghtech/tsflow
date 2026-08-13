@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { rawLogs, uiStore, filteredNodes, filteredEdges, processedNetwork, filterStore, debouncedFilterStore, devices, services, primaryMatchedNodes } from '$lib/stores';
-	import { formatBytes, formatTime, extractIP, getProtocolName } from '$lib/utils';
+	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName } from '$lib/utils';
 	import { ArrowRight, ArrowUpDown } from 'lucide-svelte';
 	import type { NetworkLog, TrafficType } from '$lib/types';
 
@@ -78,8 +78,8 @@
 	// Helper to resolve IP or device ID to device/service name
 	function resolveIP(address: string): { ip: string; port?: string; deviceName?: string } {
 		const ip = extractIP(address);
-		const portMatch = address.match(/:(\d+)$/);
-		const port = portMatch ? portMatch[1] : undefined;
+		const parsedPort = extractPort(address);
+		const port = parsedPort === null ? undefined : String(parsedPort);
 		let deviceName = ipToDevice.get(ip);
 		if (!deviceName) {
 			deviceName = deviceIdToName.get(ip);
@@ -131,6 +131,7 @@
 			const selectedNode = $filteredNodes.find((n) => n.id === selectedNodeId);
 			if (selectedNode) {
 				selectedNodeIPs = new Set(selectedNode.ips);
+				selectedNodeIPs.add(selectedNode.id);
 			}
 		}
 
@@ -198,6 +199,7 @@
 			const selectedNode = $filteredNodes.find((n) => n.id === selectedNodeId);
 			if (selectedNode) {
 				selectedNodeIPsSet = new Set(selectedNode.ips);
+				selectedNodeIPsSet.add(selectedNode.id);
 			}
 		}
 

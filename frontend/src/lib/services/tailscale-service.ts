@@ -1,5 +1,5 @@
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '$lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '$lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];
@@ -16,36 +16,6 @@ export interface DataRange {
 	count: number;
 }
 
-export interface StoredFlowLog {
-	id: number;
-	loggedAt: string;
-	nodeId: string;
-	periodStart: string;
-	periodEnd: string;
-	trafficType: string;
-	protocol: number;
-	srcIp: string;
-	srcPort: number;
-	dstIp: string;
-	dstPort: number;
-	txBytes: number;
-	rxBytes: number;
-	txPkts: number;
-	rxPkts: number;
-	createdAt: string;
-}
-
-export interface StoredFlowLogsResponse {
-	logs: StoredFlowLog[];
-	metadata: {
-		count: number;
-		start: string;
-		end: string;
-		limit: number;
-		source: string;
-	};
-}
-
 export interface AggregatedFlow {
 	// Node pair aggregates (device IDs or IPs for external nodes)
 	srcNodeId: string;
@@ -58,6 +28,14 @@ export interface AggregatedFlow {
 	totalTxPkts: number;
 	totalRxPkts: number;
 	flowCount: number;
+	ports?: PortStat[];
+	// Directional aggregate metadata. These fields are omitted by older
+	// backends/legacy rows and must not be inferred from the union ports field.
+	directional?: boolean;
+	txProtocolBytes?: Record<string, number>;
+	rxProtocolBytes?: Record<string, number>;
+	txPorts?: PortStat[];
+	rxPorts?: PortStat[];
 	// Legacy fields for backwards compatibility
 	nodeId?: string;
 	protocol?: number;
@@ -136,14 +114,6 @@ export const tailscaleService = {
 		return api.get<ServicesResponse>('/services-records', { signal });
 	},
 
-	async getStoredFlowLogs(start: Date, end: Date, limit = 50000, signal?: AbortSignal): Promise<StoredFlowLogsResponse> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		return api.get<StoredFlowLogsResponse>(
-			`/flow-logs?start=${startISO}&end=${endISO}&limit=${limit}`, { signal }
-		);
-	},
-
 	async getAggregatedFlows(start: Date, end: Date, trafficTypes?: string[], signal?: AbortSignal): Promise<AggregatedFlowsResponse> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
@@ -154,8 +124,8 @@ export const tailscaleService = {
 		return api.get<AggregatedFlowsResponse>(url, { signal });
 	},
 
-	async getDataRange(): Promise<DataRange> {
-		return api.get<DataRange>('/flow-logs/range');
+	async getDataRange(signal?: AbortSignal): Promise<DataRange> {
+		return api.get<DataRange>('/flow-logs/range', { signal });
 	},
 
 	async getPollerStatus(): Promise<PollerStatus> {

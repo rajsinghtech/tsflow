@@ -141,4 +141,5 @@ spec:
               cpu: "1000m"
       volumes:
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: tsflow-data

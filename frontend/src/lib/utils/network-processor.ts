@@ -132,6 +132,78 @@ function resolveToIP(ipOrId: string, devices: Device[] = []): string {
 	return ipOrId;
 }
 
+// Resolve a flow endpoint to a stable graph identity. Display names are
+// presentation data and are not unique (two devices may share a hostname),
+// so they must never be used as node IDs.
+function resolveToNodeID(
+	ipOrId: string,
+	devices: Device[] = [],
+	services: Record<string, VIPServiceInfo> = {},
+	records: Record<string, StaticRecordInfo> = {}
+): string {
+	if (!isIPAddress(ipOrId)) {
+		return devices.find((device) => device.id === ipOrId)?.id || ipOrId;
+	}
+
+	const ip = extractIP(ipOrId);
+	const device = devices.find((candidate) => candidate.addresses.some((addr) => ipMatches(ip, addr)));
+	if (device) return device.id;
+
+	for (const [serviceName, serviceInfo] of Object.entries(services)) {
+		if (serviceInfo.addrs?.some((addr) => ipMatches(ip, addr))) {
+			return serviceName.startsWith('svc:') ? serviceName : `svc:${serviceName}`;
+		}
+	}
+	for (const [recordName, recordInfo] of Object.entries(records)) {
+		if (recordInfo.addrs?.some((addr) => ipMatches(ip, addr))) {
+			return `record:${recordName}`;
+		}
+	}
+
+	return ip;
+}
+
+function addDirectionalObservation(
+	link: NetworkLink,
+	source: string,
+	target: string,
+	protocol: ReturnType<typeof getProtocolName>,
+	ports: Set<number>
+) {
+	if (!link.directions) link.directions = [];
+
+	const existing = link.directions.find(
+		(direction) =>
+			direction.source === source && direction.target === target && direction.protocol === protocol
+	);
+	if (existing) {
+		for (const port of ports) existing.ports.add(port);
+		return;
+	}
+
+	link.directions.push({ source, target, protocol, ports: new Set(ports) });
+}
+
+function addDirectionalTraffic(link: NetworkLink, traffic: NetworkLog['virtualTraffic'][number], source: string, target: string) {
+	const protocolNumbers = new Set<number>();
+	for (const rawProtocol of Object.keys(traffic.directional?.protocolBytes || {})) {
+		const protocol = Number(rawProtocol);
+		if (Number.isInteger(protocol) && protocol >= 0) protocolNumbers.add(protocol);
+	}
+	for (const port of traffic.directional?.ports || []) {
+		if (Number.isInteger(port.proto) && port.proto >= 0) protocolNumbers.add(port.proto);
+	}
+	if (protocolNumbers.size === 0) protocolNumbers.add(traffic.proto || 0);
+
+	for (const protocolNumber of protocolNumbers) {
+		const ports = new Set<number>();
+		for (const port of traffic.directional?.ports || []) {
+			if (port.port > 0 && port.proto === protocolNumber) ports.add(port.port);
+		}
+		addDirectionalObservation(link, source, target, getProtocolName(protocolNumber), ports);
+	}
+}
+
 // Process network logs to create nodes and links
 export function processNetworkLogs(
 	logs: NetworkLog[],
@@ -147,9 +219,6 @@ export function processNetworkLogs(
 	const linkMap = new Map<string, NetworkLink>();
 
 	logs.forEach((log) => {
-		// Resolve the reporting node's identity for proper byte attribution
-		const reporterIP = resolveToIP(log.nodeId, devices);
-
 		const allTraffic = [
 			...(log.virtualTraffic || []).map((t) => ({ ...t, type: 'virtual' as TrafficType })),
 			...(log.exitTraffic || []).map((t) => ({ ...t, type: 'exit' as TrafficType })),
@@ -172,13 +241,13 @@ export function processNetworkLogs(
 
 			// Create or update source node
 			const srcDeviceName = getDeviceName(traffic.src, devices, services, records);
-			const srcNodeId = isOpaqueTailscaleNodeID(traffic.src) ? traffic.src : (srcDeviceName !== srcIP ? srcDeviceName : srcIP);
+			const srcNodeId = resolveToNodeID(traffic.src, devices, services, records);
 
 			if (!nodeMap.has(srcNodeId)) {
 				const srcAddress = displayAddress(srcIP);
-				const isTailscale = srcAddress ? categorizeIP(srcAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.src, devices);
 				const serviceData = getServiceData(traffic.src, services);
+				const isTailscale = !!deviceData || (srcAddress ? categorizeIP(srcAddress).includes('tailscale') : false);
 				const ipTags = srcAddress ? categorizeIP(srcAddress) : (isOpaqueTailscaleNodeID(traffic.src) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
@@ -226,13 +295,13 @@ export function processNetworkLogs(
 
 			// Create or update destination node
 			const dstDeviceName = getDeviceName(traffic.dst, devices, services, records);
-			const dstNodeId = isOpaqueTailscaleNodeID(traffic.dst) ? traffic.dst : (dstDeviceName !== dstIP ? dstDeviceName : dstIP);
+			const dstNodeId = resolveToNodeID(traffic.dst, devices, services, records);
 
 			if (!nodeMap.has(dstNodeId)) {
 				const dstAddress = displayAddress(dstIP);
-				const isTailscale = dstAddress ? categorizeIP(dstAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.dst, devices);
 				const serviceData = getServiceData(traffic.dst, services);
+				const isTailscale = !!deviceData || (dstAddress ? categorizeIP(dstAddress).includes('tailscale') : false);
 				const ipTags = dstAddress ? categorizeIP(dstAddress) : (isOpaqueTailscaleNodeID(traffic.dst) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
@@ -285,11 +354,17 @@ export function processNetworkLogs(
 			const srcNode = nodeMap.get(srcNodeId)!;
 			const dstNode = nodeMap.get(dstNodeId)!;
 
-			// txBytes always represents what the src sent to dst
-			srcNode.txBytes += traffic.txBytes || 0;
-			dstNode.rxBytes += traffic.txBytes || 0;
-			srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
-			dstNode.totalBytes = dstNode.txBytes + dstNode.rxBytes;
+			// txBytes always represents what the src sent to dst. A self-flow has
+			// one graph node, so do not also add the same bytes as RX.
+			if (srcNodeId === dstNodeId) {
+				srcNode.txBytes += traffic.txBytes || 0;
+				srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
+			} else {
+				srcNode.txBytes += traffic.txBytes || 0;
+				dstNode.rxBytes += traffic.txBytes || 0;
+				srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
+				dstNode.totalBytes = dstNode.txBytes + dstNode.rxBytes;
+			}
 
 			// Track port and protocol information
 			const protocolName = getProtocolName(traffic.proto || 0);
@@ -311,6 +386,9 @@ export function processNetworkLogs(
 				if (dstPort !== null) {
 					dstNode.incomingPorts.add(dstPort);
 				}
+			}
+			for (const port of traffic.ports || []) {
+				if (port.port > 0) dstNode.incomingPorts.add(port.port);
 			}
 
 			// Create or update link - use bidirectional key to combine A->B and B->A
@@ -337,6 +415,12 @@ export function processNetworkLogs(
 			// TX-only link accounting: attribute txBytes based on direction relative
 			// to the sorted link key. This avoids double-counting when both endpoints report.
 			const link = linkMap.get(linkKey)!;
+			for (const port of traffic.ports || []) {
+				if (port.port > 0) link.ports.add(port.port);
+			}
+			if (traffic.directional) {
+				addDirectionalTraffic(link, traffic, srcNodeId, dstNodeId);
+			}
 			const isSrcFirst = srcNodeId === sortedIds[0];
 			if (isSrcFirst) {
 				link.txBytes += traffic.txBytes || 0;
@@ -353,7 +437,7 @@ export function processNetworkLogs(
 		const srcNode = nodeMap.get(link.source);
 		const dstNode = nodeMap.get(link.target);
 		if (srcNode) srcNode.connections++;
-		if (dstNode) dstNode.connections++;
+		if (dstNode && dstNode.id !== srcNode?.id) dstNode.connections++;
 	});
 
 	return {

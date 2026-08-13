@@ -46,6 +46,8 @@ function latestWindow(range: DataRange, windowMs = DEFAULT_WINDOW_MS): { start: 
 function createDataSourceStore() {
 	const { subscribe, set, update } = writable<DataSourceState>(defaultState);
 	let dataRangeRequest: Promise<DataRange | null> | null = null;
+	let dataRangeGeneration = 0;
+	let dataRangeRequestToken = 0;
 	let pollerStatusRequest: Promise<PollerStatus | null> | null = null;
 
 	return {
@@ -77,14 +79,23 @@ function createDataSourceStore() {
 				};
 			}),
 
-		async fetchDataRange() {
-			if (dataRangeRequest) return dataRangeRequest;
+		async fetchDataRange(signal?: AbortSignal) {
+			if (signal?.aborted) return null;
+			// Requests with a caller-owned signal must not share the uncancellable
+			// legacy request or another caller's signal. This keeps a refresh that
+			// was superseded from updating the active refresh's state.
+			if (!signal && dataRangeRequest) return dataRangeRequest;
+			if (signal) dataRangeRequest = null;
+			const requestToken = ++dataRangeRequestToken;
+			const requestGeneration = dataRangeGeneration;
 			update((s) => ({ ...s, isLoading: true, error: null }));
-			dataRangeRequest = (async () => {
+			let request: Promise<DataRange | null> | null = null;
+			request = (async () => {
 				try {
-					const dataRange = await tailscaleService.getDataRange();
+					const dataRange = await tailscaleService.getDataRange(signal);
+					if (signal?.aborted || requestToken !== dataRangeRequestToken || requestGeneration !== dataRangeGeneration) return null;
 					update((s) => {
-						const next = { ...s, dataRange, isLoading: false };
+						const next = { ...s, dataRange };
 						if (s.followLatest && hasValidRange(dataRange)) {
 							const selected = latestWindow(dataRange, s.latestWindowMs);
 							next.selectedStart = selected.start;
@@ -94,14 +105,19 @@ function createDataSourceStore() {
 					});
 					return dataRange;
 				} catch (err) {
+					if (signal?.aborted || requestToken !== dataRangeRequestToken || requestGeneration !== dataRangeGeneration) return null;
 					const error = err instanceof Error ? err.message : 'Failed to fetch data range';
-					update((s) => ({ ...s, error, isLoading: false }));
+					update((s) => ({ ...s, error }));
 					return null;
 				} finally {
-					dataRangeRequest = null;
+					if (requestToken === dataRangeRequestToken && requestGeneration === dataRangeGeneration) {
+						update((s) => ({ ...s, isLoading: false }));
+					}
+					if (!signal && request !== null && dataRangeRequest === request) dataRangeRequest = null;
 				}
 			})();
-			return dataRangeRequest;
+			if (!signal) dataRangeRequest = request;
+			return request;
 		},
 
 		async fetchPollerStatus() {
@@ -125,6 +141,7 @@ function createDataSourceStore() {
 
 		reset: () => {
 			dataRangeRequest = null;
+			dataRangeGeneration++;
 			pollerStatusRequest = null;
 			set(defaultState);
 		}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rajsinghtech/tsflow/backend/internal/config"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
 func init() {
@@ -127,5 +130,63 @@ func TestResolveNodeOwner_NilPoller(t *testing.T) {
 	h := &Handlers{}
 	if owner := h.resolveNodeOwner("device1"); owner != "" {
 		t.Errorf("expected empty owner with nil poller, got %q", owner)
+	}
+}
+
+func TestGetServicesAndRecordsPropagatesCancellation(t *testing.T) {
+	service := services.NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  "http://127.0.0.1:1",
+		TailscaleTailnet: "example.com",
+	})
+	h := &Handlers{tailscaleService: service}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest("GET", "/services-records", nil).WithContext(requestCtx)
+	cancel()
+	if _, err := service.GetVIPServices(requestCtx); err == nil {
+		t.Fatal("expected direct VIP service request to return cancellation")
+	}
+
+	h.GetServicesAndRecords(c)
+	c.Writer.WriteHeaderNow()
+
+	if w.Code != 499 {
+		t.Fatalf("status = %d, want 499 for canceled request", w.Code)
+	}
+}
+
+func TestWriteContextError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "canceled", err: context.Canceled, want: 499},
+		{name: "deadline", err: context.DeadlineExceeded, want: http.StatusGatewayTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("GET", "/test", nil)
+			if !writeContextError(c, tc.err) {
+				t.Fatal("writeContextError returned false")
+			}
+			c.Writer.WriteHeaderNow()
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseBandwidthTrafficTypesRejectsInvalidValues(t *testing.T) {
+	if got, err := parseBandwidthTrafficTypes("virtual, subnet,virtual"); err != nil || len(got) != 2 || got[0] != "virtual" || got[1] != "subnet" {
+		t.Fatalf("valid traffic types = %#v, error = %v", got, err)
+	}
+	for _, raw := range []string{"invalid", "virtual,invalid", "virtual,"} {
+		if got, err := parseBandwidthTrafficTypes(raw); err == nil || got != nil {
+			t.Fatalf("parseBandwidthTrafficTypes(%q) = %#v, error = %v; want validation error", raw, got, err)
+		}
 	}
 }

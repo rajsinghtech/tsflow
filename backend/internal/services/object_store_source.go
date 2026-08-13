@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -49,6 +50,15 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("object-store bucket is required")
 	}
+	if cfg.Endpoint != "" {
+		endpoint, err := url.Parse(cfg.Endpoint)
+		if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+			return nil, fmt.Errorf("object-store endpoint must be a valid absolute URL")
+		}
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return nil, fmt.Errorf("object-store endpoint must use http or https")
+		}
+	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = "network/"
 	}
@@ -86,6 +96,16 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 }
 
 func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time.Time) (int, int, time.Time, error) {
+	if p == nil || p.store == nil {
+		return 0, 0, start, fmt.Errorf("poller store is required")
+	}
+	// Metadata hydration repairs an auxiliary index for already-ingested
+	// objects. A stale or unreadable historical object must not prevent newer
+	// objects from being listed and ingested, so retain the error and continue.
+	if err := s.hydrateMissingMetadata(ctx, p); err != nil {
+		log.Printf("Warning: historical metadata hydration incomplete: %v", err)
+	}
+
 	objects, err := s.listObjects(ctx, start.Add(-s.cfg.Lookback), end)
 	if err != nil {
 		return 0, 0, time.Time{}, err
@@ -94,43 +114,46 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		return 0, 0, end, nil
 	}
 	if len(objects) > s.cfg.MaxObjects {
-		log.Printf("Object-store poll found %d candidate objects; processing newest %d", len(objects), s.cfg.MaxObjects)
-		objects = objects[len(objects)-s.cfg.MaxObjects:]
+		log.Printf("Object-store poll found %d candidate objects; processing up to %d oldest un-ingested objects", len(objects), s.cfg.MaxObjects)
 	}
 
 	processedObjects := 0
 	processedFlows := 0
 	lastProcessed := start
-	shouldBackfillMetadata := false
-	if existingMetadata, err := p.store.GetNodeMetadata(ctx); err == nil && len(existingMetadata) == 0 {
-		shouldBackfillMetadata = true
-	}
+	var firstReadErr error
+	var blockedAt time.Time
+	// Select un-ingested objects after checking the ingestion guard. This keeps
+	// a timestamp-only cursor progressing even when more than MaxObjects share
+	// the same timestamp and the first page has already been seen.
+	selected := make([]flowObject, 0, minInt(len(objects), s.cfg.MaxObjects))
 	for _, obj := range objects {
 		seen, err := p.store.IsObjectIngested(ctx, obj.key)
 		if err != nil {
 			return processedObjects, processedFlows, lastProcessed, err
 		}
 		if seen {
-			if shouldBackfillMetadata {
-				_, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
-				if err != nil {
-					log.Printf("Warning: failed to backfill node metadata from %s: %v", obj.key, err)
-				} else if len(nodeMetadata) > 0 {
-					p.deviceCache.UpsertNodeMetadata(nodeMetadata)
-					if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
-						log.Printf("Warning: failed to persist node metadata from %s: %v", obj.key, err)
-					}
-				}
-			}
 			if obj.logTime.After(lastProcessed) {
 				lastProcessed = obj.logTime
 			}
 			continue
 		}
+		if len(selected) >= s.cfg.MaxObjects {
+			break
+		}
+		selected = append(selected, obj)
+	}
 
+	for _, obj := range selected {
 		flows, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
 		if err != nil {
-			return processedObjects, processedFlows, lastProcessed, fmt.Errorf("failed to read %s: %w", obj.key, err)
+			if firstReadErr == nil {
+				firstReadErr = fmt.Errorf("failed to read %s: %w", obj.key, err)
+			}
+			if blockedAt.IsZero() || obj.logTime.Before(blockedAt) {
+				blockedAt = obj.logTime
+			}
+			log.Printf("Warning: skipping unreadable object %s; later objects will still be attempted: %v", obj.key, err)
+			continue
 		}
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
@@ -150,7 +173,6 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			Bandwidth:     totalBandwidth,
 			NodeBandwidth: nodeBandwidth,
 			TrafficStats:  trafficStats,
-			PollEnd:       pollEnd,
 		}); err != nil {
 			return processedObjects, processedFlows, lastProcessed, err
 		}
@@ -162,8 +184,66 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			lastProcessed = pollEnd
 		}
 	}
+	// Keep the cursor at the earliest unreadable object so a transient or
+	// repaired source object is retried on the next poll. Objects after it may
+	// still be ingested, but a failure must not silently advance past the gap.
+	if !blockedAt.IsZero() && blockedAt.Before(lastProcessed) {
+		lastProcessed = blockedAt
+	}
 
-	return processedObjects, processedFlows, lastProcessed, nil
+	return processedObjects, processedFlows, lastProcessed, firstReadErr
+}
+
+// hydrateMissingMetadata repairs historical node identities independently of
+// the flow cursor and S3 lookback. This matters after a partial metadata-table
+// loss or when a database created before metadata hydration is upgraded.
+func (s *ObjectStoreSource) hydrateMissingMetadata(ctx context.Context, p *Poller) error {
+	keys, err := p.store.GetObjectsNeedingMetadata(ctx, s.cfg.MaxObjects)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, key := range keys {
+		_, nodeMetadata, err := s.readFlowLogs(ctx, p, key)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to hydrate metadata from %s: %w", key, err)
+			}
+			continue
+		}
+		if len(nodeMetadata) > 0 {
+			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
+			if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to persist metadata from %s: %w", key, err)
+				}
+				continue
+			}
+		}
+		if err := p.store.MarkObjectMetadataHydrated(ctx, key, objectMetadataIDs(nodeMetadata)); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to mark metadata hydrated for %s: %w", key, err)
+			}
+		}
+	}
+	return firstErr
+}
+
+func objectMetadataIDs(nodes []database.NodeMetadata) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.NodeID != "" {
+			ids = append(ids, node.NodeID)
+		}
+	}
+	return ids
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Time) ([]flowObject, error) {
@@ -182,7 +262,7 @@ func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Tim
 			for _, item := range page.Contents {
 				key := aws.ToString(item.Key)
 				logTime, ok := objectTime(key)
-				if !ok || logTime.Before(start) || logTime.After(end) {
+				if !ok || logTime.Before(start) || !logTime.Before(end) {
 					continue
 				}
 				lastModified := time.Time{}

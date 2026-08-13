@@ -3,7 +3,7 @@ export function extractIP(address: string): string {
 	//Guard Against Null Values
 	if (!address) return '';
 	// Handle IPv6 addresses like [fd7a:115c:a1e0::9001:b818]:62574
-	if (address.startsWith('[') && address.includes(']:')) {
+	if (address.startsWith('[') && address.includes(']:') && extractPort(address) !== null) {
 		return address.substring(1, address.indexOf(']:'));
 	}
 
@@ -11,7 +11,7 @@ export function extractIP(address: string): string {
 	// IPv4 has exactly 3 dots, so we can safely split on last colon
 	if (!address.includes('::') && (address.match(/\./g) || []).length === 3) {
 		const colonIndex = address.lastIndexOf(':');
-		if (colonIndex > 0) {
+		if (colonIndex > 0 && isValidIPv4(address.substring(0, colonIndex)) && extractPort(address) !== null) {
 			return address.substring(0, colonIndex);
 		}
 	}
@@ -20,14 +20,26 @@ export function extractIP(address: string): string {
 	return address;
 }
 
+function isValidIPv4(address: string): boolean {
+	const parts = address.split('.');
+	return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
 // Extract port from address:port string
 export function extractPort(address: string): number | null {
 	//Guard Against Null Values
 	if (!address) return null;
+	const parsePort = (raw: string): number | null => {
+		if (!/^\d+$/.test(raw)) return null;
+		const port = Number(raw);
+		return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+	};
 	// Handle IPv6 addresses like [fd7a:115c:a1e0::9001:b818]:62574
 	if (address.startsWith('[') && address.includes(']:')) {
-		const portStr = address.split(']:')[1];
-		return portStr ? parseInt(portStr, 10) : null;
+		const host = address.substring(1, address.indexOf(']:'));
+		if (!isValidIPv6Literal(host)) return null;
+		const suffix = address.slice(address.indexOf(']:') + 2);
+		return parsePort(suffix);
 	}
 
 	// IPv6 addresses without brackets have no port (port requires bracket notation)
@@ -38,13 +50,24 @@ export function extractPort(address: string): number | null {
 
 	// Handle IPv4 addresses like 100.72.184.20:53221
 	if (address.includes(':')) {
-		const portStr = address.split(':').pop();
-		const port = portStr ? parseInt(portStr, 10) : null;
-		// Ensure we got a valid port number
-		return port !== null && !isNaN(port) ? port : null;
+		const portStr = address.slice(address.lastIndexOf(':') + 1);
+		return parsePort(portStr);
 	}
 
 	return null;
+}
+
+function isValidIPv6Literal(address: string): boolean {
+	const parts = address.split('::');
+	if (parts.length > 2) return false;
+	const validGroup = (group: string) => /^[0-9a-fA-F]{1,4}$/.test(group);
+	if (parts.length === 1) {
+		const groups = address.split(':');
+		return groups.length === 8 && groups.every(validGroup);
+	}
+	const left = parts[0] ? parts[0].split(':') : [];
+	const right = parts[1] ? parts[1].split(':') : [];
+	return left.length + right.length < 8 && [...left, ...right].every(validGroup);
 }
 
 // Categorize IP addresses by type

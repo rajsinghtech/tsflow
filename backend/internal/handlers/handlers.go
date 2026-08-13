@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +14,22 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
+// writeContextError converts request cancellation and query deadlines into
+// transport-level statuses consistently across handlers. A canceled request
+// must not be reported as a successful empty response.
+func writeContextError(c *gin.Context, err error) bool {
+	requestErr := c.Request.Context().Err()
+	if errors.Is(err, context.Canceled) || errors.Is(requestErr, context.Canceled) {
+		c.Status(499)
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(requestErr, context.DeadlineExceeded) {
+		c.Status(http.StatusGatewayTimeout)
+		return true
+	}
+	return false
+}
+
 const (
 	// ChunkThreshold is the duration above which log queries are chunked
 	ChunkThreshold = 7 * 24 * time.Hour
@@ -19,8 +37,9 @@ const (
 	ChunkSize = 24 * time.Hour
 	// MaxParallelChunks limits concurrent chunk fetches
 	MaxParallelChunks = 2
-	// MaxLogsInMemory limits logs held in memory during chunked queries
-	MaxLogsInMemory = 10000
+	// MaxLogsInMemory limits logs held in memory during chunked queries. Keep it
+	// above the response cap so the sampling path remains reachable.
+	MaxLogsInMemory = 100000
 	// MaxLogsInResponse limits logs returned in a single response
 	MaxLogsInResponse = 50000
 	// MaxBuckets limits the number of time-series buckets returned

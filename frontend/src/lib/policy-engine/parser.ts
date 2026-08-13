@@ -14,18 +14,33 @@ import {
 } from "./types";
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const IPV6_GROUP = /^[0-9a-fA-F]{1,4}$/;
+
+function isIpv6(value: string): boolean {
+	const raw = value.replace(/^\[|\]$/g, "");
+	if (!raw || raw.includes(".") || raw.split("::").length > 2) return false;
+	const parts = raw.split("::");
+	const left = parts[0] ? parts[0].split(":") : [];
+	const right = parts.length === 2 && parts[1] ? parts[1].split(":") : [];
+	if (![...left, ...right].every((group) => IPV6_GROUP.test(group))) return false;
+	const groupCount = left.length + right.length;
+	return parts.length === 2 ? groupCount < 8 : groupCount === 8;
+}
 
 function isIp(value: string): boolean {
-  return IPV4.test(value) || value.includes(":");
+	return IPV4.test(value) || isIpv6(value);
 }
 
 function isCidr(value: string): boolean {
-  const [ip, mask] = value.split("/");
-  if (!ip || !mask) {
-    return false;
-  }
-  const n = Number(mask);
-  return Number.isInteger(n) && n >= 0 && n <= 128 && isIp(ip);
+	const slash = value.lastIndexOf("/");
+	if (slash <= 0 || slash === value.length - 1 || value.indexOf("/") !== slash) {
+		return false;
+	}
+	const ip = value.slice(0, slash);
+	const mask = value.slice(slash + 1);
+	const n = Number(mask);
+	const maxMask = isIpv6(ip) ? 128 : 32;
+	return /^\d+$/.test(mask) && Number.isInteger(n) && n >= 0 && n <= maxMask && isIp(ip);
 }
 
 function dedupePush(list: string[], value: string): void {
@@ -53,16 +68,51 @@ function normalizeNodeType(raw: string, ctx: NormalizeContext): NodeType {
 }
 
 function parseAclDst(raw: string): { selector: string; ports: string[] | undefined } {
-  const lastColon = raw.lastIndexOf(":");
+	if (raw.startsWith("[") && raw.includes("]:")) {
+		const close = raw.indexOf("]:");
+		const selector = close > 1 ? raw.slice(1, close) : raw;
+		const portSpec = close > 1 ? raw.slice(close + 2) : "";
+		if (close > 1 && isValidPortSpec(portSpec)) {
+			return { selector, ports: [portSpec] };
+		}
+		// Preserve the endpoint selector while retaining an impossible port so
+		// malformed bracketed IPv6 destinations cannot match as unrestricted
+		// traffic.
+		if (close > 1 && isIpv6(selector)) {
+			return { selector, ports: ["__invalid__"] };
+		}
+		if (close > 1) {
+			return { selector, ports: ["__invalid__"] };
+		}
+	}
+	// An unadorned IP/CIDR is a selector, not an IPv6 selector with a port
+	// suffix. Bracket notation is required when an IPv6 port is specified.
+	if (isIp(raw) || isCidr(raw)) {
+		return { selector: raw, ports: undefined };
+	}
+	const lastColon = raw.lastIndexOf(":");
   if (lastColon <= 0 || raw.startsWith("svc:")) {
     return { selector: raw, ports: undefined };
   }
   const left = raw.slice(0, lastColon);
   const right = raw.slice(lastColon + 1);
-  if (!right || !/^[\d,*-]+$/.test(right)) {
-    return { selector: raw, ports: undefined };
-  }
-  return { selector: left, ports: right.split(",") };
+	if (!isValidPortSpecList(right)) {
+		return { selector: raw, ports: undefined };
+	}
+	return { selector: left, ports: right.split(",") };
+}
+
+function isValidPortSpec(value: string): boolean {
+	if (value === "*") return true;
+	const range = value.split("-");
+	if (range.length > 2 || !range.every((part) => /^\d+$/.test(part))) return false;
+	const start = Number(range[0]);
+	const end = range.length === 2 ? Number(range[1]) : start;
+	return start >= 1 && start <= 65535 && end >= start && end <= 65535;
+}
+
+function isValidPortSpecList(value: string): boolean {
+	return value.split(",").length > 0 && value.split(",").every(isValidPortSpec);
 }
 
 class Builder {
@@ -114,7 +164,12 @@ class Builder {
 }
 
 function ensureArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+	return Array.isArray(value)
+		? value
+				.filter((item): item is string => typeof item === "string")
+				.map((item) => item.trim())
+				.filter(Boolean)
+		: [];
 }
 
 function addAccessEdges(
@@ -147,8 +202,6 @@ function parseAcls(builder: Builder, policy: TailnetPolicy): void {
   const rules = policy.acls ?? [];
   rules.forEach((rule: AclRule, index) => {
     const src = ensureArray(rule.src);
-    const dstSelectors: string[] = [];
-    const portsAccumulator = new Set<string>();
 
     ensureArray(rule.dst).forEach((raw, dstIndex) => {
       const parsed = parseAclDst(raw);
@@ -160,14 +213,15 @@ function parseAcls(builder: Builder, policy: TailnetPolicy): void {
           ruleRef: { section: "acls", index }
         });
       }
-      dstSelectors.push(parsed.selector);
-      parsed.ports?.forEach((p) => portsAccumulator.add(p));
-    });
 
-    addAccessEdges(builder, "acls", index, src, dstSelectors, {
-      action: rule.action,
-      proto: rule.proto,
-      ports: portsAccumulator.size > 0 ? Array.from(portsAccumulator) : undefined
+      // Port qualifiers belong to the individual destination expression.
+      // Keeping one accumulator for the whole rule would make every emitted
+      // edge accept every port mentioned by any other destination.
+      addAccessEdges(builder, "acls", index, src, [parsed.selector], {
+        action: rule.action,
+        proto: rule.proto,
+        ports: parsed.ports
+      });
     });
   });
 }

@@ -25,6 +25,41 @@ func resolveBucketSize(rangeSeconds int64) int64 {
 	return 86400
 }
 
+// normalizeProtocolBytes returns a usable protocol-to-byte map for an
+// aggregate. New callers provide exact byte totals; older callers only have
+// the set of protocols, so their bytes are divided deterministically across
+// that set as a compatibility fallback.
+func normalizeProtocolBytes(raw, protocolsJSON string, totalBytes int64) string {
+	var existing map[string]int64
+	if json.Unmarshal([]byte(raw), &existing) == nil && len(existing) > 0 {
+		encoded, err := json.Marshal(existing)
+		if err == nil {
+			return string(encoded)
+		}
+	}
+
+	var protocols []int
+	if json.Unmarshal([]byte(protocolsJSON), &protocols) != nil || len(protocols) == 0 {
+		return "{}"
+	}
+	sort.Ints(protocols)
+	perProtocol := totalBytes / int64(len(protocols))
+	remainder := totalBytes - perProtocol*int64(len(protocols))
+	derived := make(map[string]int64, len(protocols))
+	for i, protocol := range protocols {
+		bytes := perProtocol
+		if i == 0 {
+			bytes += remainder
+		}
+		derived[fmt.Sprint(protocol)] = bytes
+	}
+	encoded, err := json.Marshal(derived)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
 // CommitPollResults atomically writes all aggregates and updates poll state.
 func (s *SQLiteStore) CommitPollResults(ctx context.Context, results PollResults) error {
 	s.mu.Lock()
@@ -51,8 +86,13 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, results PollResults
 
 	const sqliteFormat = "2006-01-02 15:04:05"
 	_, err = tx.ExecContext(ctx,
-		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-		results.PollEnd.UTC().Format(sqliteFormat),
+		`UPDATE poll_state
+		 SET last_poll_end = CASE
+		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+		       THEN ? ELSE last_poll_end END,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = 1`,
+		results.PollEnd.UTC().Format(sqliteFormat), results.PollEnd.UTC().Format(sqliteFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
@@ -82,15 +122,24 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 	if err != nil {
 		return fmt.Errorf("failed to mark object as ingested: %w", err)
 	}
-	rows, _ := insertRes.RowsAffected()
+	rows, err := insertRes.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to determine whether object was newly ingested: %w", err)
+	}
 	if rows == 0 {
 		if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
+			return err
+		}
+		if err := recordObjectMetadataTx(ctx, tx, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 
 	if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
+		return err
+	}
+	if err := recordObjectMetadataTx(ctx, tx, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
 		return err
 	}
 	if err := upsertNodePairsTx(ctx, tx, result.NodePairs); err != nil {
@@ -106,15 +155,35 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-		result.PollEnd.UTC().Format(sqliteFormat),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update poll state: %w", err)
+	// Object-store polls update the cursor after the full object batch has been
+	// examined. Leaving PollEnd zero keeps an unreadable earlier object from
+	// being skipped when a later object was committed successfully.
+	if !result.PollEnd.IsZero() {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE poll_state
+			 SET last_poll_end = CASE
+			       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+			       THEN ? ELSE last_poll_end END,
+			     updated_at = CURRENT_TIMESTAMP
+			 WHERE id = 1`,
+			result.PollEnd.UTC().Format(sqliteFormat), result.PollEnd.UTC().Format(sqliteFormat),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update poll state: %w", err)
+		}
 	}
 
 	return tx.Commit()
+}
+
+func nodeMetadataIDs(nodes []NodeMetadata) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.NodeID != "" {
+			ids = append(ids, node.NodeID)
+		}
+	}
+	return ids
 }
 
 func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, aggregates []NodePairAggregate) error {
@@ -122,23 +191,124 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, aggregates []NodePairAgg
 		return nil
 	}
 
-	stmt, err := tx.PrepareContext(ctx, `
+	// Directional metadata is kept as JSON for consistency with the existing
+	// protocol and port aggregates. Keep the merge expressions here, alongside
+	// the legacy metadata merge, so one upsert remains atomic.
+	mergeProtocolBytes := func(existing, incoming string) string {
+		return fmt.Sprintf(`(
+				SELECT COALESCE(json_group_object(proto, bytes), '{}')
+				FROM (
+					SELECT CAST(key AS INTEGER) AS proto,
+					       SUM(CAST(value AS INTEGER)) AS bytes
+					FROM (
+						SELECT key, value FROM json_each(
+							CASE WHEN json_valid(%s) THEN %s ELSE '{}' END)
+						UNION ALL
+						SELECT key, value FROM json_each(
+							CASE WHEN json_valid(%s) THEN %s ELSE '{}' END)
+					) AS directional_protocol_values
+					GROUP BY proto
+					ORDER BY proto
+				)
+			)`, existing, existing, incoming, incoming)
+	}
+	mergePorts := func(existing, incoming string) string {
+		return fmt.Sprintf(`(
+				SELECT COALESCE(json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)), '[]')
+				FROM (
+					SELECT CAST(json_extract(value, '$.port') AS INTEGER) AS port,
+					       CAST(json_extract(value, '$.proto') AS INTEGER) AS proto,
+					       SUM(CAST(json_extract(value, '$.bytes') AS INTEGER)) AS bytes
+					FROM (
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(%s) THEN %s ELSE '[]' END)
+						UNION ALL
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(%s) THEN %s ELSE '[]' END)
+					) AS directional_port_values
+					GROUP BY proto, port
+					ORDER BY bytes DESC, proto ASC, port ASC
+					LIMIT 20
+				)
+			)`, existing, existing, incoming, incoming)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
 		INSERT INTO node_pairs (bucket, src_node_id, dst_node_id, traffic_type,
-		                        tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count, protocols, ports)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                        tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count, protocols, protocol_bytes, ports,
+		                        tx_ports, rx_ports, tx_protocol_bytes, rx_protocol_bytes, directional_ports)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket, src_node_id, dst_node_id, traffic_type) DO UPDATE SET
 			tx_bytes   = tx_bytes   + excluded.tx_bytes,
 			rx_bytes   = rx_bytes   + excluded.rx_bytes,
 			tx_pkts    = tx_pkts    + excluded.tx_pkts,
 			rx_pkts    = rx_pkts    + excluded.rx_pkts,
 			flow_count = flow_count + excluded.flow_count,
-			protocols  = (SELECT json_group_array(value) FROM (
-			                 SELECT value FROM json_each(node_pairs.protocols)
-			                 UNION
-			                 SELECT value FROM json_each(excluded.protocols)
+			protocols  = (SELECT COALESCE(json_group_array(value), '[]') FROM (
+			                 SELECT value FROM (
+				                 SELECT value FROM json_each(
+					                 CASE WHEN json_valid(node_pairs.protocols)
+					                              THEN node_pairs.protocols ELSE '[]' END)
+				                 UNION
+				                 SELECT value FROM json_each(
+					                 CASE WHEN json_valid(excluded.protocols)
+					                              THEN excluded.protocols ELSE '[]' END)
+			                 ) AS protocol_values
+				                 ORDER BY CAST(value AS INTEGER)
 			              )),
-			ports = excluded.ports
-	`)
+			protocol_bytes = (
+				SELECT COALESCE(json_group_object(proto, bytes), '{}')
+				FROM (
+					SELECT CAST(key AS INTEGER) AS proto,
+					       SUM(CAST(value AS INTEGER)) AS bytes
+					FROM (
+						SELECT key, value FROM json_each(
+							CASE WHEN json_valid(node_pairs.protocol_bytes)
+							     THEN node_pairs.protocol_bytes ELSE '{}' END)
+						UNION ALL
+						SELECT key, value FROM json_each(
+							CASE WHEN json_valid(excluded.protocol_bytes)
+							     THEN excluded.protocol_bytes ELSE '{}' END)
+					) AS protocol_values
+					GROUP BY proto
+					ORDER BY proto
+				)
+			),
+			ports = (
+				SELECT COALESCE(json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)), '[]')
+				FROM (
+					SELECT CAST(json_extract(value, '$.port') AS INTEGER) AS port,
+					       CAST(json_extract(value, '$.proto') AS INTEGER) AS proto,
+					       SUM(CAST(json_extract(value, '$.bytes') AS INTEGER)) AS bytes
+					FROM (
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(node_pairs.ports)
+							     THEN node_pairs.ports ELSE '[]' END)
+						UNION ALL
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(excluded.ports)
+							     THEN excluded.ports ELSE '[]' END)
+					) AS port_values
+					GROUP BY proto, port
+					ORDER BY bytes DESC, proto ASC, port ASC
+					LIMIT 20
+				)
+			),
+			tx_protocol_bytes = %s,
+			rx_protocol_bytes = %s,
+			tx_ports = %s,
+			rx_ports = %s,
+			directional_ports = CASE
+				WHEN COALESCE(node_pairs.directional_ports, 0) = 1
+				 AND COALESCE(excluded.directional_ports, 0) = 1 THEN 1
+				ELSE 0
+			END
+	`,
+		mergeProtocolBytes("node_pairs.tx_protocol_bytes", "excluded.tx_protocol_bytes"),
+		mergeProtocolBytes("node_pairs.rx_protocol_bytes", "excluded.rx_protocol_bytes"),
+		mergePorts("node_pairs.tx_ports", "excluded.tx_ports"),
+		mergePorts("node_pairs.rx_ports", "excluded.rx_ports"),
+	))
 	if err != nil {
 		return fmt.Errorf("failed to prepare node_pairs upsert: %w", err)
 	}
@@ -150,7 +320,12 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, aggregates []NodePairAgg
 		if _, err := stmt.ExecContext(ctx,
 			bucket, agg.SrcNodeID, agg.DstNodeID, agg.TrafficType,
 			agg.TxBytes, agg.RxBytes, agg.TxPkts, agg.RxPkts,
-			agg.FlowCount, agg.Protocols, agg.Ports,
+			agg.FlowCount, agg.Protocols,
+			normalizeProtocolBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes),
+			agg.Ports, agg.TxPorts, agg.RxPorts,
+			normalizeProtocolBytes(agg.TxProtocolBytes, "[]", agg.TxBytes),
+			normalizeProtocolBytes(agg.RxProtocolBytes, "[]", agg.RxBytes),
+			agg.DirectionalPorts,
 		); err != nil {
 			return fmt.Errorf("failed to upsert node pair: %w", err)
 		}
@@ -217,9 +392,9 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO traffic_stats (bucket, tcp_bytes, udp_bytes, other_proto_bytes,
-		                           virtual_bytes, subnet_bytes, physical_bytes,
+		                           virtual_bytes, exit_bytes, subnet_bytes, physical_bytes,
 		                           total_flows, unique_pairs, top_ports)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket) DO UPDATE SET
 			tcp_bytes         = tcp_bytes         + excluded.tcp_bytes,
 			udp_bytes         = udp_bytes         + excluded.udp_bytes,
@@ -227,9 +402,29 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 			virtual_bytes     = virtual_bytes     + excluded.virtual_bytes,
 			subnet_bytes      = subnet_bytes      + excluded.subnet_bytes,
 			physical_bytes    = physical_bytes    + excluded.physical_bytes,
+			exit_bytes       = COALESCE(exit_bytes, 0) + excluded.exit_bytes,
 			total_flows       = total_flows       + excluded.total_flows,
 			unique_pairs      = MAX(unique_pairs, excluded.unique_pairs),
-			top_ports         = excluded.top_ports
+			top_ports         = (
+				SELECT COALESCE(json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)), '[]')
+				FROM (
+					SELECT CAST(json_extract(value, '$.port') AS INTEGER) AS port,
+					       CAST(json_extract(value, '$.proto') AS INTEGER) AS proto,
+					       SUM(CAST(json_extract(value, '$.bytes') AS INTEGER)) AS bytes
+					FROM (
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(traffic_stats.top_ports)
+							     THEN traffic_stats.top_ports ELSE '[]' END)
+						UNION ALL
+						SELECT value FROM json_each(
+							CASE WHEN json_valid(excluded.top_ports)
+							     THEN excluded.top_ports ELSE '[]' END)
+					) AS port_values
+					GROUP BY proto, port
+					ORDER BY bytes DESC, proto ASC, port ASC
+					LIMIT 20
+				)
+			)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare traffic_stats upsert: %w", err)
@@ -241,7 +436,7 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 		bucket := (st.Bucket / bucketSize) * bucketSize
 		if _, err := stmt.ExecContext(ctx,
 			bucket, st.TCPBytes, st.UDPBytes, st.OtherProtoBytes,
-			st.VirtualBytes, st.SubnetBytes, st.PhysicalBytes,
+			st.VirtualBytes, st.ExitBytes, st.SubnetBytes, st.PhysicalBytes,
 			st.TotalFlows, st.UniquePairs, st.TopPorts,
 		); err != nil {
 			return fmt.Errorf("failed to upsert traffic stats: %w", err)
@@ -270,7 +465,7 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, aggregates [
 }
 
 // GetNodePairAggregates retrieves node-pair aggregates for a time range.
-func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time.Time, bucketSize int64) ([]NodePairAggregate, error) {
+func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time.Time) ([]NodePairAggregate, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -284,24 +479,116 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time
 		SELECT MIN(bucket), src_node_id, dst_node_id, traffic_type,
 		       SUM(tx_bytes), SUM(rx_bytes), SUM(tx_pkts), SUM(rx_pkts),
 		       SUM(flow_count),
-		       COALESCE((SELECT protocols FROM node_pairs sub
-		                 WHERE sub.src_node_id = main.src_node_id
-		                   AND sub.dst_node_id = main.dst_node_id
-		                   AND sub.traffic_type = main.traffic_type
-		                   AND sub.bucket >= ? AND sub.bucket <= ?
-		                 ORDER BY sub.bucket DESC LIMIT 1), '[]'),
-		       COALESCE((SELECT ports FROM node_pairs sub
-		                 WHERE sub.src_node_id = main.src_node_id
-		                   AND sub.dst_node_id = main.dst_node_id
-		                   AND sub.traffic_type = main.traffic_type
-		                   AND sub.bucket >= ? AND sub.bucket <= ?
-		                 ORDER BY sub.bucket DESC LIMIT 1), '[]')
+		       COALESCE((SELECT json_group_array(proto) FROM (
+		                    SELECT CAST(j.key AS INTEGER) AS proto,
+		                           SUM(CAST(j.value AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.protocol_bytes)
+		                             THEN sub.protocol_bytes ELSE '{}' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto
+		                    ORDER BY bytes DESC, proto ASC
+		                 )), '[]'),
+		       COALESCE((SELECT json_group_object(proto, bytes) FROM (
+		                    SELECT CAST(j.key AS INTEGER) AS proto,
+		                           SUM(CAST(j.value AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.protocol_bytes)
+		                             THEN sub.protocol_bytes ELSE '{}' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto
+		                    ORDER BY proto ASC
+		                 )), '{}'),
+		       COALESCE((SELECT json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)) FROM (
+		                    SELECT CAST(json_extract(j.value, '$.port') AS INTEGER) AS port,
+		                           CAST(json_extract(j.value, '$.proto') AS INTEGER) AS proto,
+		                           SUM(CAST(json_extract(j.value, '$.bytes') AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.ports)
+		                             THEN sub.ports ELSE '[]' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto, port
+		                    ORDER BY bytes DESC, proto ASC, port ASC
+		                    LIMIT 20
+		                 )), '[]'),
+		       COALESCE((SELECT json_group_object(proto, bytes) FROM (
+		                    SELECT CAST(j.key AS INTEGER) AS proto,
+		                           SUM(CAST(j.value AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.tx_protocol_bytes)
+		                             THEN sub.tx_protocol_bytes ELSE '{}' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto
+		                    ORDER BY proto ASC
+		                 )), '{}'),
+		       COALESCE((SELECT json_group_object(proto, bytes) FROM (
+		                    SELECT CAST(j.key AS INTEGER) AS proto,
+		                           SUM(CAST(j.value AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.rx_protocol_bytes)
+		                             THEN sub.rx_protocol_bytes ELSE '{}' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto
+		                    ORDER BY proto ASC
+		                 )), '{}'),
+		       COALESCE((SELECT json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)) FROM (
+		                    SELECT CAST(json_extract(j.value, '$.port') AS INTEGER) AS port,
+		                           CAST(json_extract(j.value, '$.proto') AS INTEGER) AS proto,
+		                           SUM(CAST(json_extract(j.value, '$.bytes') AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.tx_ports)
+		                             THEN sub.tx_ports ELSE '[]' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto, port
+		                    ORDER BY bytes DESC, proto ASC, port ASC
+		                    LIMIT 20
+		                 )), '[]'),
+		       COALESCE((SELECT json_group_array(json_object('port', port, 'proto', proto, 'bytes', bytes)) FROM (
+		                    SELECT CAST(json_extract(j.value, '$.port') AS INTEGER) AS port,
+		                           CAST(json_extract(j.value, '$.proto') AS INTEGER) AS proto,
+		                           SUM(CAST(json_extract(j.value, '$.bytes') AS INTEGER)) AS bytes
+		                    FROM node_pairs sub, json_each(
+		                        CASE WHEN json_valid(sub.rx_ports)
+		                             THEN sub.rx_ports ELSE '[]' END) AS j
+		                    WHERE sub.src_node_id = main.src_node_id
+		                      AND sub.dst_node_id = main.dst_node_id
+		                      AND sub.traffic_type = main.traffic_type
+		                      AND sub.bucket >= ? AND sub.bucket < ?
+		                    GROUP BY proto, port
+		                    ORDER BY bytes DESC, proto ASC, port ASC
+		                    LIMIT 20
+		                 )), '[]'),
+		       MIN(COALESCE(directional_ports, 0))
 		FROM node_pairs main
-		WHERE bucket >= ? AND bucket <= ?
+		WHERE bucket >= ? AND bucket < ?
 		GROUP BY src_node_id, dst_node_id, traffic_type
-		ORDER BY SUM(tx_bytes) + SUM(rx_bytes) DESC
+		ORDER BY SUM(tx_bytes) + SUM(rx_bytes) DESC,
+		         src_node_id ASC, dst_node_id ASC, traffic_type ASC
 	`
 	rows, err := s.db.QueryContext(ctx, query,
+		startUnix, endUnix,
+		startUnix, endUnix,
+		startUnix, endUnix,
+		startUnix, endUnix,
+		startUnix, endUnix,
 		startUnix, endUnix,
 		startUnix, endUnix,
 		startUnix, endUnix,
@@ -317,7 +604,9 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, start, end time
 		if err := rows.Scan(
 			&agg.Bucket, &agg.SrcNodeID, &agg.DstNodeID, &agg.TrafficType,
 			&agg.TxBytes, &agg.RxBytes, &agg.TxPkts, &agg.RxPkts,
-			&agg.FlowCount, &agg.Protocols, &agg.Ports,
+			&agg.FlowCount, &agg.Protocols, &agg.ProtocolBytes, &agg.Ports,
+			&agg.TxProtocolBytes, &agg.RxProtocolBytes, &agg.TxPorts, &agg.RxPorts,
+			&agg.DirectionalPorts,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan node pair: %w", err)
 		}
@@ -379,7 +668,7 @@ func (s *SQLiteStore) GetBandwidth(ctx context.Context, start, end time.Time) ([
 	query := fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
 		FROM bandwidth
-		WHERE bucket >= ? AND bucket <= ?
+		WHERE bucket >= ? AND bucket < ?
 		GROUP BY b
 		ORDER BY b ASC
 	`, bs, bs)
@@ -420,9 +709,9 @@ func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, start, end
 	bs := resolveBucketSize(endUnix - startUnix)
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(trafficTypes)), ",")
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
+		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes + rx_bytes), 0
 		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ? AND traffic_type IN (%s)
+		WHERE bucket >= ? AND bucket < ? AND traffic_type IN (%s)
 		GROUP BY b
 		ORDER BY b ASC
 	`, bs, bs, placeholders)
@@ -463,16 +752,37 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, start, end time.Time
 		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
 	}
 
+	// Derive node bandwidth from normalized node_pairs rather than the legacy
+	// bandwidth_by_node table. This keeps historical self-flows from appearing
+	// as both TX and RX after the self-flow accounting fix.
 	bs := resolveBucketSize(endUnix - startUnix)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
-		FROM bandwidth_by_node
-		WHERE bucket >= ? AND bucket <= ? AND node_id = ?
+		WITH node_bytes AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id AS node_id,
+			       SUM(tx_bytes) AS tx,
+			       SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY b, src_node_id
+			UNION ALL
+			SELECT (bucket / %d) * %d AS b,
+			       dst_node_id AS node_id,
+			       SUM(rx_bytes) AS tx,
+			       SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+			GROUP BY b, dst_node_id
+		)
+		SELECT b, SUM(tx), SUM(rx)
+		FROM node_bytes
+		WHERE node_id = ?
 		GROUP BY b
 		ORDER BY b ASC
-	`, bs, bs)
+	`, bs, bs, bs, bs)
 
-	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, nodeID)
+	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, startUnix, endUnix, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
@@ -522,19 +832,41 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 	}
 
 	bs := resolveBucketSize(endUnix - startUnix)
-	// top_ports: SQLite picks an arbitrary row's value within each group.
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b,
-		       SUM(tcp_bytes), SUM(udp_bytes), SUM(other_proto_bytes),
-		       SUM(virtual_bytes), SUM(subnet_bytes), SUM(physical_bytes),
-		       SUM(total_flows), MAX(unique_pairs), top_ports
-		FROM traffic_stats
-		WHERE bucket >= ? AND bucket <= ?
-		GROUP BY b
-		ORDER BY b ASC
-	`, bs, bs)
+		WITH stat_buckets AS (
+			SELECT (bucket / %d) * %d AS b,
+			       SUM(tcp_bytes) AS tcp_bytes,
+			       SUM(udp_bytes) AS udp_bytes,
+			       SUM(other_proto_bytes) AS other_proto_bytes,
+			       SUM(virtual_bytes) AS virtual_bytes,
+			       SUM(exit_bytes) AS exit_bytes,
+			       SUM(subnet_bytes) AS subnet_bytes,
+			       SUM(physical_bytes) AS physical_bytes,
+			       SUM(total_flows) AS total_flows,
+			       MAX(unique_pairs) AS stored_unique_pairs
+			FROM traffic_stats
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY b
+		), pair_buckets AS (
+			SELECT b, COUNT(*) AS unique_pairs
+			FROM (
+				SELECT (bucket / %d) * %d AS b, src_node_id, dst_node_id
+				FROM node_pairs
+				WHERE bucket >= ? AND bucket < ?
+				GROUP BY b, src_node_id, dst_node_id
+			)
+			GROUP BY b
+		)
+		SELECT sb.b, sb.tcp_bytes, sb.udp_bytes, sb.other_proto_bytes,
+		       sb.virtual_bytes, sb.exit_bytes, sb.subnet_bytes, sb.physical_bytes,
+		       sb.total_flows,
+		       MAX(COALESCE(pb.unique_pairs, 0), COALESCE(sb.stored_unique_pairs, 0))
+		FROM stat_buckets sb
+		LEFT JOIN pair_buckets pb ON pb.b = sb.b
+		ORDER BY sb.b ASC
+	`, bs, bs, bs, bs)
 
-	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix)
+	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, startUnix, endUnix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traffic stats: %w", err)
 	}
@@ -545,14 +877,79 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 		var st TrafficStats
 		if err := rows.Scan(
 			&st.Bucket, &st.TCPBytes, &st.UDPBytes, &st.OtherProtoBytes,
-			&st.VirtualBytes, &st.SubnetBytes, &st.PhysicalBytes,
-			&st.TotalFlows, &st.UniquePairs, &st.TopPorts,
+			&st.VirtualBytes, &st.ExitBytes, &st.SubnetBytes, &st.PhysicalBytes,
+			&st.TotalFlows, &st.UniquePairs,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan traffic stats: %w", err)
 		}
+		st.TopPorts = "[]"
 		results = append(results, st)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	portQuery := fmt.Sprintf(`
+		WITH port_totals AS (
+			SELECT (ts.bucket / %d) * %d AS b,
+			       CAST(json_extract(p.value, '$.proto') AS INTEGER) AS proto,
+			       CAST(json_extract(p.value, '$.port') AS INTEGER) AS port,
+			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
+			FROM traffic_stats ts, json_each(
+				CASE WHEN json_valid(ts.top_ports) THEN ts.top_ports ELSE '[]' END) AS p
+			WHERE ts.bucket >= ? AND ts.bucket < ?
+			GROUP BY b, proto, port
+		), ranked_ports AS (
+			SELECT b, proto, port, bytes,
+			       ROW_NUMBER() OVER (PARTITION BY b ORDER BY bytes DESC, proto ASC, port ASC) AS rn
+			FROM port_totals
+		)
+		SELECT b, proto, port, bytes
+		FROM ranked_ports
+		WHERE rn <= 20
+		ORDER BY b ASC, bytes DESC, proto ASC, port ASC
+	`, bs, bs)
+	portRows, err := s.db.QueryContext(ctx, portQuery, startUnix, endUnix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query traffic stat ports: %w", err)
+	}
+	defer portRows.Close()
+	resultsByBucket := make(map[int64]*TrafficStats, len(results))
+	for i := range results {
+		resultsByBucket[results[i].Bucket] = &results[i]
+	}
+	for portRows.Next() {
+		var bucket int64
+		var port PortStat
+		if err := portRows.Scan(&bucket, &port.Proto, &port.Port, &port.Bytes); err != nil {
+			return nil, fmt.Errorf("failed to scan traffic stat port: %w", err)
+		}
+		if st := resultsByBucket[bucket]; st != nil {
+			st.TopPorts = appendPortStatJSON(st.TopPorts, port)
+		}
+	}
+	if err := portRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range results {
+		if results[i].TopPorts == "" {
+			results[i].TopPorts = "[]"
+		}
+	}
+	return results, nil
+}
+
+func appendPortStatJSON(raw string, port PortStat) string {
+	var ports []PortStat
+	if json.Unmarshal([]byte(raw), &ports) != nil {
+		ports = nil
+	}
+	ports = append(ports, port)
+	encoded, err := json.Marshal(ports)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
 }
 
 // GetTrafficStatsFromNodePairs synthesizes traffic stats from node_pairs (fallback for old data).
@@ -575,14 +972,47 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bs := resolveBucketSize(endUnix - startUnix)
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, traffic_type,
-		       SUM(tx_bytes + rx_bytes) AS total_bytes,
-		       SUM(flow_count) AS total_flows,
-		       COUNT(DISTINCT src_node_id || '|' || dst_node_id) AS unique_pairs
-		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ?%s
-		GROUP BY b, traffic_type
-		ORDER BY b ASC
+		WITH filtered_pairs AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id,
+			       dst_node_id,
+			       traffic_type,
+			       tx_bytes,
+			       rx_bytes,
+			       flow_count
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?%s
+		), traffic_totals AS (
+			SELECT b,
+			       SUM(CASE WHEN traffic_type = 'virtual'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
+			       SUM(CASE WHEN traffic_type = 'exit'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS exit_bytes,
+			       SUM(CASE WHEN traffic_type = 'subnet'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
+			       SUM(CASE WHEN traffic_type = 'physical'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS physical_bytes,
+			       SUM(flow_count) AS total_flows
+			FROM filtered_pairs
+			GROUP BY b
+		), unique_pair_counts AS (
+			SELECT b, COUNT(*) AS unique_pairs
+			FROM (
+				SELECT DISTINCT b, src_node_id, dst_node_id
+				FROM filtered_pairs
+			)
+			GROUP BY b
+		)
+		SELECT t.b,
+		       t.virtual_bytes,
+		       t.exit_bytes,
+		       t.subnet_bytes,
+		       t.physical_bytes,
+		       t.total_flows,
+		       p.unique_pairs
+		FROM traffic_totals t
+		JOIN unique_pair_counts p ON p.b = t.b
+		ORDER BY t.b ASC
 	`, bs, bs, typeClause)
 
 	args := append([]any{startUnix, endUnix}, typeArgs...)
@@ -595,9 +1025,8 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bucketMap := make(map[int64]*TrafficStats)
 	for rows.Next() {
 		var bucket int64
-		var trafficType string
-		var totalBytes, totalFlows, uniquePairs int64
-		if err := rows.Scan(&bucket, &trafficType, &totalBytes, &totalFlows, &uniquePairs); err != nil {
+		var virtualBytes, exitBytes, subnetBytes, physicalBytes, totalFlows, uniquePairs int64
+		if err := rows.Scan(&bucket, &virtualBytes, &exitBytes, &subnetBytes, &physicalBytes, &totalFlows, &uniquePairs); err != nil {
 			return nil, fmt.Errorf("failed to scan: %w", err)
 		}
 		st, ok := bucketMap[bucket]
@@ -605,65 +1034,82 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			st = &TrafficStats{Bucket: bucket, TopPorts: "[]"}
 			bucketMap[bucket] = st
 		}
-		switch trafficType {
-		case "virtual", "exit":
-			st.VirtualBytes += totalBytes
-		case "subnet":
-			st.SubnetBytes += totalBytes
-		case "physical":
-			st.PhysicalBytes += totalBytes
-		}
+		st.VirtualBytes = virtualBytes
+		st.ExitBytes = exitBytes
+		st.SubnetBytes = subnetBytes
+		st.PhysicalBytes = physicalBytes
 		st.TotalFlows += totalFlows
-		if uniquePairs > st.UniquePairs {
-			st.UniquePairs = uniquePairs
-		}
+		st.UniquePairs = uniquePairs
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Derive protocol breakdown from protocols JSON column
+	// Derive protocol breakdown from persisted protocol byte totals. The
+	// fallback branch keeps pre-migration rows useful if they are inserted by
+	// an older writer after startup.
 	protoQuery := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, protocols, SUM(tx_bytes + rx_bytes)
-		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ? AND traffic_type != 'physical'%s
-		GROUP BY b, protocols
-	`, bs, bs, typeClause)
-	protoRows, err := s.db.QueryContext(ctx, protoQuery, args...)
-	if err == nil {
-		for protoRows.Next() {
-			var b int64
-			var protosJSON string
-			var totalBytes int64
-			if err := protoRows.Scan(&b, &protosJSON, &totalBytes); err != nil {
-				continue
-			}
-			st, ok := bucketMap[b]
-			if !ok {
-				continue
-			}
-			var protos []int
-			if err := json.Unmarshal([]byte(protosJSON), &protos); err != nil || len(protos) == 0 {
-				continue
-			}
-			perProto := totalBytes / int64(len(protos))
-			rem := totalBytes - perProto*int64(len(protos))
-			for i, p := range protos {
-				share := perProto
-				if i == 0 {
-					share += rem
-				}
-				switch p {
-				case 6:
-					st.TCPBytes += share
-				case 17:
-					st.UDPBytes += share
-				default:
-					st.OtherProtoBytes += share
-				}
-			}
+		WITH protocol_values AS (
+			SELECT (np.bucket / %d) * %d AS b,
+			       CAST(j.key AS INTEGER) AS proto,
+			       CAST(j.value AS INTEGER) AS bytes
+			FROM node_pairs np, json_each(
+				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
+				     THEN np.protocol_bytes ELSE '{}' END) AS j
+			WHERE np.bucket >= ? AND np.bucket < ?%s
+			UNION ALL
+			SELECT (np.bucket / %d) * %d AS b,
+			       CAST(j.value AS INTEGER) AS proto,
+			       (np.tx_bytes + np.rx_bytes) / json_array_length(np.protocols)
+			       + CASE WHEN CAST(j.key AS INTEGER) = 0 THEN
+				           (np.tx_bytes + np.rx_bytes) -
+				           ((np.tx_bytes + np.rx_bytes) / json_array_length(np.protocols)) * json_array_length(np.protocols)
+				         ELSE 0 END AS bytes
+			FROM node_pairs np, json_each(
+				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
+			WHERE np.bucket >= ? AND np.bucket < ?%s
+			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
+			       OR NOT json_valid(np.protocol_bytes))
+			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
+		)
+		SELECT b, proto, SUM(bytes)
+		FROM protocol_values
+		GROUP BY b, proto
+	`, bs, bs, typeClause, bs, bs, typeClause)
+	protoArgs := append([]any{startUnix, endUnix}, typeArgs...)
+	protoArgs = append(protoArgs, startUnix, endUnix)
+	protoArgs = append(protoArgs, typeArgs...)
+	protoRows, err := s.db.QueryContext(ctx, protoQuery, protoArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair protocols: %w", err)
+	}
+	for protoRows.Next() {
+		var b int64
+		var protocol int
+		var totalBytes int64
+		if err := protoRows.Scan(&b, &protocol, &totalBytes); err != nil {
+			protoRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair protocol: %w", err)
 		}
+		st, ok := bucketMap[b]
+		if !ok {
+			continue
+		}
+		switch protocol {
+		case 6:
+			st.TCPBytes += totalBytes
+		case 17:
+			st.UDPBytes += totalBytes
+		default:
+			st.OtherProtoBytes += totalBytes
+		}
+	}
+	if err := protoRows.Err(); err != nil {
 		protoRows.Close()
+		return nil, fmt.Errorf("failed to read node pair protocols: %w", err)
+	}
+	if err := protoRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair protocol rows: %w", err)
 	}
 
 	// Rebuild top ports for the same bucket size and traffic-type filter. The
@@ -675,38 +1121,49 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			       CAST(json_extract(p.value, '$.proto') AS INTEGER) AS proto,
 			       CAST(json_extract(p.value, '$.port') AS INTEGER) AS port,
 			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
-			FROM node_pairs, json_each(ports) AS p
-			WHERE bucket >= ? AND bucket <= ?%s
+			FROM node_pairs, json_each(
+				CASE WHEN json_valid(ports) THEN ports ELSE '[]' END) AS p
+			WHERE bucket >= ? AND bucket < ?%s
 			  AND ports != '[]'
 			GROUP BY b, proto, port
 		),
 		ranked_ports AS (
 			SELECT b, proto, port, bytes,
-			       ROW_NUMBER() OVER (PARTITION BY b ORDER BY bytes DESC) AS rn
+			       ROW_NUMBER() OVER (PARTITION BY b ORDER BY bytes DESC, proto ASC, port ASC) AS rn
 			FROM port_totals
 		)
 		SELECT b, proto, port, bytes
 		FROM ranked_ports
 		WHERE rn <= 20
-		ORDER BY b ASC, bytes DESC
+			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
 	`, bs, bs, typeClause)
 	portRows, err := s.db.QueryContext(ctx, portQuery, args...)
-	if err == nil {
-		topPortsByBucket := make(map[int64][]PortStat)
-		for portRows.Next() {
-			var b int64
-			var port PortStat
-			if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
-				continue
-			}
-			topPortsByBucket[b] = append(topPortsByBucket[b], port)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair ports: %w", err)
+	}
+	topPortsByBucket := make(map[int64][]PortStat)
+	for portRows.Next() {
+		var b int64
+		var port PortStat
+		if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
+			portRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair port: %w", err)
 		}
+		topPortsByBucket[b] = append(topPortsByBucket[b], port)
+	}
+	if err := portRows.Err(); err != nil {
 		portRows.Close()
+		return nil, fmt.Errorf("failed to read node pair ports: %w", err)
+	}
+	if err := portRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair port rows: %w", err)
+	}
 
-		for b, topPorts := range topPortsByBucket {
-			if encoded, err := json.Marshal(topPorts); err == nil {
-				bucketMap[b].TopPorts = string(encoded)
-			}
+	for b, topPorts := range topPortsByBucket {
+		if encoded, err := json.Marshal(topPorts); err != nil {
+			return nil, fmt.Errorf("failed to encode node pair ports: %w", err)
+		} else if st := bucketMap[b]; st != nil {
+			st.TopPorts = string(encoded)
 		}
 	}
 
@@ -732,14 +1189,30 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, start, end time.Time, l
 		limit = 10
 	}
 
+	// Use node_pairs as the source of truth so old per-node rows cannot retain
+	// the pre-fix self-flow double count.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT node_id, SUM(tx_bytes), SUM(rx_bytes), SUM(tx_bytes + rx_bytes) AS total
-		FROM bandwidth_by_node
-		WHERE bucket >= ? AND bucket <= ?
-		GROUP BY node_id
-		ORDER BY total DESC
+		WITH node_bytes AS (
+			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY src_node_id
+			UNION ALL
+			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+			GROUP BY dst_node_id
+		), totals AS (
+			SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx
+			FROM node_bytes
+			GROUP BY node_id
+		)
+		SELECT node_id, tx, rx, tx + rx AS total
+		FROM totals
+		ORDER BY total DESC, node_id ASC
 		LIMIT ?
-	`, startUnix, endUnix, limit)
+	`, startUnix, endUnix, startUnix, endUnix, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top talkers: %w", err)
 	}
@@ -775,18 +1248,19 @@ func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, start, en
 		WITH node_bytes AS (
 			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
-			WHERE bucket >= ? AND bucket <= ?%s
+			WHERE bucket >= ? AND bucket < ?%s
 			GROUP BY src_node_id
 			UNION ALL
 			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
 			FROM node_pairs
-			WHERE bucket >= ? AND bucket <= ?%s
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id%s
 			GROUP BY dst_node_id
 		)
 		SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx, SUM(tx + rx) AS total
 		FROM node_bytes
 		GROUP BY node_id
-		ORDER BY total DESC
+		ORDER BY total DESC, node_id ASC
 		LIMIT ?
 	`, typeClause, typeClause)
 	args := append([]any{startUnix, endUnix}, typeArgs...)
@@ -830,9 +1304,9 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, start, end time.Time, lim
 		       SUM(tx_bytes), SUM(rx_bytes),
 		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
 		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ?
+		WHERE bucket >= ? AND bucket < ?
 		GROUP BY src_node_id, dst_node_id
-		ORDER BY total DESC
+		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
 		LIMIT ?
 	`, startUnix, endUnix, limit)
 	if err != nil {
@@ -871,9 +1345,9 @@ func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, start, end 
 		       SUM(tx_bytes), SUM(rx_bytes),
 		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
 		FROM node_pairs
-		WHERE bucket >= ? AND bucket <= ?%s
+		WHERE bucket >= ? AND bucket < ?%s
 		GROUP BY src_node_id, dst_node_id
-		ORDER BY total DESC
+		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
 		LIMIT ?
 	`, typeClause)
 	args := append([]any{startUnix, endUnix}, typeArgs...)
@@ -925,11 +1399,22 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 		TopPorts: make([]PortStat, 0),
 	}
 
+	// Keep totals consistent with GetNodeBandwidth and GetTopTalkers: derive
+	// them from normalized pairs instead of legacy per-node bandwidth rows.
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(tx_bytes), 0), COALESCE(SUM(rx_bytes), 0)
-		FROM bandwidth_by_node
-		WHERE node_id = ? AND bucket >= ? AND bucket <= ?
-	`, nodeID, startUnix, endUnix).Scan(&result.TotalTx, &result.TotalRx); err != nil {
+		WITH node_bytes AS (
+			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE src_node_id = ? AND bucket >= ? AND bucket < ?
+			UNION ALL
+			SELECT SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE dst_node_id = ? AND bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+		)
+		SELECT COALESCE(SUM(tx), 0), COALESCE(SUM(rx), 0)
+		FROM node_bytes
+	`, nodeID, startUnix, endUnix, nodeID, startUnix, endUnix).Scan(&result.TotalTx, &result.TotalRx); err != nil {
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
 
@@ -938,16 +1423,17 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 		FROM (
 			SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS fc
 			FROM node_pairs
-			WHERE src_node_id = ? AND bucket >= ? AND bucket <= ?
+			WHERE src_node_id = ? AND bucket >= ? AND bucket < ?
 			GROUP BY dst_node_id
 			UNION ALL
 			SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS fc
 			FROM node_pairs
-			WHERE dst_node_id = ? AND bucket >= ? AND bucket <= ?
+			WHERE dst_node_id = ? AND bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
 			GROUP BY src_node_id
 		)
 		GROUP BY peer_id
-		ORDER BY total DESC
+		ORDER BY total DESC, peer_id ASC
 		LIMIT 10
 	`, nodeID, startUnix, endUnix, nodeID, startUnix, endUnix)
 	if err != nil {
@@ -969,7 +1455,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 	portRows, err := s.db.QueryContext(ctx, `
 		SELECT ports FROM node_pairs
 		WHERE (src_node_id = ? OR dst_node_id = ?)
-		  AND bucket >= ? AND bucket <= ?
+		  AND bucket >= ? AND bucket < ?
 		  AND ports != '[]'
 	`, nodeID, nodeID, startUnix, endUnix)
 	if err != nil {
@@ -982,15 +1468,18 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 	for portRows.Next() {
 		var portsJSON string
 		if err := portRows.Scan(&portsJSON); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan node ports: %w", err)
 		}
 		var entries []PortStat
 		if err := json.Unmarshal([]byte(portsJSON), &entries); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to decode node ports: %w", err)
 		}
 		for _, e := range entries {
 			portAgg[protoPortKey{e.Proto, e.Port}] += e.Bytes
 		}
+	}
+	if err := portRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read node ports: %w", err)
 	}
 	for ppk, bytes := range portAgg {
 		switch ppk.proto {
@@ -1003,7 +1492,15 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 		}
 		result.TopPorts = append(result.TopPorts, PortStat{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
 	}
-	sort.Slice(result.TopPorts, func(i, j int) bool { return result.TopPorts[i].Bytes > result.TopPorts[j].Bytes })
+	sort.Slice(result.TopPorts, func(i, j int) bool {
+		if result.TopPorts[i].Bytes != result.TopPorts[j].Bytes {
+			return result.TopPorts[i].Bytes > result.TopPorts[j].Bytes
+		}
+		if result.TopPorts[i].Proto != result.TopPorts[j].Proto {
+			return result.TopPorts[i].Proto < result.TopPorts[j].Proto
+		}
+		return result.TopPorts[i].Port < result.TopPorts[j].Port
+	})
 	if len(result.TopPorts) > 15 {
 		result.TopPorts = result.TopPorts[:15]
 	}

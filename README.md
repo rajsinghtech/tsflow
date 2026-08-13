@@ -169,6 +169,8 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 
 TSFlow stores per-minute flow aggregates in SQLite with a rolling retention window (default 30 days). Charts over wider windows use query-time bucketing — no data loss from pre-aggregation. When `TSFLOW_FLOW_BACKEND=s3`, TSFlow imports immutable `network/YYYY/MM/DD/*.ndjson`, `*.ndjson.zst`, `*.ndjson.zstd`, `*.ndjson.gz`, or `*.ndjson.gzip` objects from S3-compatible storage and tracks ingested object keys so repeated polling does not double count traffic.
 
+Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
+
 Mount a volume to persist data: `-v tsflow_data:/app/data`
 
 ## Development
@@ -232,9 +234,15 @@ volumes:
 
 ```bash
 cd k8s
-# Edit kustomization.yaml with your credentials
-kubectl apply -k .
+# Requires envsubst (provided by gettext). Export the variables referenced by
+# secret.yaml, then expand the template before applying the rendered manifests.
+kubectl kustomize . | envsubst | kubectl apply -f -
 ```
+
+Alternatively, replace the `${...}` placeholders in `k8s/secret.yaml` with
+your credentials and run `kubectl apply -k k8s` directly. Do not apply the
+template unchanged: Kubernetes does not expand shell-style environment
+variables in manifests.
 
 ## Star History
 

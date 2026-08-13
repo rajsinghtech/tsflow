@@ -8,6 +8,14 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
+// trafficPairKey identifies a normalized endpoint pair without encoding the
+// endpoint IDs into a delimiter-joined string. Endpoint IDs are externally
+// sourced and may contain any delimiter.
+type trafficPairKey struct {
+	srcNodeID string
+	dstNodeID string
+}
+
 // aggregate creates pre-computed aggregates from flow logs
 // Handles deduplication: Tailscale logs the same traffic from both endpoints
 // (A->B logged by A, B->A logged by B). We normalize pairs by sorting node IDs
@@ -34,8 +42,12 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		port  int
 	}
 	type pairProtoData struct {
-		protocols map[int]int64          // proto number -> total bytes
-		ports     map[protoPortKey]int64 // (proto, port) -> total bytes
+		protocols   map[int]int64          // proto number -> total bytes
+		ports       map[protoPortKey]int64 // (proto, port) -> total bytes
+		txProtocols map[int]int64          // nodeA -> nodeB
+		rxProtocols map[int]int64          // nodeB -> nodeA
+		txPorts     map[protoPortKey]int64 // nodeA -> nodeB
+		rxPorts     map[protoPortKey]int64 // nodeB -> nodeA
 	}
 	pairProtoMap := make(map[nodePairKey]*pairProtoData)
 
@@ -45,10 +57,11 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		udpBytes        int64
 		otherProtoBytes int64
 		virtualBytes    int64
+		exitBytes       int64
 		subnetBytes     int64
 		physicalBytes   int64
 		totalFlows      int64
-		uniquePairs     map[string]struct{} // "nodeA|nodeB" -> exists
+		uniquePairs     map[trafficPairKey]struct{}
 		ports           map[protoPortKey]int64
 	}
 	trafficStatsMap := make(map[int64]*trafficStatsAccum)
@@ -110,13 +123,14 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			agg.FlowCount++
 		} else {
 			agg := &database.NodePairAggregate{
-				Bucket:      bucket,
-				SrcNodeID:   nodeA, // nodeA is always "src" in normalized form
-				DstNodeID:   nodeB, // nodeB is always "dst" in normalized form
-				TrafficType: log.TrafficType,
-				FlowCount:   1,
-				Protocols:   "[]",
-				Ports:       "[]",
+				Bucket:        bucket,
+				SrcNodeID:     nodeA, // nodeA is always "src" in normalized form
+				DstNodeID:     nodeB, // nodeB is always "dst" in normalized form
+				TrafficType:   log.TrafficType,
+				FlowCount:     1,
+				Protocols:     "[]",
+				ProtocolBytes: "{}",
+				Ports:         "[]",
 			}
 			if isReverse {
 				agg.RxBytes = log.TxBytes
@@ -132,21 +146,36 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		ppData, ok := pairProtoMap[npKey]
 		if !ok {
 			ppData = &pairProtoData{
-				protocols: make(map[int]int64),
-				ports:     make(map[protoPortKey]int64),
+				protocols:   make(map[int]int64),
+				ports:       make(map[protoPortKey]int64),
+				txProtocols: make(map[int]int64),
+				rxProtocols: make(map[int]int64),
+				txPorts:     make(map[protoPortKey]int64),
+				rxPorts:     make(map[protoPortKey]int64),
 			}
 			pairProtoMap[npKey] = ppData
 		}
 		ppData.protocols[log.Protocol] += log.TxBytes
+		if isReverse {
+			ppData.rxProtocols[log.Protocol] += log.TxBytes
+		} else {
+			ppData.txProtocols[log.Protocol] += log.TxBytes
+		}
 		if log.DstPort > 0 {
-			ppData.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
+			portKey := protoPortKey{proto: log.Protocol, port: log.DstPort}
+			ppData.ports[portKey] += log.TxBytes
+			if isReverse {
+				ppData.rxPorts[portKey] += log.TxBytes
+			} else {
+				ppData.txPorts[portKey] += log.TxBytes
+			}
 		}
 
 		// Accumulate network-wide traffic stats
 		tsAccum, ok := trafficStatsMap[bucket]
 		if !ok {
 			tsAccum = &trafficStatsAccum{
-				uniquePairs: make(map[string]struct{}),
+				uniquePairs: make(map[trafficPairKey]struct{}),
 				ports:       make(map[protoPortKey]int64),
 			}
 			trafficStatsMap[bucket] = tsAccum
@@ -163,15 +192,14 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		case "virtual":
 			tsAccum.virtualBytes += log.TxBytes
 		case "exit":
-			// Exit node traffic flows over the virtual network; count under virtual
-			tsAccum.virtualBytes += log.TxBytes
+			tsAccum.exitBytes += log.TxBytes
 		case "subnet":
 			tsAccum.subnetBytes += log.TxBytes
 		case "physical":
 			tsAccum.physicalBytes += log.TxBytes
 		}
 		tsAccum.totalFlows++
-		tsAccum.uniquePairs[nodeA+"|"+nodeB] = struct{}{}
+		tsAccum.uniquePairs[trafficPairKey{srcNodeID: nodeA, dstNodeID: nodeB}] = struct{}{}
 		if log.DstPort > 0 {
 			tsAccum.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
 		}
@@ -203,16 +231,20 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			}
 		}
 
-		// dstNode receives what srcNode transmitted
-		dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
-		if bw, ok := nodeBwMap[dstBwKey]; ok {
-			bw.RxBytes += log.TxBytes // dst receives what src sent
-		} else {
-			nodeBwMap[dstBwKey] = &database.NodeBandwidth{
-				Bucket:  bucket,
-				NodeID:  dstNodeID,
-				TxBytes: 0,
-				RxBytes: log.TxBytes, // dst receives what src sent
+		// A self-flow has one endpoint, so attributing it as both TX and RX would
+		// count the same transmitted bytes twice in per-node totals.
+		if srcNodeID != dstNodeID {
+			// dstNode receives what srcNode transmitted
+			dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
+			if bw, ok := nodeBwMap[dstBwKey]; ok {
+				bw.RxBytes += log.TxBytes // dst receives what src sent
+			} else {
+				nodeBwMap[dstBwKey] = &database.NodeBandwidth{
+					Bucket:  bucket,
+					NodeID:  dstNodeID,
+					TxBytes: 0,
+					RxBytes: log.TxBytes, // dst receives what src sent
+				}
 			}
 		}
 	}
@@ -220,14 +252,31 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 	// Serialize protocol/port data into node pair aggregates
 	for key, agg := range nodePairMap {
 		if ppData, ok := pairProtoMap[key]; ok {
-			// Protocols: sorted list of unique protocol numbers
+			// Protocols: most-byte-heavy first, with protocol number as a
+			// deterministic tie-breaker. Consumers use the first item as the
+			// dominant protocol.
 			protos := make([]int, 0, len(ppData.protocols))
 			for p := range ppData.protocols {
 				protos = append(protos, p)
 			}
-			sort.Ints(protos)
+			sort.Slice(protos, func(i, j int) bool {
+				left, right := ppData.protocols[protos[i]], ppData.protocols[protos[j]]
+				if left != right {
+					return left > right
+				}
+				return protos[i] < protos[j]
+			})
 			if b, err := json.Marshal(protos); err == nil {
 				agg.Protocols = string(b)
+			}
+			if b, err := json.Marshal(ppData.protocols); err == nil {
+				agg.ProtocolBytes = string(b)
+			}
+			if b, err := json.Marshal(ppData.txProtocols); err == nil {
+				agg.TxProtocolBytes = string(b)
+			}
+			if b, err := json.Marshal(ppData.rxProtocols); err == nil {
+				agg.RxProtocolBytes = string(b)
 			}
 
 			// Ports: top 20 by bytes as [{port, proto, bytes}, ...]
@@ -241,7 +290,13 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 				portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
 			}
 			sort.Slice(portEntries, func(i, j int) bool {
-				return portEntries[i].Bytes > portEntries[j].Bytes
+				if portEntries[i].Bytes != portEntries[j].Bytes {
+					return portEntries[i].Bytes > portEntries[j].Bytes
+				}
+				if portEntries[i].Proto != portEntries[j].Proto {
+					return portEntries[i].Proto < portEntries[j].Proto
+				}
+				return portEntries[i].Port < portEntries[j].Port
 			})
 			if len(portEntries) > 20 {
 				portEntries = portEntries[:20]
@@ -249,6 +304,33 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			if b, err := json.Marshal(portEntries); err == nil {
 				agg.Ports = string(b)
 			}
+
+			serializeDirectionalPorts := func(entries map[protoPortKey]int64) string {
+				portEntries := make([]portEntry, 0, len(entries))
+				for ppk, bytes := range entries {
+					portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
+				}
+				sort.Slice(portEntries, func(i, j int) bool {
+					if portEntries[i].Bytes != portEntries[j].Bytes {
+						return portEntries[i].Bytes > portEntries[j].Bytes
+					}
+					if portEntries[i].Proto != portEntries[j].Proto {
+						return portEntries[i].Proto < portEntries[j].Proto
+					}
+					return portEntries[i].Port < portEntries[j].Port
+				})
+				if len(portEntries) > 20 {
+					portEntries = portEntries[:20]
+				}
+				encoded, err := json.Marshal(portEntries)
+				if err != nil {
+					return "[]"
+				}
+				return string(encoded)
+			}
+			agg.TxPorts = serializeDirectionalPorts(ppData.txPorts)
+			agg.RxPorts = serializeDirectionalPorts(ppData.rxPorts)
+			agg.DirectionalPorts = true
 		}
 	}
 
@@ -266,7 +348,13 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
 		}
 		sort.Slice(portEntries, func(i, j int) bool {
-			return portEntries[i].Bytes > portEntries[j].Bytes
+			if portEntries[i].Bytes != portEntries[j].Bytes {
+				return portEntries[i].Bytes > portEntries[j].Bytes
+			}
+			if portEntries[i].Proto != portEntries[j].Proto {
+				return portEntries[i].Proto < portEntries[j].Proto
+			}
+			return portEntries[i].Port < portEntries[j].Port
 		})
 		if len(portEntries) > 20 {
 			portEntries = portEntries[:20]
@@ -282,6 +370,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			UDPBytes:        accum.udpBytes,
 			OtherProtoBytes: accum.otherProtoBytes,
 			VirtualBytes:    accum.virtualBytes,
+			ExitBytes:       accum.exitBytes,
 			SubnetBytes:     accum.subnetBytes,
 			PhysicalBytes:   accum.physicalBytes,
 			TotalFlows:      accum.totalFlows,
@@ -295,16 +384,40 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 	for _, agg := range nodePairMap {
 		nodePairs = append(nodePairs, *agg)
 	}
+	sort.Slice(nodePairs, func(i, j int) bool {
+		if nodePairs[i].Bucket != nodePairs[j].Bucket {
+			return nodePairs[i].Bucket < nodePairs[j].Bucket
+		}
+		if nodePairs[i].SrcNodeID != nodePairs[j].SrcNodeID {
+			return nodePairs[i].SrcNodeID < nodePairs[j].SrcNodeID
+		}
+		if nodePairs[i].DstNodeID != nodePairs[j].DstNodeID {
+			return nodePairs[i].DstNodeID < nodePairs[j].DstNodeID
+		}
+		return nodePairs[i].TrafficType < nodePairs[j].TrafficType
+	})
 
 	totalBandwidth := make([]database.BandwidthBucket, 0, len(bandwidthMap))
 	for _, bw := range bandwidthMap {
 		totalBandwidth = append(totalBandwidth, *bw)
 	}
+	sort.Slice(totalBandwidth, func(i, j int) bool {
+		return totalBandwidth[i].Time.Before(totalBandwidth[j].Time)
+	})
 
 	nodeBandwidth := make([]database.NodeBandwidth, 0, len(nodeBwMap))
 	for _, bw := range nodeBwMap {
 		nodeBandwidth = append(nodeBandwidth, *bw)
 	}
+	sort.Slice(nodeBandwidth, func(i, j int) bool {
+		if nodeBandwidth[i].Bucket != nodeBandwidth[j].Bucket {
+			return nodeBandwidth[i].Bucket < nodeBandwidth[j].Bucket
+		}
+		return nodeBandwidth[i].NodeID < nodeBandwidth[j].NodeID
+	})
+	sort.Slice(trafficStats, func(i, j int) bool {
+		return trafficStats[i].Bucket < trafficStats[j].Bucket
+	})
 
 	return nodePairs, totalBandwidth, nodeBandwidth, trafficStats
 }

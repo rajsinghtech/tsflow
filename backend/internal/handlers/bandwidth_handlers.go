@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net"
@@ -32,7 +32,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	}
 
 	nodeID := c.Query("nodeId")
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 	// Validate nodeId if provided — must be non-empty after trimming
 	if c.Query("nodeId") != "" && strings.TrimSpace(nodeID) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId must be non-empty if provided"})
@@ -55,7 +59,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	// Try rolling cache first for recent data (within last hour)
 	if h.poller != nil && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
-		if cache.HasDataFor(startTime, endTime) {
+		cacheHasData := cache.HasBandwidthDataFor(startTime, endTime)
+		if nodeID != "" {
+			cacheHasData = cache.HasNodeBandwidthDataFor(startTime, endTime, nodeID)
+		}
+		if cacheHasData {
 			if nodeID != "" {
 				buckets = cache.GetNodeBandwidth(startTime, endTime, nodeID)
 			} else {
@@ -79,8 +87,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		}
 
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
-				c.Status(499)
+			if writeContextError(c, err) {
 				return
 			}
 			log.Printf("ERROR GetBandwidthAggregated: %v", err)
@@ -122,15 +129,7 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 			bucketSeconds = 60
 		}
 	} else {
-		// Fallback heuristic for 0-1 data points
-		rangeSeconds := int64(endTime.Sub(startTime).Seconds())
-		if rangeSeconds <= 24*3600 {
-			bucketSeconds = 60
-		} else if rangeSeconds <= 7*24*3600 {
-			bucketSeconds = 3600
-		} else {
-			bucketSeconds = 86400
-		}
+		bucketSeconds = bucketSizeForRange(startTime, endTime)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -148,9 +147,9 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	})
 }
 
-func parseBandwidthTrafficTypes(raw string) []string {
+func parseBandwidthTrafficTypes(raw string) ([]string, error) {
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	allowed := map[string]bool{
 		"virtual":  true,
@@ -162,13 +161,16 @@ func parseBandwidthTrafficTypes(raw string) []string {
 	var result []string
 	for _, value := range strings.Split(raw, ",") {
 		value = strings.TrimSpace(value)
-		if !allowed[value] || seen[value] {
+		if value == "" || !allowed[value] {
+			return nil, fmt.Errorf("trafficTypes contains invalid value %q", value)
+		}
+		if seen[value] {
 			continue
 		}
 		seen[value] = true
 		result = append(result, value)
 	}
-	return result
+	return result, nil
 }
 
 // GetBandwidthByIPs returns bandwidth data filtered by IP addresses
@@ -200,6 +202,10 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	ips := strings.Split(ipsStr, ",")
 	for i := range ips {
 		ips[i] = strings.TrimSpace(ips[i])
+		if ips[i] == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ips must not contain empty entries"})
+			return
+		}
 	}
 
 	// Use poller's device cache to resolve IPs to node IDs
@@ -227,7 +233,14 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	for nodeID := range nodeIDs {
 		buckets, err := h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
 		if err != nil {
-			continue // Skip errors for individual nodes
+			if writeContextError(c, err) {
+				return
+			}
+			log.Printf("ERROR GetBandwidthByIPs for node %q: %v", nodeID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to fetch bandwidth data",
+			})
+			return
 		}
 		for _, b := range buckets {
 			bucket := b.Time.Unix()
@@ -268,14 +281,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 			bucketSeconds = 60
 		}
 	} else {
-		rangeSeconds := int64(endTime.Sub(startTime).Seconds())
-		if rangeSeconds <= 24*3600 {
-			bucketSeconds = 60
-		} else if rangeSeconds <= 7*24*3600 {
-			bucketSeconds = 3600
-		} else {
-			bucketSeconds = 86400
-		}
+		bucketSeconds = bucketSizeForRange(startTime, endTime)
 	}
 
 	if allBuckets == nil {

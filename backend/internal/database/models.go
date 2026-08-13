@@ -18,7 +18,23 @@ type NodePairAggregate struct {
 	RxPkts      int64  `json:"rxPkts"`
 	FlowCount   int64  `json:"flowCount"`
 	Protocols   string `json:"protocols"` // JSON array of protocols seen
-	Ports       string `json:"ports"`     // JSON array of top ports
+	// ProtocolBytes preserves the byte totals needed to identify the dominant
+	// protocol after multiple polls are merged. It is kept internal to the
+	// aggregate response; callers receive the derived Protocol field instead.
+	ProtocolBytes string `json:"-"`
+	Ports         string `json:"ports"` // JSON array of top ports
+	// TxPorts and RxPorts preserve destination-port observations for each
+	// direction of the normalized pair. They are internal storage fields; the
+	// aggregated-flow handler exposes them only when DirectionalPorts is true.
+	TxPorts         string `json:"-"`
+	RxPorts         string `json:"-"`
+	TxProtocolBytes string `json:"-"`
+	RxProtocolBytes string `json:"-"`
+	// DirectionalPorts indicates that all metadata contributing to this
+	// aggregate has direction-preserving protocol/port information. It is
+	// intentionally false for legacy rows so callers can use the old union
+	// metadata without attributing it to the wrong direction.
+	DirectionalPorts bool `json:"-"`
 }
 
 // BandwidthBucket represents aggregated bandwidth for a time bucket
@@ -43,6 +59,7 @@ type TrafficStats struct {
 	UDPBytes        int64  `json:"udpBytes"`
 	OtherProtoBytes int64  `json:"otherProtoBytes"`
 	VirtualBytes    int64  `json:"virtualBytes"`
+	ExitBytes       int64  `json:"exitBytes"`
 	SubnetBytes     int64  `json:"subnetBytes"`
 	PhysicalBytes   int64  `json:"physicalBytes"`
 	TotalFlows      int64  `json:"totalFlows"`
@@ -160,7 +177,7 @@ type Store interface {
 
 	// Pre-aggregated data operations
 	UpsertNodePairAggregates(ctx context.Context, aggregates []NodePairAggregate) error
-	GetNodePairAggregates(ctx context.Context, start, end time.Time, bucketSize int64) ([]NodePairAggregate, error)
+	GetNodePairAggregates(ctx context.Context, start, end time.Time) ([]NodePairAggregate, error)
 
 	// Bandwidth operations
 	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket) error
@@ -184,6 +201,8 @@ type Store interface {
 	CommitPollResults(ctx context.Context, results PollResults) error
 	CommitObjectIngest(ctx context.Context, result ObjectIngestResult) error
 	IsObjectIngested(ctx context.Context, key string) (bool, error)
+	GetObjectsNeedingMetadata(ctx context.Context, limit int) ([]string, error)
+	MarkObjectMetadataHydrated(ctx context.Context, key string, nodeIDs []string) error
 	UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error
 	GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error)
 

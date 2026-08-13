@@ -17,8 +17,11 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 		}
 	}
 
-	devices, err := h.tailscaleService.GetDevices()
+	devices, err := h.tailscaleService.GetDevicesWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetDevices: %v", err)
 		c.JSON(http.StatusOK, gin.H{"devices": []services.Device{}})
 		return
@@ -29,10 +32,16 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 
 func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	ctx := c.Request.Context()
+	if err := ctx.Err(); err != nil && writeContextError(c, err) {
+		return
+	}
 
 	// Fetch VIP services
 	vipServices, servicesErr := h.tailscaleService.GetVIPServices(ctx)
 	if servicesErr != nil {
+		if writeContextError(c, servicesErr) {
+			return
+		}
 		log.Printf("WARNING GetVIPServices failed: %v", servicesErr)
 		vipServices = make(map[string]services.VIPServiceInfo)
 	}
@@ -40,6 +49,9 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	// Fetch static records
 	staticRecords, recordsErr := h.tailscaleService.GetStaticRecords(ctx)
 	if recordsErr != nil {
+		if writeContextError(c, recordsErr) {
+			return
+		}
 		log.Printf("WARNING GetStaticRecords failed: %v", recordsErr)
 		staticRecords = make(map[string]services.StaticRecordInfo)
 	}
@@ -53,8 +65,11 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 }
 
 func (h *Handlers) GetDNSNameservers(c *gin.Context) {
-	nameservers, err := h.tailscaleService.GetDNSNameservers()
+	nameservers, err := h.tailscaleService.GetDNSNameserversWithContext(c.Request.Context())
 	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
 		log.Printf("ERROR GetDNSNameservers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to fetch DNS nameservers",
