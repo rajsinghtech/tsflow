@@ -262,7 +262,7 @@ func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Tim
 			for _, item := range page.Contents {
 				key := aws.ToString(item.Key)
 				logTime, ok := objectTime(key)
-				if !ok || logTime.Before(start) || logTime.After(end) {
+				if !ok || logTime.Before(start) || !logTime.Before(end) {
 					continue
 				}
 				lastModified := time.Time{}

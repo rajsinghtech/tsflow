@@ -130,6 +130,83 @@ func TestPollerS3OnlySkipsUnauthenticatedDeviceRefresh(t *testing.T) {
 	}
 }
 
+func TestPollerS3OnlyStartIngestsCompressedObjectAndStops(t *testing.T) {
+	apiRequests := make(chan struct{}, 1)
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiRequests <- struct{}{}
+		http.Error(w, "unexpected API request", http.StatusUnauthorized)
+	}))
+	defer apiServer.Close()
+
+	loggedAt := time.Now().UTC().Add(-time.Minute)
+	key := "network/" + loggedAt.Format("2006/01/02/2006-01-02-15-04-05") + ".ndjson.gz"
+	source, objectServer := newTestObjectStore(t, []testObject{
+		compressedTestFlowObject(t, key, "node-s3", loggedAt, 37, ".gz"),
+	}, 10)
+	defer objectServer.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  apiServer.URL,
+		TailscaleTailnet: "example.com",
+	})
+	if service.HasCredentials() {
+		t.Fatal("test Tailscale service unexpectedly has credentials")
+	}
+	poller, db := newObjectStoreTestPollerWithService(t, source, 10, service)
+	poller.config.InitialBackfill = time.Hour
+	poller.config.PollInterval = time.Hour
+	poller.config.CleanupInterval = time.Hour
+	poller.config.Retention = 0
+
+	if err := poller.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	deadline := time.NewTimer(2 * time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		seen, err := db.store.IsObjectIngested(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("S3-only poller did not ingest the compressed object")
+		}
+	}
+
+	pairs, err := db.store.GetNodePairAggregates(ctx, loggedAt.Add(-time.Minute), loggedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].TxBytes != 37 || pairs[0].FlowCount != 1 {
+		t.Fatalf("S3-only aggregate = %+v, want one flow with 37 transmitted bytes", pairs)
+	}
+	select {
+	case <-apiRequests:
+		t.Fatal("S3-only poller attempted an unauthenticated Tailscale API request")
+	default:
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		poller.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("S3-only poller Stop did not complete")
+	}
+}
+
 func TestPollerStartWithCanceledContextStopsCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

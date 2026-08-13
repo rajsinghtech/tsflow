@@ -133,3 +133,21 @@ func TestRollingCacheCountsUniquePairsAcrossTrafficTypes(t *testing.T) {
 		t.Fatalf("traffic stats = %+v, want two unique pairs", stats)
 	}
 }
+
+func TestRollingCacheCountsDelimiterContainingPairsSeparately(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	cache := NewRollingWindowCache(10 * time.Minute)
+	cache.Update(
+		[]database.NodePairAggregate{
+			{Bucket: now.Unix(), SrcNodeID: "a|b", DstNodeID: "c", TrafficType: "virtual"},
+			{Bucket: now.Unix(), SrcNodeID: "a", DstNodeID: "b|c", TrafficType: "virtual"},
+		},
+		nil, nil,
+		[]database.TrafficStats{{Bucket: now.Unix(), VirtualBytes: 300, TotalFlows: 2, UniquePairs: 1}},
+	)
+
+	stats := cache.GetTrafficStats(now, now.Add(time.Minute))
+	if len(stats) != 1 || stats[0].UniquePairs != 2 {
+		t.Fatalf("traffic stats = %+v, want two delimiter-containing pairs", stats)
+	}
+}

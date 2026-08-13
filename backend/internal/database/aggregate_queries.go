@@ -972,21 +972,47 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bs := resolveBucketSize(endUnix - startUnix)
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b,
-		       SUM(CASE WHEN traffic_type = 'virtual'
-		                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
-		       SUM(CASE WHEN traffic_type = 'exit'
-		                THEN tx_bytes + rx_bytes ELSE 0 END) AS exit_bytes,
-		       SUM(CASE WHEN traffic_type = 'subnet'
-		                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
-		       SUM(CASE WHEN traffic_type = 'physical'
-		                THEN tx_bytes + rx_bytes ELSE 0 END) AS physical_bytes,
-		       SUM(flow_count) AS total_flows,
-		       COUNT(DISTINCT src_node_id || '|' || dst_node_id) AS unique_pairs
-		FROM node_pairs
-		WHERE bucket >= ? AND bucket < ?%s
-		GROUP BY b
-		ORDER BY b ASC
+		WITH filtered_pairs AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id,
+			       dst_node_id,
+			       traffic_type,
+			       tx_bytes,
+			       rx_bytes,
+			       flow_count
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?%s
+		), traffic_totals AS (
+			SELECT b,
+			       SUM(CASE WHEN traffic_type = 'virtual'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
+			       SUM(CASE WHEN traffic_type = 'exit'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS exit_bytes,
+			       SUM(CASE WHEN traffic_type = 'subnet'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
+			       SUM(CASE WHEN traffic_type = 'physical'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS physical_bytes,
+			       SUM(flow_count) AS total_flows
+			FROM filtered_pairs
+			GROUP BY b
+		), unique_pair_counts AS (
+			SELECT b, COUNT(*) AS unique_pairs
+			FROM (
+				SELECT DISTINCT b, src_node_id, dst_node_id
+				FROM filtered_pairs
+			)
+			GROUP BY b
+		)
+		SELECT t.b,
+		       t.virtual_bytes,
+		       t.exit_bytes,
+		       t.subnet_bytes,
+		       t.physical_bytes,
+		       t.total_flows,
+		       p.unique_pairs
+		FROM traffic_totals t
+		JOIN unique_pair_counts p ON p.b = t.b
+		ORDER BY t.b ASC
 	`, bs, bs, typeClause)
 
 	args := append([]any{startUnix, endUnix}, typeArgs...)

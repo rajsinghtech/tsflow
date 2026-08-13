@@ -169,3 +169,20 @@ func TestAggregateSelfTrafficDoesNotDoubleCountPerNodeBandwidth(t *testing.T) {
 		t.Fatalf("self pair = %+v, want TX 7 RX 0 and one flow", selfPair)
 	}
 }
+
+func TestAggregateTrafficStatsDistinguishDelimiterContainingPairs(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	base := time.Now().UTC().Truncate(time.Minute)
+	logs := []database.FlowLog{
+		{LoggedAt: base.Add(5 * time.Second), SrcIP: "a|b", DstIP: "c", TrafficType: "virtual", Protocol: 6, TxBytes: 100},
+		{LoggedAt: base.Add(10 * time.Second), SrcIP: "a", DstIP: "b|c", TrafficType: "virtual", Protocol: 17, TxBytes: 200},
+	}
+
+	pairs, _, _, stats := poller.aggregate(logs)
+	if len(pairs) != 2 || len(stats) != 1 {
+		t.Fatalf("aggregate sizes = pairs %d, stats %d; want 2 and 1", len(pairs), len(stats))
+	}
+	if stats[0].TCPBytes != 100 || stats[0].UDPBytes != 200 || stats[0].TotalFlows != 2 || stats[0].UniquePairs != 2 {
+		t.Fatalf("traffic stats = %+v, want separate delimiter-containing pairs", stats[0])
+	}
+}
