@@ -115,3 +115,51 @@ func TestConvertTailscaleLogSkipsRowsWithMissingTimestamp(t *testing.T) {
 		t.Fatalf("converted %d flows with no timestamp, want none", len(flows))
 	}
 }
+
+func TestConvertTailscaleLogSkipsCountersThatDoNotFitSQLiteIntegers(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	flows := poller.convertTailscaleLog(tailscale.NetworkFlowLog{
+		NodeID: "node-a",
+		Start:  time.Date(2026, 5, 8, 13, 45, 0, 0, time.UTC),
+		VirtualTraffic: []tailscale.TrafficStats{
+			{Proto: 6, Src: "100.64.0.1:1234", Dst: "100.64.0.2:443", TxBytes: ^uint64(0), TxPkts: 1},
+			{Proto: 6, Src: "100.64.0.1:1234", Dst: "100.64.0.2:443", TxBytes: 10, TxPkts: 1},
+		},
+	})
+	if len(flows) != 1 || flows[0].TxBytes != 10 {
+		t.Fatalf("converted flows = %+v, want only the in-range counter", flows)
+	}
+}
+
+func TestConvertMapLogSkipsFractionalAndOutOfRangeCounters(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	flows := poller.convertMapLog(map[string]any{
+		"nodeId": "node-a",
+		"start":  "2026-05-08T13:45:00Z",
+		"virtualTraffic": []any{
+			map[string]any{"proto": float64(6), "src": "100.64.0.1:1234", "dst": "100.64.0.2:443", "txBytes": float64(1 << 63), "txPkts": float64(1)},
+			map[string]any{"proto": float64(6), "src": "100.64.0.1:1234", "dst": "100.64.0.2:443", "txBytes": float64(10), "txPkts": float64(1.5)},
+			map[string]any{"proto": float64(6), "src": "100.64.0.1:1234", "dst": "100.64.0.2:443", "txBytes": float64(10), "txPkts": float64(1)},
+		},
+	})
+	if len(flows) != 1 || flows[0].TxBytes != 10 || flows[0].TxPkts != 1 {
+		t.Fatalf("converted flows = %+v, want only the valid row", flows)
+	}
+}
+
+func TestConvertMapLogRejectsNegativeCounters(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	flows := poller.convertMapLog(map[string]any{
+		"nodeId": "node-a",
+		"start":  "2026-05-08T13:45:00Z",
+		"virtualTraffic": []any{
+			map[string]any{
+				"proto": 6, "src": "100.64.0.1:1234", "dst": "100.64.0.2:443",
+				"txBytes": -1, "txPkts": 1,
+			},
+		},
+	})
+	if len(flows) != 0 {
+		t.Fatalf("converted flows = %+v, want negative counter row rejected", flows)
+	}
+}

@@ -45,6 +45,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		udpBytes        int64
 		otherProtoBytes int64
 		virtualBytes    int64
+		exitBytes       int64
 		subnetBytes     int64
 		physicalBytes   int64
 		totalFlows      int64
@@ -164,8 +165,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		case "virtual":
 			tsAccum.virtualBytes += log.TxBytes
 		case "exit":
-			// Exit node traffic flows over the virtual network; count under virtual
-			tsAccum.virtualBytes += log.TxBytes
+			tsAccum.exitBytes += log.TxBytes
 		case "subnet":
 			tsAccum.subnetBytes += log.TxBytes
 		case "physical":
@@ -204,16 +204,20 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			}
 		}
 
-		// dstNode receives what srcNode transmitted
-		dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
-		if bw, ok := nodeBwMap[dstBwKey]; ok {
-			bw.RxBytes += log.TxBytes // dst receives what src sent
-		} else {
-			nodeBwMap[dstBwKey] = &database.NodeBandwidth{
-				Bucket:  bucket,
-				NodeID:  dstNodeID,
-				TxBytes: 0,
-				RxBytes: log.TxBytes, // dst receives what src sent
+		// A self-flow has one endpoint, so attributing it as both TX and RX would
+		// count the same transmitted bytes twice in per-node totals.
+		if srcNodeID != dstNodeID {
+			// dstNode receives what srcNode transmitted
+			dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
+			if bw, ok := nodeBwMap[dstBwKey]; ok {
+				bw.RxBytes += log.TxBytes // dst receives what src sent
+			} else {
+				nodeBwMap[dstBwKey] = &database.NodeBandwidth{
+					Bucket:  bucket,
+					NodeID:  dstNodeID,
+					TxBytes: 0,
+					RxBytes: log.TxBytes, // dst receives what src sent
+				}
 			}
 		}
 	}
@@ -306,6 +310,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			UDPBytes:        accum.udpBytes,
 			OtherProtoBytes: accum.otherProtoBytes,
 			VirtualBytes:    accum.virtualBytes,
+			ExitBytes:       accum.exitBytes,
 			SubnetBytes:     accum.subnetBytes,
 			PhysicalBytes:   accum.physicalBytes,
 			TotalFlows:      accum.totalFlows,

@@ -90,7 +90,9 @@
 		if (hasNetworkData) return $networkStats.totalBytes;
 		if (!$statsSummary) return 0;
 		const protoTotal = $statsSummary.tcpBytes + $statsSummary.udpBytes + $statsSummary.otherProtoBytes;
-		return protoTotal > 0 ? protoTotal : $statsSummary.virtualBytes + $statsSummary.subnetBytes;
+		return protoTotal > 0
+			? protoTotal
+			: $statsSummary.virtualBytes + $statsSummary.exitBytes + $statsSummary.subnetBytes + $statsSummary.physicalBytes;
 	});
 
 	const avgTrafficPerNode = $derived.by(() => {

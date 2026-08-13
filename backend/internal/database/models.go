@@ -47,6 +47,7 @@ type TrafficStats struct {
 	UDPBytes        int64  `json:"udpBytes"`
 	OtherProtoBytes int64  `json:"otherProtoBytes"`
 	VirtualBytes    int64  `json:"virtualBytes"`
+	ExitBytes       int64  `json:"exitBytes"`
 	SubnetBytes     int64  `json:"subnetBytes"`
 	PhysicalBytes   int64  `json:"physicalBytes"`
 	TotalFlows      int64  `json:"totalFlows"`

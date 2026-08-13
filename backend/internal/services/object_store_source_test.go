@@ -397,6 +397,100 @@ func TestObjectStoreRepairsPartiallyMissingMetadataOutsideLookback(t *testing.T)
 	}
 }
 
+func TestObjectStoreContinuesWhenHistoricalMetadataObjectIsMalformed(t *testing.T) {
+	oldKey := "network/2026/05/08/a/2026-05-08-13-30-00.ndjson"
+	newKey := "network/2026/05/08/b/2026-05-08-13-45-00.ndjson"
+	objects := []testObject{
+		{key: oldKey, body: []byte("{malformed\n")},
+		testFlowObject(t, newKey, "node-b", 20, false),
+	}
+	source, server := newTestObjectStore(t, objects, 10)
+	defer server.Close()
+	poller, db := newObjectStoreTestPoller(t, source, 10)
+	ctx := context.Background()
+	base := time.Date(2026, 5, 8, 13, 0, 0, 0, time.UTC)
+
+	// Seed the malformed object as an already-ingested row needing metadata
+	// repair. It must not block ingestion of the newer valid object.
+	if err := db.store.CommitObjectIngest(ctx, database.ObjectIngestResult{
+		Key:          oldKey,
+		LastModified: base,
+		PollEnd:      base.Add(30 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	metadataDB, err := sql.Open("sqlite", db.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metadataDB.ExecContext(ctx,
+		"UPDATE ingested_objects SET metadata_hydrated = 0 WHERE object_key = ?", oldKey,
+	); err != nil {
+		_ = metadataDB.Close()
+		t.Fatal(err)
+	}
+	if err := metadataDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := poller.pollObjectStore(ctx, base, base.Add(time.Hour)); err != nil {
+		t.Fatalf("metadata repair should not block newer ingestion: %v", err)
+	}
+	seen, err := db.store.IsObjectIngested(ctx, newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatalf("expected valid object %s to be ingested", newKey)
+	}
+	pairs, err := db.store.GetNodePairAggregates(ctx, base, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].TxBytes != 20 {
+		t.Fatalf("pairs = %+v, want valid object traffic despite malformed metadata object", pairs)
+	}
+}
+
+func TestObjectStoreProcessesLaterObjectsWhenEarlierCandidateIsMalformed(t *testing.T) {
+	oldKey := "network/2026/05/08/a/2026-05-08-13-30-00.ndjson"
+	newKey := "network/2026/05/08/b/2026-05-08-13-45-00.ndjson"
+	source, server := newTestObjectStore(t, []testObject{
+		{key: oldKey, body: []byte("{malformed\n")},
+		testFlowObject(t, newKey, "node-b", 20, false),
+	}, 10)
+	defer server.Close()
+	poller, db := newObjectStoreTestPoller(t, source, 10)
+	ctx := context.Background()
+	base := time.Date(2026, 5, 8, 13, 0, 0, 0, time.UTC)
+
+	err := poller.pollObjectStore(ctx, base, base.Add(time.Hour))
+	if err == nil || !strings.Contains(err.Error(), oldKey) {
+		t.Fatalf("malformed candidate error = %v, want error naming %s", err, oldKey)
+	}
+	seen, err := db.store.IsObjectIngested(ctx, newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatalf("expected later valid object %s to be ingested", newKey)
+	}
+	state, err := db.store.GetPollState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastPollEnd.Equal(base.Add(30 * time.Minute)) {
+		t.Fatalf("poll cursor = %v, want earliest unreadable object at %v", state.LastPollEnd, base.Add(30*time.Minute))
+	}
+	pairs, err := db.store.GetNodePairAggregates(ctx, base, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].TxBytes != 20 {
+		t.Fatalf("pairs = %+v, want later valid object traffic", pairs)
+	}
+}
+
 func TestObjectStorePollPropagatesCancellation(t *testing.T) {
 	source, server := newTestObjectStore(t, nil, 10)
 	defer server.Close()

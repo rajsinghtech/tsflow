@@ -78,7 +78,9 @@
 					const key = `${port}-${protocol}`;
 					const existing = portMap.get(key);
 					const txAdd = nodeIsSrc ? bytes : 0;
-					const rxAdd = nodeIsDst ? bytes : 0;
+					// If both endpoints belong to the selected node, this is a self-flow;
+					// count it once as TX instead of also attributing it as RX.
+					const rxAdd = nodeIsDst && !nodeIsSrc ? bytes : 0;
 
 					if (existing) {
 						existing.txBytes += txAdd;

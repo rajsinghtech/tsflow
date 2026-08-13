@@ -119,6 +119,7 @@ export interface TrafficStatsBucket {
 	udpBytes: number;
 	otherProtoBytes: number;
 	virtualBytes: number;
+	exitBytes: number;
 	subnetBytes: number;
 	physicalBytes: number;
 	totalFlows: number;
@@ -131,6 +132,7 @@ export interface TrafficStatsSummary {
 	udpBytes: number;
 	otherProtoBytes: number;
 	virtualBytes: number;
+	exitBytes: number;
 	subnetBytes: number;
 	physicalBytes: number;
 	totalFlows: number;

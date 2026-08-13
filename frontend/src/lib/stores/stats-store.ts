@@ -99,6 +99,7 @@ export async function loadStats(currentAttempt = 0) {
 					udpBytes: 0,
 					otherProtoBytes: 0,
 					virtualBytes: 0,
+					exitBytes: 0,
 					subnetBytes: 0,
 					physicalBytes: 0,
 					totalFlows: 0,

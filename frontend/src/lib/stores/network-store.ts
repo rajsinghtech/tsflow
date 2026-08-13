@@ -389,16 +389,36 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 
 	for (const flow of flows) {
 		const proto = flow.protocol || 0;
+		if (flow.srcNodeId === flow.dstNodeId) {
+			// A self-pair is represented by one graph endpoint. Collapse both
+			// normalized directions into one TX-only entry so the graph does not
+			// render or count the same node twice.
+			const totalBytes = (flow.totalTxBytes || 0) + (flow.totalRxBytes || 0);
+			if (totalBytes > 0) {
+				const selfLog = getOrCreateLog(flow.srcNodeId);
+				pushTraffic(selfLog, flow.trafficType, {
+					proto,
+					src: flow.srcNodeId,
+					dst: flow.dstNodeId,
+					txBytes: totalBytes,
+					rxBytes: 0,
+					txPkts: (flow.totalTxPkts || 0) + (flow.totalRxPkts || 0),
+					rxPkts: 0,
+					ports: flow.ports || []
+				});
+			}
+			continue;
+		}
 
 		// Forward direction: src sent txBytes to dst
 		if (flow.totalTxBytes > 0) {
 			const fwdLog = getOrCreateLog(flow.srcNodeId);
 			pushTraffic(fwdLog, flow.trafficType, {
 				proto,
-				src: flow.srcNodeId,
-				dst: flow.dstNodeId,
-				txBytes: flow.totalTxBytes,
-				rxBytes: 0,
+					src: flow.srcNodeId,
+					dst: flow.dstNodeId,
+					txBytes: flow.totalTxBytes,
+					rxBytes: 0,
 					txPkts: flow.totalTxPkts || 0,
 					rxPkts: 0,
 					ports: flow.ports || []

@@ -380,12 +380,9 @@ func (p *Poller) poll(ctx context.Context) error {
 }
 
 func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) error {
-	objects, flows, lastProcessed, err := p.objectStore.Poll(ctx, p, start, end)
-	if err != nil {
-		return err
-	}
+	objects, flows, lastProcessed, pollErr := p.objectStore.Poll(ctx, p, start, end)
 
-	if objects == 0 {
+	if objects == 0 && pollErr == nil {
 		// Move the cursor forward when no object exists yet. Object-store polling
 		// still applies a lookback and an ingested-object guard on the next pass.
 		lastProcessed = end
@@ -398,6 +395,9 @@ func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) erro
 		if err := p.store.UpdatePollState(ctx, lastProcessed); err != nil {
 			return err
 		}
+	}
+	if pollErr != nil {
+		return pollErr
 	}
 
 	p.mu.Lock()

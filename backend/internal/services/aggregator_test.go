@@ -73,3 +73,50 @@ func TestAggregateCapsTopPortsAtTwenty(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateSelfTrafficDoesNotDoubleCountPerNodeBandwidth(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	base := time.Now().UTC().Truncate(time.Minute)
+	logs := []database.FlowLog{
+		{LoggedAt: base.Add(5 * time.Second), SrcIP: "100.64.0.1", DstIP: "100.64.0.2", TrafficType: "virtual", Protocol: 6, TxBytes: 100},
+		{LoggedAt: base.Add(10 * time.Second), SrcIP: "100.64.0.2", DstIP: "100.64.0.1", TrafficType: "virtual", Protocol: 6, TxBytes: 40},
+		{LoggedAt: base.Add(15 * time.Second), SrcIP: "100.64.0.3", DstIP: "100.64.0.3", TrafficType: "virtual", Protocol: 6, TxBytes: 7},
+	}
+
+	pairs, bandwidth, nodeBandwidth, stats := poller.aggregate(logs)
+	if len(pairs) != 2 || len(bandwidth) != 1 || len(nodeBandwidth) != 3 || len(stats) != 1 {
+		t.Fatalf("aggregate sizes = pairs %d, bandwidth %d, node bandwidth %d, stats %d; want 2, 1, 3, 1", len(pairs), len(bandwidth), len(nodeBandwidth), len(stats))
+	}
+
+	if bandwidth[0].TxBytes != 147 || bandwidth[0].RxBytes != 0 {
+		t.Fatalf("total bandwidth = %+v, want TX 147 and RX 0", bandwidth[0])
+	}
+	if stats[0].TCPBytes != 147 || stats[0].TotalFlows != 3 || stats[0].UniquePairs != 2 {
+		t.Fatalf("traffic stats = %+v, want TCP 147, three flows, two pairs", stats[0])
+	}
+
+	nodeTotals := make(map[string]database.NodeBandwidth, len(nodeBandwidth))
+	for _, node := range nodeBandwidth {
+		nodeTotals[node.NodeID] = node
+	}
+	if got := nodeTotals["100.64.0.1"]; got.TxBytes != 100 || got.RxBytes != 40 {
+		t.Fatalf("node 100.64.0.1 bandwidth = %+v, want TX 100 RX 40", got)
+	}
+	if got := nodeTotals["100.64.0.2"]; got.TxBytes != 40 || got.RxBytes != 100 {
+		t.Fatalf("node 100.64.0.2 bandwidth = %+v, want TX 40 RX 100", got)
+	}
+	if got := nodeTotals["100.64.0.3"]; got.TxBytes != 7 || got.RxBytes != 0 {
+		t.Fatalf("self node bandwidth = %+v, want TX 7 RX 0", got)
+	}
+
+	var selfPair *database.NodePairAggregate
+	for i := range pairs {
+		if pairs[i].SrcNodeID == "100.64.0.3" {
+			selfPair = &pairs[i]
+			break
+		}
+	}
+	if selfPair == nil || selfPair.TxBytes != 7 || selfPair.RxBytes != 0 || selfPair.FlowCount != 1 {
+		t.Fatalf("self pair = %+v, want TX 7 RX 0 and one flow", selfPair)
+	}
+}

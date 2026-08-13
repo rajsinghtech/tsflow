@@ -99,8 +99,11 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	if p == nil || p.store == nil {
 		return 0, 0, start, fmt.Errorf("poller store is required")
 	}
+	// Metadata hydration repairs an auxiliary index for already-ingested
+	// objects. A stale or unreadable historical object must not prevent newer
+	// objects from being listed and ingested, so retain the error and continue.
 	if err := s.hydrateMissingMetadata(ctx, p); err != nil {
-		return 0, 0, start, err
+		log.Printf("Warning: historical metadata hydration incomplete: %v", err)
 	}
 
 	objects, err := s.listObjects(ctx, start.Add(-s.cfg.Lookback), end)
@@ -117,6 +120,8 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	processedObjects := 0
 	processedFlows := 0
 	lastProcessed := start
+	var firstReadErr error
+	var blockedAt time.Time
 	// Select un-ingested objects after checking the ingestion guard. This keeps
 	// a timestamp-only cursor progressing even when more than MaxObjects share
 	// the same timestamp and the first page has already been seen.
@@ -141,7 +146,14 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	for _, obj := range selected {
 		flows, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
 		if err != nil {
-			return processedObjects, processedFlows, lastProcessed, fmt.Errorf("failed to read %s: %w", obj.key, err)
+			if firstReadErr == nil {
+				firstReadErr = fmt.Errorf("failed to read %s: %w", obj.key, err)
+			}
+			if blockedAt.IsZero() || obj.logTime.Before(blockedAt) {
+				blockedAt = obj.logTime
+			}
+			log.Printf("Warning: skipping unreadable object %s; later objects will still be attempted: %v", obj.key, err)
+			continue
 		}
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
@@ -161,7 +173,6 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			Bandwidth:     totalBandwidth,
 			NodeBandwidth: nodeBandwidth,
 			TrafficStats:  trafficStats,
-			PollEnd:       pollEnd,
 		}); err != nil {
 			return processedObjects, processedFlows, lastProcessed, err
 		}
@@ -173,8 +184,14 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			lastProcessed = pollEnd
 		}
 	}
+	// Keep the cursor at the earliest unreadable object so a transient or
+	// repaired source object is retried on the next poll. Objects after it may
+	// still be ingested, but a failure must not silently advance past the gap.
+	if !blockedAt.IsZero() && blockedAt.Before(lastProcessed) {
+		lastProcessed = blockedAt
+	}
 
-	return processedObjects, processedFlows, lastProcessed, nil
+	return processedObjects, processedFlows, lastProcessed, firstReadErr
 }
 
 // hydrateMissingMetadata repairs historical node identities independently of
@@ -185,22 +202,31 @@ func (s *ObjectStoreSource) hydrateMissingMetadata(ctx context.Context, p *Polle
 	if err != nil {
 		return err
 	}
+	var firstErr error
 	for _, key := range keys {
 		_, nodeMetadata, err := s.readFlowLogs(ctx, p, key)
 		if err != nil {
-			return fmt.Errorf("failed to hydrate metadata from %s: %w", key, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to hydrate metadata from %s: %w", key, err)
+			}
+			continue
 		}
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
 			if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
-				return fmt.Errorf("failed to persist metadata from %s: %w", key, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to persist metadata from %s: %w", key, err)
+				}
+				continue
 			}
 		}
 		if err := p.store.MarkObjectMetadataHydrated(ctx, key, objectMetadataIDs(nodeMetadata)); err != nil {
-			return fmt.Errorf("failed to mark metadata hydrated for %s: %w", key, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to mark metadata hydrated for %s: %w", key, err)
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func objectMetadataIDs(nodes []database.NodeMetadata) []string {

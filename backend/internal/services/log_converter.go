@@ -1,7 +1,9 @@
 package services
 
 import (
+	"encoding/json"
 	"log"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -61,92 +63,43 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 		return flowLogs
 	}
 
-	// Process virtual traffic
+	appendTraffic := func(traffic tailscale.TrafficStats, trafficType string, includeRx bool) {
+		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		if !ok {
+			return
+		}
+		txBytes, rxBytes, txPkts, rxPkts, ok := convertTypedCounters(traffic, includeRx)
+		if !ok {
+			log.Printf("Warning: skipping flow log with out-of-range counters for node %s", tsLog.NodeID)
+			return
+		}
+		flowLogs = append(flowLogs, database.FlowLog{
+			LoggedAt:    logTime,
+			NodeID:      tsLog.NodeID,
+			TrafficType: trafficType,
+			Protocol:    traffic.Proto,
+			SrcIP:       srcIP,
+			SrcPort:     extractPort(traffic.Src),
+			DstIP:       dstIP,
+			DstPort:     extractPort(traffic.Dst),
+			TxBytes:     txBytes,
+			RxBytes:     rxBytes,
+			TxPkts:      txPkts,
+			RxPkts:      rxPkts,
+		})
+	}
+
 	for _, traffic := range tsLog.VirtualTraffic {
-		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
-		if !ok {
-			continue
-		}
-		flowLogs = append(flowLogs, database.FlowLog{
-			LoggedAt:    logTime,
-			NodeID:      tsLog.NodeID,
-			TrafficType: "virtual",
-			Protocol:    traffic.Proto,
-			SrcIP:       srcIP,
-			SrcPort:     extractPort(traffic.Src),
-			DstIP:       dstIP,
-			DstPort:     extractPort(traffic.Dst),
-			TxBytes:     int64(traffic.TxBytes),
-			RxBytes:     int64(traffic.RxBytes),
-			TxPkts:      int64(traffic.TxPkts),
-			RxPkts:      int64(traffic.RxPkts),
-		})
+		appendTraffic(traffic, "virtual", true)
 	}
-
-	// Process subnet traffic
 	for _, traffic := range tsLog.SubnetTraffic {
-		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
-		if !ok {
-			continue
-		}
-		flowLogs = append(flowLogs, database.FlowLog{
-			LoggedAt:    logTime,
-			NodeID:      tsLog.NodeID,
-			TrafficType: "subnet",
-			Protocol:    traffic.Proto,
-			SrcIP:       srcIP,
-			SrcPort:     extractPort(traffic.Src),
-			DstIP:       dstIP,
-			DstPort:     extractPort(traffic.Dst),
-			TxBytes:     int64(traffic.TxBytes),
-			RxBytes:     int64(traffic.RxBytes),
-			TxPkts:      int64(traffic.TxPkts),
-			RxPkts:      int64(traffic.RxPkts),
-		})
+		appendTraffic(traffic, "subnet", true)
 	}
-
-	// Process exit traffic (traffic via exit nodes)
 	for _, traffic := range tsLog.ExitTraffic {
-		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
-		if !ok {
-			continue
-		}
-		flowLogs = append(flowLogs, database.FlowLog{
-			LoggedAt:    logTime,
-			NodeID:      tsLog.NodeID,
-			TrafficType: "exit",
-			Protocol:    traffic.Proto,
-			SrcIP:       srcIP,
-			SrcPort:     extractPort(traffic.Src),
-			DstIP:       dstIP,
-			DstPort:     extractPort(traffic.Dst),
-			TxBytes:     int64(traffic.TxBytes),
-			RxBytes:     int64(traffic.RxBytes),
-			TxPkts:      int64(traffic.TxPkts),
-			RxPkts:      int64(traffic.RxPkts),
-		})
+		appendTraffic(traffic, "exit", true)
 	}
-
-	// Process physical traffic
 	for _, traffic := range tsLog.PhysicalTraffic {
-		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
-		if !ok {
-			continue
-		}
-		flowLogs = append(flowLogs, database.FlowLog{
-			LoggedAt:    logTime,
-			NodeID:      tsLog.NodeID,
-			TrafficType: "physical",
-			Protocol:    traffic.Proto,
-			SrcIP:       srcIP,
-			SrcPort:     extractPort(traffic.Src),
-			DstIP:       dstIP,
-			DstPort:     extractPort(traffic.Dst),
-			TxBytes:     int64(traffic.TxBytes),
-			RxBytes:     0,
-			TxPkts:      int64(traffic.TxPkts),
-			RxPkts:      0,
-		})
+		appendTraffic(traffic, "physical", false)
 	}
 
 	return flowLogs
@@ -182,8 +135,14 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 					if !endpointOK {
 						continue
 					}
-					rxBytes := getInt64(tMap, "rxBytes")
-					rxPkts := getInt64(tMap, "rxPkts")
+					txBytes, txBytesOK := getCounter(tMap, "txBytes")
+					rxBytes, rxBytesOK := getCounter(tMap, "rxBytes")
+					txPkts, txPktsOK := getCounter(tMap, "txPkts")
+					rxPkts, rxPktsOK := getCounter(tMap, "rxPkts")
+					if !txBytesOK || !txPktsOK || (!isPhysical && (!rxBytesOK || !rxPktsOK)) {
+						log.Printf("Warning: skipping flow log with invalid counters for node %s", nodeID)
+						continue
+					}
 					// Physical traffic has no RX data in the Tailscale API
 					if isPhysical {
 						rxBytes = 0
@@ -198,9 +157,9 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 						SrcPort:     extractPort(getString(tMap, "src")),
 						DstIP:       dstIP,
 						DstPort:     extractPort(getString(tMap, "dst")),
-						TxBytes:     getInt64(tMap, "txBytes"),
+						TxBytes:     txBytes,
 						RxBytes:     rxBytes,
-						TxPkts:      getInt64(tMap, "txPkts"),
+						TxPkts:      txPkts,
 						RxPkts:      rxPkts,
 					})
 				}
@@ -291,26 +250,77 @@ func getString(m map[string]any, key string) string {
 }
 
 func getInt(m map[string]any, key string) int {
-	if v, ok := m[key].(float64); ok {
-		// Validate float is within int range and not NaN/Inf
-		if v != v || v > float64(int(^uint(0)>>1)) || v < float64(-int(^uint(0)>>1)-1) {
-			return 0
-		}
-		return int(v)
+	value, ok := parseInt64(m[key])
+	if !ok || value > int64(^uint(0)>>1) || value < -int64(^uint(0)>>1)-1 {
+		return 0
 	}
-	return 0
+	return int(value)
 }
 
-func getInt64(m map[string]any, key string) int64 {
-	if v, ok := m[key].(float64); ok {
-		// Validate float is within int64 range and not NaN/Inf
-		// Note: float64 can't exactly represent all int64 values, but this catches major issues
-		if v != v || v > float64(1<<63-1) || v < float64(-1<<63) {
-			return 0
-		}
-		return int64(v)
+func getCounter(m map[string]any, key string) (int64, bool) {
+	raw, exists := m[key]
+	if !exists || raw == nil {
+		return 0, true
 	}
-	return 0
+	return parseInt64(raw)
+}
+
+func parseInt64(raw any) (int64, bool) {
+	switch v := raw.(type) {
+	case float64:
+		// JSON numbers are decoded as float64. Reject fractional, NaN/Inf, and
+		// negative values and values at or above 2^63, which float64 rounds
+		// MaxInt64 up to. Traffic counters are unsigned in the API.
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) || v < 0 || v >= float64(1<<63) {
+			return 0, false
+		}
+		return int64(v), true
+	case float32:
+		return parseInt64(float64(v))
+	case json.Number:
+		value, err := v.Int64()
+		return value, err == nil && value >= 0
+	case int:
+		return int64(v), v >= 0
+	case int64:
+		return v, v >= 0
+	case uint:
+		return uint64ToInt64(uint64(v))
+	case uint64:
+		return uint64ToInt64(v)
+	default:
+		return 0, false
+	}
+}
+
+func uint64ToInt64(value uint64) (int64, bool) {
+	if value > uint64(^uint64(0)>>1) {
+		return 0, false
+	}
+	return int64(value), true
+}
+
+func convertTypedCounters(traffic tailscale.TrafficStats, includeRx bool) (int64, int64, int64, int64, bool) {
+	txBytes, ok := uint64ToInt64(traffic.TxBytes)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	txPkts, ok := uint64ToInt64(traffic.TxPkts)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	if !includeRx {
+		return txBytes, 0, txPkts, 0, true
+	}
+	rxBytes, ok := uint64ToInt64(traffic.RxBytes)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	rxPkts, ok := uint64ToInt64(traffic.RxPkts)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	return txBytes, rxBytes, txPkts, rxPkts, true
 }
 
 func mapKeys(m map[string]any) []string {

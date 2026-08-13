@@ -187,6 +187,13 @@ func TestInit_Migration(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected 1 row in node_pairs after migration, got %d", count)
 	}
+	var exitColumn int
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('traffic_stats') WHERE name = 'exit_bytes'").Scan(&exitColumn); err != nil {
+		t.Fatalf("failed to inspect migrated traffic_stats schema: %v", err)
+	}
+	if exitColumn != 1 {
+		t.Fatal("traffic_stats.exit_bytes was not added during migration")
+	}
 
 	// Verify old tables were dropped
 	for _, table := range []string{"node_pairs_minutely", "node_pairs_hourly", "node_pairs_daily", "flow_logs_current"} {

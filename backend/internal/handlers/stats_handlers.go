@@ -84,13 +84,14 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	// Aggregate buckets into summary
 	var tcpBytes, udpBytes, otherProtoBytes int64
-	var virtualBytes, subnetBytes, physicalBytes int64
+	var virtualBytes, exitBytes, subnetBytes, physicalBytes int64
 	var totalFlows, maxUniquePairs int64
 	for _, b := range buckets {
 		tcpBytes += b.TCPBytes
 		udpBytes += b.UDPBytes
 		otherProtoBytes += b.OtherProtoBytes
 		virtualBytes += b.VirtualBytes
+		exitBytes += b.ExitBytes
 		subnetBytes += b.SubnetBytes
 		physicalBytes += b.PhysicalBytes
 		totalFlows += b.TotalFlows
@@ -105,6 +106,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"udpBytes":        udpBytes,
 			"otherProtoBytes": otherProtoBytes,
 			"virtualBytes":    virtualBytes,
+			"exitBytes":       exitBytes,
 			"subnetBytes":     subnetBytes,
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,

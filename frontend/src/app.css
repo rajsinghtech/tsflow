@@ -32,6 +32,7 @@
 
 	/* Traffic type colors */
 	--color-traffic-virtual: #3b82f6;
+	--color-traffic-exit: #a855f7;
 	--color-traffic-subnet: #10b981;
 	--color-traffic-physical: #f59e0b;
 
@@ -68,6 +69,7 @@
 
 	/* Traffic type colors - slightly darker for light mode */
 	--color-traffic-virtual: #2563eb;
+	--color-traffic-exit: #9333ea;
 	--color-traffic-subnet: #059669;
 	--color-traffic-physical: #d97706;
 

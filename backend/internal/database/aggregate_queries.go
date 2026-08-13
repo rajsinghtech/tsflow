@@ -155,17 +155,22 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx,
-		`UPDATE poll_state
-		 SET last_poll_end = CASE
-		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
-		       THEN ? ELSE last_poll_end END,
-		     updated_at = CURRENT_TIMESTAMP
-		 WHERE id = 1`,
-		result.PollEnd.UTC().Format(sqliteFormat), result.PollEnd.UTC().Format(sqliteFormat),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update poll state: %w", err)
+	// Object-store polls update the cursor after the full object batch has been
+	// examined. Leaving PollEnd zero keeps an unreadable earlier object from
+	// being skipped when a later object was committed successfully.
+	if !result.PollEnd.IsZero() {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE poll_state
+			 SET last_poll_end = CASE
+			       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+			       THEN ? ELSE last_poll_end END,
+			     updated_at = CURRENT_TIMESTAMP
+			 WHERE id = 1`,
+			result.PollEnd.UTC().Format(sqliteFormat), result.PollEnd.UTC().Format(sqliteFormat),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update poll state: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -327,9 +332,9 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO traffic_stats (bucket, tcp_bytes, udp_bytes, other_proto_bytes,
-		                           virtual_bytes, subnet_bytes, physical_bytes,
+		                           virtual_bytes, exit_bytes, subnet_bytes, physical_bytes,
 		                           total_flows, unique_pairs, top_ports)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket) DO UPDATE SET
 			tcp_bytes         = tcp_bytes         + excluded.tcp_bytes,
 			udp_bytes         = udp_bytes         + excluded.udp_bytes,
@@ -337,6 +342,7 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 			virtual_bytes     = virtual_bytes     + excluded.virtual_bytes,
 			subnet_bytes      = subnet_bytes      + excluded.subnet_bytes,
 			physical_bytes    = physical_bytes    + excluded.physical_bytes,
+			exit_bytes       = COALESCE(exit_bytes, 0) + excluded.exit_bytes,
 			total_flows       = total_flows       + excluded.total_flows,
 			unique_pairs      = MAX(unique_pairs, excluded.unique_pairs),
 			top_ports         = (
@@ -370,7 +376,7 @@ func upsertTrafficStatsTx(ctx context.Context, tx *sql.Tx, stats []TrafficStats)
 		bucket := (st.Bucket / bucketSize) * bucketSize
 		if _, err := stmt.ExecContext(ctx,
 			bucket, st.TCPBytes, st.UDPBytes, st.OtherProtoBytes,
-			st.VirtualBytes, st.SubnetBytes, st.PhysicalBytes,
+			st.VirtualBytes, st.ExitBytes, st.SubnetBytes, st.PhysicalBytes,
 			st.TotalFlows, st.UniquePairs, st.TopPorts,
 		); err != nil {
 			return fmt.Errorf("failed to upsert traffic stats: %w", err)
@@ -580,7 +586,7 @@ func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, start, end
 	bs := resolveBucketSize(endUnix - startUnix)
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(trafficTypes)), ",")
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
+		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes + rx_bytes), 0
 		FROM node_pairs
 		WHERE bucket >= ? AND bucket < ? AND traffic_type IN (%s)
 		GROUP BY b
@@ -623,16 +629,37 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, start, end time.Time
 		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
 	}
 
+	// Derive node bandwidth from normalized node_pairs rather than the legacy
+	// bandwidth_by_node table. This keeps historical self-flows from appearing
+	// as both TX and RX after the self-flow accounting fix.
 	bs := resolveBucketSize(endUnix - startUnix)
 	query := fmt.Sprintf(`
-		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes), SUM(rx_bytes)
-		FROM bandwidth_by_node
-		WHERE bucket >= ? AND bucket < ? AND node_id = ?
+		WITH node_bytes AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id AS node_id,
+			       SUM(tx_bytes) AS tx,
+			       SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY b, src_node_id
+			UNION ALL
+			SELECT (bucket / %d) * %d AS b,
+			       dst_node_id AS node_id,
+			       SUM(rx_bytes) AS tx,
+			       SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+			GROUP BY b, dst_node_id
+		)
+		SELECT b, SUM(tx), SUM(rx)
+		FROM node_bytes
+		WHERE node_id = ?
 		GROUP BY b
 		ORDER BY b ASC
-	`, bs, bs)
+	`, bs, bs, bs, bs)
 
-	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, nodeID)
+	rows, err := s.db.QueryContext(ctx, query, startUnix, endUnix, startUnix, endUnix, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
@@ -689,6 +716,7 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 			       SUM(udp_bytes) AS udp_bytes,
 			       SUM(other_proto_bytes) AS other_proto_bytes,
 			       SUM(virtual_bytes) AS virtual_bytes,
+			       SUM(exit_bytes) AS exit_bytes,
 			       SUM(subnet_bytes) AS subnet_bytes,
 			       SUM(physical_bytes) AS physical_bytes,
 			       SUM(total_flows) AS total_flows,
@@ -707,7 +735,7 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 			GROUP BY b
 		)
 		SELECT sb.b, sb.tcp_bytes, sb.udp_bytes, sb.other_proto_bytes,
-		       sb.virtual_bytes, sb.subnet_bytes, sb.physical_bytes,
+		       sb.virtual_bytes, sb.exit_bytes, sb.subnet_bytes, sb.physical_bytes,
 		       sb.total_flows,
 		       MAX(COALESCE(pb.unique_pairs, 0), COALESCE(sb.stored_unique_pairs, 0))
 		FROM stat_buckets sb
@@ -726,7 +754,7 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, start, end time.Time)
 		var st TrafficStats
 		if err := rows.Scan(
 			&st.Bucket, &st.TCPBytes, &st.UDPBytes, &st.OtherProtoBytes,
-			&st.VirtualBytes, &st.SubnetBytes, &st.PhysicalBytes,
+			&st.VirtualBytes, &st.ExitBytes, &st.SubnetBytes, &st.PhysicalBytes,
 			&st.TotalFlows, &st.UniquePairs,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan traffic stats: %w", err)
@@ -822,8 +850,10 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	query := fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b,
-		       SUM(CASE WHEN traffic_type IN ('virtual', 'exit')
+		       SUM(CASE WHEN traffic_type = 'virtual'
 		                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
+		       SUM(CASE WHEN traffic_type = 'exit'
+		                THEN tx_bytes + rx_bytes ELSE 0 END) AS exit_bytes,
 		       SUM(CASE WHEN traffic_type = 'subnet'
 		                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
 		       SUM(CASE WHEN traffic_type = 'physical'
@@ -846,8 +876,8 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	bucketMap := make(map[int64]*TrafficStats)
 	for rows.Next() {
 		var bucket int64
-		var virtualBytes, subnetBytes, physicalBytes, totalFlows, uniquePairs int64
-		if err := rows.Scan(&bucket, &virtualBytes, &subnetBytes, &physicalBytes, &totalFlows, &uniquePairs); err != nil {
+		var virtualBytes, exitBytes, subnetBytes, physicalBytes, totalFlows, uniquePairs int64
+		if err := rows.Scan(&bucket, &virtualBytes, &exitBytes, &subnetBytes, &physicalBytes, &totalFlows, &uniquePairs); err != nil {
 			return nil, fmt.Errorf("failed to scan: %w", err)
 		}
 		st, ok := bucketMap[bucket]
@@ -856,6 +886,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			bucketMap[bucket] = st
 		}
 		st.VirtualBytes = virtualBytes
+		st.ExitBytes = exitBytes
 		st.SubnetBytes = subnetBytes
 		st.PhysicalBytes = physicalBytes
 		st.TotalFlows += totalFlows
@@ -1009,14 +1040,30 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, start, end time.Time, l
 		limit = 10
 	}
 
+	// Use node_pairs as the source of truth so old per-node rows cannot retain
+	// the pre-fix self-flow double count.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT node_id, SUM(tx_bytes), SUM(rx_bytes), SUM(tx_bytes + rx_bytes) AS total
-		FROM bandwidth_by_node
-		WHERE bucket >= ? AND bucket < ?
-		GROUP BY node_id
+		WITH node_bytes AS (
+			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			GROUP BY src_node_id
+			UNION ALL
+			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+			GROUP BY dst_node_id
+		), totals AS (
+			SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx
+			FROM node_bytes
+			GROUP BY node_id
+		)
+		SELECT node_id, tx, rx, tx + rx AS total
+		FROM totals
 		ORDER BY total DESC, node_id ASC
 		LIMIT ?
-	`, startUnix, endUnix, limit)
+	`, startUnix, endUnix, startUnix, endUnix, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top talkers: %w", err)
 	}
@@ -1203,11 +1250,22 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 		TopPorts: make([]PortStat, 0),
 	}
 
+	// Keep totals consistent with GetNodeBandwidth and GetTopTalkers: derive
+	// them from normalized pairs instead of legacy per-node bandwidth rows.
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(tx_bytes), 0), COALESCE(SUM(rx_bytes), 0)
-		FROM bandwidth_by_node
-		WHERE node_id = ? AND bucket >= ? AND bucket < ?
-	`, nodeID, startUnix, endUnix).Scan(&result.TotalTx, &result.TotalRx); err != nil {
+		WITH node_bytes AS (
+			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM node_pairs
+			WHERE src_node_id = ? AND bucket >= ? AND bucket < ?
+			UNION ALL
+			SELECT SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM node_pairs
+			WHERE dst_node_id = ? AND bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
+		)
+		SELECT COALESCE(SUM(tx), 0), COALESCE(SUM(rx), 0)
+		FROM node_bytes
+	`, nodeID, startUnix, endUnix, nodeID, startUnix, endUnix).Scan(&result.TotalTx, &result.TotalRx); err != nil {
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
 

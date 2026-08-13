@@ -132,6 +132,7 @@ func (c *RollingWindowCache) Update(
 			existing.UDPBytes += ts.UDPBytes
 			existing.OtherProtoBytes += ts.OtherProtoBytes
 			existing.VirtualBytes += ts.VirtualBytes
+			existing.ExitBytes += ts.ExitBytes
 			existing.SubnetBytes += ts.SubnetBytes
 			existing.PhysicalBytes += ts.PhysicalBytes
 			existing.TotalFlows += ts.TotalFlows

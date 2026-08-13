@@ -313,11 +313,17 @@ export function processNetworkLogs(
 			const srcNode = nodeMap.get(srcNodeId)!;
 			const dstNode = nodeMap.get(dstNodeId)!;
 
-			// txBytes always represents what the src sent to dst
-			srcNode.txBytes += traffic.txBytes || 0;
-			dstNode.rxBytes += traffic.txBytes || 0;
-			srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
-			dstNode.totalBytes = dstNode.txBytes + dstNode.rxBytes;
+			// txBytes always represents what the src sent to dst. A self-flow has
+			// one graph node, so do not also add the same bytes as RX.
+			if (srcNodeId === dstNodeId) {
+				srcNode.txBytes += traffic.txBytes || 0;
+				srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
+			} else {
+				srcNode.txBytes += traffic.txBytes || 0;
+				dstNode.rxBytes += traffic.txBytes || 0;
+				srcNode.totalBytes = srcNode.txBytes + srcNode.rxBytes;
+				dstNode.totalBytes = dstNode.txBytes + dstNode.rxBytes;
+			}
 
 			// Track port and protocol information
 			const protocolName = getProtocolName(traffic.proto || 0);
@@ -387,7 +393,7 @@ export function processNetworkLogs(
 		const srcNode = nodeMap.get(link.source);
 		const dstNode = nodeMap.get(link.target);
 		if (srcNode) srcNode.connections++;
-		if (dstNode) dstNode.connections++;
+		if (dstNode && dstNode.id !== srcNode?.id) dstNode.connections++;
 	});
 
 	return {

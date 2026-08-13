@@ -202,8 +202,6 @@ function parseAcls(builder: Builder, policy: TailnetPolicy): void {
   const rules = policy.acls ?? [];
   rules.forEach((rule: AclRule, index) => {
     const src = ensureArray(rule.src);
-    const dstSelectors: string[] = [];
-    const portsAccumulator = new Set<string>();
 
     ensureArray(rule.dst).forEach((raw, dstIndex) => {
       const parsed = parseAclDst(raw);
@@ -215,14 +213,15 @@ function parseAcls(builder: Builder, policy: TailnetPolicy): void {
           ruleRef: { section: "acls", index }
         });
       }
-      dstSelectors.push(parsed.selector);
-      parsed.ports?.forEach((p) => portsAccumulator.add(p));
-    });
 
-    addAccessEdges(builder, "acls", index, src, dstSelectors, {
-      action: rule.action,
-      proto: rule.proto,
-      ports: portsAccumulator.size > 0 ? Array.from(portsAccumulator) : undefined
+      // Port qualifiers belong to the individual destination expression.
+      // Keeping one accumulator for the whole rule would make every emitted
+      // edge accept every port mentioned by any other destination.
+      addAccessEdges(builder, "acls", index, src, [parsed.selector], {
+        action: rule.action,
+        proto: rule.proto,
+        ports: parsed.ports
+      });
     });
   });
 }
