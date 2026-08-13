@@ -147,6 +147,29 @@ func TestDerivedTrafficStatsUnionPairsAcrossTrafficTypes(t *testing.T) {
 	}
 }
 
+func TestDerivedTrafficStatsDistinguishesDelimiterContainingPairs(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "a|b", DstNodeID: "c", TrafficType: "virtual", TxBytes: 100, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b|c", TrafficType: "virtual", TxBytes: 200, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("stats = %+v, want one bucket", stats)
+	}
+	if stats[0].VirtualBytes != 300 || stats[0].TotalFlows != 2 || stats[0].UniquePairs != 2 {
+		t.Fatalf("stats = %+v, want 300 virtual bytes, two flows, and two unique pairs", stats[0])
+	}
+}
+
 func TestDerivedTrafficStatsFallsBackForMalformedProtocolBytes(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

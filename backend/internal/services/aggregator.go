@@ -8,6 +8,14 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
+// trafficPairKey identifies a normalized endpoint pair without encoding the
+// endpoint IDs into a delimiter-joined string. Endpoint IDs are externally
+// sourced and may contain any delimiter.
+type trafficPairKey struct {
+	srcNodeID string
+	dstNodeID string
+}
+
 // aggregate creates pre-computed aggregates from flow logs
 // Handles deduplication: Tailscale logs the same traffic from both endpoints
 // (A->B logged by A, B->A logged by B). We normalize pairs by sorting node IDs
@@ -53,7 +61,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		subnetBytes     int64
 		physicalBytes   int64
 		totalFlows      int64
-		uniquePairs     map[string]struct{} // "nodeA|nodeB" -> exists
+		uniquePairs     map[trafficPairKey]struct{}
 		ports           map[protoPortKey]int64
 	}
 	trafficStatsMap := make(map[int64]*trafficStatsAccum)
@@ -167,7 +175,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		tsAccum, ok := trafficStatsMap[bucket]
 		if !ok {
 			tsAccum = &trafficStatsAccum{
-				uniquePairs: make(map[string]struct{}),
+				uniquePairs: make(map[trafficPairKey]struct{}),
 				ports:       make(map[protoPortKey]int64),
 			}
 			trafficStatsMap[bucket] = tsAccum
@@ -191,7 +199,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			tsAccum.physicalBytes += log.TxBytes
 		}
 		tsAccum.totalFlows++
-		tsAccum.uniquePairs[nodeA+"|"+nodeB] = struct{}{}
+		tsAccum.uniquePairs[trafficPairKey{srcNodeID: nodeA, dstNodeID: nodeB}] = struct{}{}
 		if log.DstPort > 0 {
 			tsAccum.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
 		}

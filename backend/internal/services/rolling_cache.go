@@ -20,8 +20,9 @@ type RollingWindowCache struct {
 
 	// Unique node pairs contributing to network-wide traffic stats by bucket.
 	// Keeping the set avoids undercounting when separate polls or traffic types
-	// contain disjoint pairs.
-	trafficStatPairs map[int64]map[string]struct{}
+	// contain disjoint pairs. The pair value is kept as two fields so endpoint
+	// IDs containing a delimiter cannot collide.
+	trafficStatPairs map[int64]map[trafficPairKey]struct{}
 
 	// Total bandwidth by minute bucket
 	bandwidth map[int64]*database.BandwidthBucket
@@ -39,7 +40,7 @@ type RollingWindowCache struct {
 func NewRollingWindowCache(maxAge time.Duration) *RollingWindowCache {
 	return &RollingWindowCache{
 		nodePairs:        make(map[int64][]database.NodePairAggregate),
-		trafficStatPairs: make(map[int64]map[string]struct{}),
+		trafficStatPairs: make(map[int64]map[trafficPairKey]struct{}),
 		bandwidth:        make(map[int64]*database.BandwidthBucket),
 		nodeBandwidth:    make(map[int64]map[string]*database.NodeBandwidth),
 		trafficStats:     make(map[int64]*database.TrafficStats),
@@ -60,9 +61,12 @@ func (c *RollingWindowCache) Update(
 	// Add node pairs by bucket, deduplicating by (src, dst, trafficType)
 	for _, np := range nodePairs {
 		if c.trafficStatPairs[np.Bucket] == nil {
-			c.trafficStatPairs[np.Bucket] = make(map[string]struct{})
+			c.trafficStatPairs[np.Bucket] = make(map[trafficPairKey]struct{})
 		}
-		c.trafficStatPairs[np.Bucket][np.SrcNodeID+"|"+np.DstNodeID] = struct{}{}
+		c.trafficStatPairs[np.Bucket][trafficPairKey{
+			srcNodeID: np.SrcNodeID,
+			dstNodeID: np.DstNodeID,
+		}] = struct{}{}
 
 		existing := c.nodePairs[np.Bucket]
 		found := false

@@ -64,21 +64,25 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 		source = "database"
 
-		// Fallback: synthesize from node_pairs when traffic_stats tables are empty
-		if len(buckets) == 0 && len(trafficTypes) == 0 {
-			buckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
+		// Merge derived buckets for unfiltered requests so node_pairs can fill
+		// gaps in traffic_stats without replacing its authoritative values.
+		if len(trafficTypes) == 0 {
+			var derivedBuckets []database.TrafficStats
+			derivedBuckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
 			if err != nil {
 				if writeContextError(c, err) {
 					return
 				}
-				log.Printf("ERROR GetStatsOverview (fallback): %v", err)
+				log.Printf("ERROR GetStatsOverview (derived): %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": "Failed to fetch derived traffic stats",
+					"error": "Failed to fetch supplemental traffic stats",
 				})
 				return
-			} else {
+			}
+			if len(buckets) == 0 {
 				source = "database (derived)"
 			}
+			buckets = mergeTrafficStatsBuckets(buckets, derivedBuckets)
 		}
 	}
 
@@ -121,6 +125,33 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"trafficTypes": trafficTypes,
 		},
 	})
+}
+
+// mergeTrafficStatsBuckets adds derived buckets that are absent from the
+// primary traffic_stats result. Primary buckets always win on overlap.
+func mergeTrafficStatsBuckets(primary, derived []database.TrafficStats) []database.TrafficStats {
+	if len(primary) == 0 && len(derived) == 0 {
+		return nil
+	}
+
+	byBucket := make(map[int64]database.TrafficStats, len(primary)+len(derived))
+	for _, bucket := range primary {
+		byBucket[bucket.Bucket] = bucket
+	}
+	for _, bucket := range derived {
+		if _, exists := byBucket[bucket.Bucket]; !exists {
+			byBucket[bucket.Bucket] = bucket
+		}
+	}
+
+	merged := make([]database.TrafficStats, 0, len(byBucket))
+	for _, bucket := range byBucket {
+		merged = append(merged, bucket)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Bucket < merged[j].Bucket
+	})
+	return merged
 }
 
 // GetTopTalkers returns the top N nodes by total traffic

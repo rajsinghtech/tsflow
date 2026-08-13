@@ -26,6 +26,10 @@ jobs:
         working-directory: ./frontend
         run: npm run check
 
+      - name: Frontend tests
+        working-directory: ./frontend
+        run: npm run test
+
   test-backend:
     runs-on: ubuntu-latest
     steps:
@@ -78,3 +82,6 @@ jobs:
 
       - name: Verify binary
         run: ./backend/tsflow --help
+
+      - name: Embedded runtime smoke test
+        run: bash .github/scripts/runtime-smoke.sh ./backend/tsflow
