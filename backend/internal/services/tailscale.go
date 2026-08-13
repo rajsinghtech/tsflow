@@ -409,11 +409,8 @@ func (ts *TailscaleService) GetNetworkLogsChunked(start, end string, chunkSize t
 			currentEnd.Format(time.RFC3339),
 		)
 		if err != nil {
-			// Log the error but continue with other chunks
-			log.Printf("Error fetching logs for chunk %s to %s: %v",
-				currentStart.Format(time.RFC3339),
-				currentEnd.Format(time.RFC3339),
-				err)
+			return nil, fmt.Errorf("failed to fetch chunk (%s to %s): %w",
+				currentStart.Format(time.RFC3339), currentEnd.Format(time.RFC3339), err)
 		} else if logs != nil {
 			allLogs = append(allLogs, logs)
 		}
@@ -553,6 +550,7 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 
 	// Collect results
 	results := make([]any, len(chunks))
+	chunkErrors := make([]error, len(chunks))
 	var hasError bool
 
 	for res := range resultsChan {
@@ -565,7 +563,9 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 		if res.err != nil {
 			log.Printf("Error fetching chunk %d: %v", res.index, res.err)
 			hasError = true
-			// Store nil for failed chunks
+			chunkErrors[res.index] = res.err
+			// Store nil for failed chunks so the result can still be drained
+			// before returning the first indexed error below.
 			results[res.index] = nil
 		} else {
 			results[res.index] = res.logs
@@ -586,13 +586,13 @@ func (ts *TailscaleService) GetNetworkLogsChunkedParallelWithContext(ctx context
 		}
 	}
 
-	if hasError && len(allLogs) == 0 {
-		return nil, fmt.Errorf("failed to fetch any logs from parallel requests")
-	}
-
-	// Warn about partial failures - data may be incomplete
-	if failedChunks > 0 {
-		log.Printf("Warning: %d/%d chunks failed during parallel fetch - results may be incomplete", failedChunks, len(chunks))
+	if hasError {
+		for index, chunkErr := range chunkErrors {
+			if chunkErr != nil {
+				return nil, fmt.Errorf("failed to fetch chunk %d/%d: %w", index+1, len(chunks), chunkErr)
+			}
+		}
+		return nil, fmt.Errorf("failed to fetch %d/%d chunks", failedChunks, len(chunks))
 	}
 
 	return allLogs, nil

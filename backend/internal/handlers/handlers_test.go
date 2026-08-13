@@ -179,3 +179,14 @@ func TestWriteContextError(t *testing.T) {
 		})
 	}
 }
+
+func TestParseBandwidthTrafficTypesRejectsInvalidValues(t *testing.T) {
+	if got, err := parseBandwidthTrafficTypes("virtual, subnet,virtual"); err != nil || len(got) != 2 || got[0] != "virtual" || got[1] != "subnet" {
+		t.Fatalf("valid traffic types = %#v, error = %v", got, err)
+	}
+	for _, raw := range []string{"invalid", "virtual,invalid", "virtual,"} {
+		if got, err := parseBandwidthTrafficTypes(raw); err == nil || got != nil {
+			t.Fatalf("parseBandwidthTrafficTypes(%q) = %#v, error = %v; want validation error", raw, got, err)
+		}
+	}
+}

@@ -245,7 +245,7 @@ export async function loadNetworkData(currentAttempt = 0) {
 
 	try {
 		if (get(dataSourceStore).followLatest) {
-			await dataSourceStore.fetchDataRange();
+			await dataSourceStore.fetchDataRange(signal);
 			if (signal.aborted) return;
 		}
 		const { start, end } = get(queryTimeWindow);

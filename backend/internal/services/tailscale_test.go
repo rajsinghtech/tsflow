@@ -135,3 +135,32 @@ func TestTailscaleServiceNilChunkContextIsSafe(t *testing.T) {
 		t.Fatalf("nil context request failed: %v", err)
 	}
 }
+
+func TestTailscaleServiceParallelChunksRejectPartialResults(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	failingStart := start.Add(time.Hour).Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("start") == failingStart {
+			http.Error(w, "bad chunk", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[]}`))
+	}))
+	defer server.Close()
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleTailnet: "example.com",
+	})
+	_, err := service.GetNetworkLogsChunkedParallelWithContext(
+		context.Background(),
+		start.Format(time.RFC3339),
+		start.Add(2*time.Hour).Format(time.RFC3339),
+		time.Hour,
+		2,
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to fetch chunk 2/2") {
+		t.Fatalf("parallel chunk error = %v, want second chunk failure", err)
+	}
+}

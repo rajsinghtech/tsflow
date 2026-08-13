@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"context"
-	"errors"
 	"log"
 	"net/http"
 
@@ -34,26 +32,14 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 
 func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	ctx := c.Request.Context()
-	if err := ctx.Err(); err != nil {
-		if errors.Is(err, context.Canceled) {
-			c.Status(499)
-			return
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			c.Status(http.StatusGatewayTimeout)
-			return
-		}
+	if err := ctx.Err(); err != nil && writeContextError(c, err) {
+		return
 	}
 
 	// Fetch VIP services
 	vipServices, servicesErr := h.tailscaleService.GetVIPServices(ctx)
 	if servicesErr != nil {
-		if errors.Is(servicesErr, context.Canceled) {
-			c.Status(499)
-			return
-		}
-		if errors.Is(servicesErr, context.DeadlineExceeded) {
-			c.Status(http.StatusGatewayTimeout)
+		if writeContextError(c, servicesErr) {
 			return
 		}
 		log.Printf("WARNING GetVIPServices failed: %v", servicesErr)
@@ -63,12 +49,7 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	// Fetch static records
 	staticRecords, recordsErr := h.tailscaleService.GetStaticRecords(ctx)
 	if recordsErr != nil {
-		if errors.Is(recordsErr, context.Canceled) {
-			c.Status(499)
-			return
-		}
-		if errors.Is(recordsErr, context.DeadlineExceeded) {
-			c.Status(http.StatusGatewayTimeout)
+		if writeContextError(c, recordsErr) {
 			return
 		}
 		log.Printf("WARNING GetStaticRecords failed: %v", recordsErr)

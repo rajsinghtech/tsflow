@@ -26,7 +26,11 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	var buckets []database.TrafficStats
 	source := "database"
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	// Try rolling cache first for recent data
 	duration := endTime.Sub(startTime)
@@ -131,7 +135,11 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
@@ -235,7 +243,11 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	}
 
 	limit := h.parseLimitParam(c, 10, 100)
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()

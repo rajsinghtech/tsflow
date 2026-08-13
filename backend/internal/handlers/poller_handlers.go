@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 
@@ -27,12 +26,7 @@ func (h *Handlers) GetPollerStatus(c *gin.Context) {
 
 		dbStats, err := h.store.GetStats(ctx)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
-				c.Status(499)
-				return
-			}
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
-				c.Status(http.StatusGatewayTimeout)
+			if writeContextError(c, err) {
 				return
 			}
 			log.Printf("ERROR GetPollerStatus database stats: %v", err)

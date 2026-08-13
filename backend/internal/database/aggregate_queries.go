@@ -122,7 +122,10 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 	if err != nil {
 		return fmt.Errorf("failed to mark object as ingested: %w", err)
 	}
-	rows, _ := insertRes.RowsAffected()
+	rows, err := insertRes.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to determine whether object was newly ingested: %w", err)
+	}
 	if rows == 0 {
 		if err := upsertNodeMetadataTx(ctx, tx, result.NodeMetadata); err != nil {
 			return err
@@ -1218,6 +1221,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 			SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS fc
 			FROM node_pairs
 			WHERE dst_node_id = ? AND bucket >= ? AND bucket < ?
+			  AND src_node_id != dst_node_id
 			GROUP BY src_node_id
 		)
 		GROUP BY peer_id
@@ -1256,15 +1260,18 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, nodeID string, start, en
 	for portRows.Next() {
 		var portsJSON string
 		if err := portRows.Scan(&portsJSON); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan node ports: %w", err)
 		}
 		var entries []PortStat
 		if err := json.Unmarshal([]byte(portsJSON), &entries); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to decode node ports: %w", err)
 		}
 		for _, e := range entries {
 			portAgg[protoPortKey{e.Proto, e.Port}] += e.Bytes
 		}
+	}
+	if err := portRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read node ports: %w", err)
 	}
 	for ppk, bytes := range portAgg {
 		switch ppk.proto {

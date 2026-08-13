@@ -76,6 +76,34 @@ func TestAggregatedFlowMergesPortsAcrossBuckets(t *testing.T) {
 	}
 }
 
+func TestBandwidthByIPsRejectsEmptyEntries(t *testing.T) {
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet,
+		"/api/bandwidth?start="+start.Format(time.RFC3339)+"&end="+start.Add(time.Minute).Format(time.RFC3339)+"&ips=100.64.0.1,,100.64.0.2", nil)
+	h.GetBandwidthByIPs(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestAggregatedFlowsRejectInvalidTrafficType(t *testing.T) {
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet,
+		"/api/flow-logs/aggregated?start="+start.Format(time.RFC3339)+"&end="+start.Add(time.Minute).Format(time.RFC3339)+"&trafficTypes=bogus", nil)
+	h.GetAggregatedFlowLogs(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
 func setupHandlerTestDB(t *testing.T) *database.SQLiteStore {
 	t.Helper()
 	store, err := database.NewSQLiteStore(t.TempDir() + "/test.db")

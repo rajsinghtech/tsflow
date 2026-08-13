@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
+	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
 func TestPollerStopCancelsInitialDeviceRefresh(t *testing.T) {
@@ -150,5 +152,48 @@ func TestPollerStartRejectsUnsafeIntervals(t *testing.T) {
 				t.Fatal("Start() unexpectedly accepted unsafe configuration")
 			}
 		})
+	}
+}
+
+func TestPollChunkedPropagatesFailureAfterCommittedProgress(t *testing.T) {
+	start := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	failingChunkStart := start.Add(maxPollChunk)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("start") == failingChunkStart.Format(time.RFC3339) {
+			http.Error(w, "upstream failure", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[]}`))
+	}))
+	defer server.Close()
+
+	store, err := database.NewSQLiteStore(t.TempDir() + "/poller.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleTailnet: "example.com",
+	})
+	poller := NewPoller(service, store, DefaultPollerConfig())
+	end := start.Add(2 * maxPollChunk)
+
+	err = poller.pollChunked(context.Background(), start, end)
+	if err == nil || !strings.Contains(err.Error(), "poll chunk 2/2 failed") {
+		t.Fatalf("pollChunked error = %v, want second chunk failure", err)
+	}
+
+	state, err := store.GetPollState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastPollEnd.Equal(failingChunkStart) {
+		t.Fatalf("poll cursor = %v, want committed first-chunk end %v", state.LastPollEnd, failingChunkStart)
 	}
 }

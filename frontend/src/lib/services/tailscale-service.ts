@@ -117,8 +117,8 @@ export const tailscaleService = {
 		return api.get<AggregatedFlowsResponse>(url, { signal });
 	},
 
-	async getDataRange(): Promise<DataRange> {
-		return api.get<DataRange>('/flow-logs/range');
+	async getDataRange(signal?: AbortSignal): Promise<DataRange> {
+		return api.get<DataRange>('/flow-logs/range', { signal });
 	},
 
 	async getPollerStatus(): Promise<PollerStatus> {

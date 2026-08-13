@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"net"
@@ -31,7 +32,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	}
 
 	nodeID := c.Query("nodeId")
-	trafficTypes := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 	// Validate nodeId if provided — must be non-empty after trimming
 	if c.Query("nodeId") != "" && strings.TrimSpace(nodeID) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId must be non-empty if provided"})
@@ -142,9 +147,9 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	})
 }
 
-func parseBandwidthTrafficTypes(raw string) []string {
+func parseBandwidthTrafficTypes(raw string) ([]string, error) {
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	allowed := map[string]bool{
 		"virtual":  true,
@@ -156,13 +161,16 @@ func parseBandwidthTrafficTypes(raw string) []string {
 	var result []string
 	for _, value := range strings.Split(raw, ",") {
 		value = strings.TrimSpace(value)
-		if !allowed[value] || seen[value] {
+		if value == "" || !allowed[value] {
+			return nil, fmt.Errorf("trafficTypes contains invalid value %q", value)
+		}
+		if seen[value] {
 			continue
 		}
 		seen[value] = true
 		result = append(result, value)
 	}
-	return result
+	return result, nil
 }
 
 // GetBandwidthByIPs returns bandwidth data filtered by IP addresses
@@ -194,6 +202,10 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	ips := strings.Split(ipsStr, ",")
 	for i := range ips {
 		ips[i] = strings.TrimSpace(ips[i])
+		if ips[i] == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ips must not contain empty entries"})
+			return
+		}
 	}
 
 	// Use poller's device cache to resolve IPs to node IDs

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -212,5 +213,50 @@ func TestTrafficStatsRecomputesUniquePairsFromNodePairs(t *testing.T) {
 	}
 	if len(stats) != 1 || stats[0].UniquePairs != 2 {
 		t.Fatalf("stats = %+v, want two unique pairs", stats)
+	}
+}
+
+func TestGetNodeStatsPropagatesMalformedPortJSON(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO node_pairs
+			(bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, ports)
+		VALUES (?, 'a', 'b', 'virtual', 100, 'not-json')
+	`, base); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.GetNodeStats(ctx, "a", time.Unix(base, 0), time.Unix(base+60, 0))
+	if err == nil || !strings.Contains(err.Error(), "failed to decode node ports") {
+		t.Fatalf("GetNodeStats error = %v, want malformed port error", err)
+	}
+}
+
+func TestGetNodeStatsDoesNotDoubleCountSelfTraffic(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+		Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual",
+		TxBytes: 100, RxBytes: 50, FlowCount: 1, Protocols: "[6]", Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodeBandwidth(ctx, []NodeBandwidth{{
+		Bucket: base, NodeID: "a", TxBytes: 100, RxBytes: 50,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetNodeStats(ctx, "a", time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats.TopPeers) != 1 || stats.TopPeers[0].DstNodeID != "a" ||
+		stats.TopPeers[0].TxBytes != 100 || stats.TopPeers[0].RxBytes != 50 ||
+		stats.TopPeers[0].FlowCount != 1 {
+		t.Fatalf("self peer stats = %+v, want one unduplicated peer", stats.TopPeers)
 	}
 }

@@ -99,3 +99,19 @@ func TestConvertTailscaleLogSkipsRowsWithMissingEndpoints(t *testing.T) {
 		t.Fatalf("converted %d flows, want one valid flow", len(flows))
 	}
 }
+
+func TestConvertTailscaleLogSkipsRowsWithMissingTimestamp(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	flows := poller.convertTailscaleLog(tailscale.NetworkFlowLog{
+		NodeID: "node-a",
+		VirtualTraffic: []tailscale.TrafficStats{{
+			Proto:   6,
+			Src:     "100.64.0.1:1234",
+			Dst:     "100.64.0.2:443",
+			TxBytes: 10,
+		}},
+	})
+	if len(flows) != 0 {
+		t.Fatalf("converted %d flows with no timestamp, want none", len(flows))
+	}
+}

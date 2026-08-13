@@ -289,7 +289,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 					log.Printf("Warning: device cache refresh failed: %v", err)
 				}
 			}
-			if err := p.poll(ctx); err != nil {
+			if err := p.poll(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("Triggered poll failed: %v", err)
 				p.mu.Lock()
 				p.pollErrors++
@@ -308,7 +308,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 				}
 			}
 
-			if err := p.poll(ctx); err != nil {
+			if err := p.poll(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("Poll failed: %v", err)
 				p.mu.Lock()
 				p.pollErrors++
@@ -415,7 +415,10 @@ func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) erro
 // each chunk independently so that progress is saved on partial failure.
 func (p *Poller) pollChunked(ctx context.Context, start, end time.Time) error {
 	totalRange := end.Sub(start)
-	numChunks := int(totalRange/maxPollChunk) + 1
+	numChunks := int(totalRange / maxPollChunk)
+	if totalRange%maxPollChunk != 0 {
+		numChunks++
+	}
 	log.Printf("Large time range (%v), splitting into %d chunks of %v", totalRange.Round(time.Second), numChunks, maxPollChunk)
 
 	cursor := start
@@ -430,9 +433,11 @@ func (p *Poller) pollChunked(ctx context.Context, start, end time.Time) error {
 			log.Printf("Chunk %d/%d failed (%v to %v): %v — stopping backfill, will resume next poll",
 				chunksCompleted+1, numChunks,
 				cursor.Format(time.RFC3339), chunkEnd.Format(time.RFC3339), err)
-			// Return nil so the poller doesn't count this as a full failure;
-			// progress up to the last successful chunk is already committed.
-			return nil
+			// Progress up to the last successful chunk is already committed, so
+			// the next poll can resume from there. Still propagate the failure so
+			// poller status and operators can distinguish an incomplete backfill
+			// from a successful one.
+			return fmt.Errorf("poll chunk %d/%d failed: %w", chunksCompleted+1, numChunks, err)
 		}
 
 		chunksCompleted++
@@ -442,7 +447,7 @@ func (p *Poller) pollChunked(ctx context.Context, start, end time.Time) error {
 		select {
 		case <-ctx.Done():
 			log.Printf("Backfill interrupted after %d/%d chunks", chunksCompleted, numChunks)
-			return nil
+			return ctx.Err()
 		default:
 		}
 	}

@@ -56,6 +56,10 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 	if logTime.IsZero() {
 		logTime = tsLog.Logged // fallback if Start not populated
 	}
+	if logTime.IsZero() {
+		log.Printf("Warning: skipping flow log with no start or logged timestamp for node %s", tsLog.NodeID)
+		return flowLogs
+	}
 
 	// Process virtual traffic
 	for _, traffic := range tsLog.VirtualTraffic {

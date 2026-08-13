@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -298,11 +297,14 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 	}
 
 	// Optional traffic type filter (comma-separated, e.g. "virtual,subnet")
+	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
+	if trafficTypesErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
+		return
+	}
 	trafficFilter := make(map[string]bool)
-	if tf := c.Query("trafficTypes"); tf != "" {
-		for _, t := range strings.Split(tf, ",") {
-			trafficFilter[strings.TrimSpace(t)] = true
-		}
+	for _, trafficType := range trafficTypes {
+		trafficFilter[trafficType] = true
 	}
 
 	// Normalize node IDs, add display names, merge duplicates after normalization,
