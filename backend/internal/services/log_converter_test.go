@@ -1,6 +1,11 @@
 package services
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	tailscale "tailscale.com/client/tailscale/v2"
+)
 
 func TestExtractEndpointHandlesIPv4AndIPv6(t *testing.T) {
 	tests := []struct {
@@ -48,5 +53,49 @@ func TestExtractEndpointRejectsMalformedPortsWithoutTruncatingHosts(t *testing.T
 				t.Fatalf("extractPort(%q) = %d, want 0", tt.addr, got)
 			}
 		})
+	}
+}
+
+func TestConvertMapLogSkipsRowsWithMissingEndpoints(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	logMap := map[string]any{
+		"nodeId": "node-a",
+		"start":  "2026-05-08T13:45:00Z",
+		"virtualTraffic": []any{
+			map[string]any{
+				"proto":   float64(6),
+				"src":     "",
+				"dst":     "100.64.0.2:443",
+				"txBytes": float64(10),
+			},
+			map[string]any{
+				"proto":   float64(6),
+				"src":     "100.64.0.1:1234",
+				"dst":     "100.64.0.2:443",
+				"txBytes": float64(20),
+			},
+		},
+	}
+
+	flows := poller.convertMapLog(logMap)
+	if len(flows) != 1 {
+		t.Fatalf("converted %d flows, want one valid flow", len(flows))
+	}
+	if flows[0].SrcIP == "" || flows[0].DstIP == "" {
+		t.Fatalf("converted flow contains blank endpoint: %+v", flows[0])
+	}
+}
+
+func TestConvertTailscaleLogSkipsRowsWithMissingEndpoints(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	flows := poller.convertTailscaleLog(tailscale.NetworkFlowLog{
+		Start: time.Date(2026, 5, 8, 13, 45, 0, 0, time.UTC),
+		VirtualTraffic: []tailscale.TrafficStats{
+			{Proto: 6, Dst: "100.64.0.2:443", TxBytes: 10},
+			{Proto: 6, Src: "100.64.0.1:1234", Dst: "100.64.0.2:443", TxBytes: 20},
+		},
+	})
+	if len(flows) != 1 {
+		t.Fatalf("converted %d flows, want one valid flow", len(flows))
 	}
 }

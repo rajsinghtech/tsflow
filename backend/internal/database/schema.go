@@ -50,14 +50,29 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 // Init creates the database schema
 func (s *SQLiteStore) Init(ctx context.Context) error {
 	// Step 1: Migrate minutely tables to flat names (idempotent).
-	// ALTER TABLE fails if source is absent or target already exists — both are OK.
 	for _, m := range [][2]string{
 		{"node_pairs_minutely", "node_pairs"},
 		{"bandwidth_minutely", "bandwidth"},
 		{"bandwidth_by_node_minutely", "bandwidth_by_node"},
 		{"traffic_stats_minutely", "traffic_stats"},
 	} {
-		_, _ = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s RENAME TO %s", m[0], m[1]))
+		sourceExists, err := s.tableExists(ctx, m[0])
+		if err != nil {
+			return fmt.Errorf("failed to inspect migration table %s: %w", m[0], err)
+		}
+		if !sourceExists {
+			continue
+		}
+		targetExists, err := s.tableExists(ctx, m[1])
+		if err != nil {
+			return fmt.Errorf("failed to inspect migration table %s: %w", m[1], err)
+		}
+		if targetExists {
+			return fmt.Errorf("cannot migrate %s to %s: both tables exist", m[0], m[1])
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s RENAME TO %s", m[0], m[1])); err != nil {
+			return fmt.Errorf("failed to migrate %s to %s: %w", m[0], m[1], err)
+		}
 	}
 
 	// Step 2: Drop old tier tables and the ephemeral raw-log table.
@@ -68,7 +83,9 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		"traffic_stats_hourly", "traffic_stats_daily",
 		"flow_logs_current",
 	} {
-		_, _ = s.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", table)); err != nil {
+			return fmt.Errorf("failed to drop obsolete table %s: %w", table, err)
+		}
 	}
 
 	// Step 3: Create flat tables (IF NOT EXISTS handles fresh installs and post-migration runs).
@@ -152,9 +169,17 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	}
 
 	// Add columns introduced after the original flat-table migration. SQLite
-	// has no IF NOT EXISTS form for ADD COLUMN, so an already-present column is
-	// intentionally ignored.
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE node_pairs ADD COLUMN protocol_bytes TEXT DEFAULT '{}'`)
+	// has no IF NOT EXISTS form for ADD COLUMN, so inspect the schema before
+	// executing the migration and surface real ALTER TABLE failures.
+	protocolBytesExists, err := s.columnExists(ctx, "node_pairs", "protocol_bytes")
+	if err != nil {
+		return fmt.Errorf("failed to inspect node_pairs columns: %w", err)
+	}
+	if !protocolBytesExists {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE node_pairs ADD COLUMN protocol_bytes TEXT DEFAULT '{}'`); err != nil {
+			return fmt.Errorf("failed to add node_pairs.protocol_bytes: %w", err)
+		}
+	}
 	if err := s.backfillProtocolBytes(ctx); err != nil {
 		return fmt.Errorf("failed to backfill protocol byte totals: %w", err)
 	}
@@ -168,6 +193,7 @@ func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
 		SELECT rowid, protocols, tx_bytes + rx_bytes, protocol_bytes
 		FROM node_pairs
 		WHERE protocol_bytes IS NULL OR protocol_bytes = '' OR protocol_bytes = '{}'
+		   OR NOT json_valid(protocol_bytes)
 	`)
 	if err != nil {
 		return err
@@ -205,6 +231,36 @@ func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *SQLiteStore) tableExists(ctx context.Context, table string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)", table,
+	).Scan(&exists)
+	return exists != 0, err
+}
+
+func (s *SQLiteStore) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes the database connection

@@ -36,8 +36,13 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, lastPollEnd time.Time
 
 	const sqliteFormat = "2006-01-02 15:04:05"
 	_, err := s.db.ExecContext(ctx,
-		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-		lastPollEnd.UTC().Format(sqliteFormat),
+		`UPDATE poll_state
+		 SET last_poll_end = CASE
+		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+		       THEN ? ELSE last_poll_end END,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = 1`,
+		lastPollEnd.UTC().Format(sqliteFormat), lastPollEnd.UTC().Format(sqliteFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
@@ -217,19 +222,27 @@ func (s *SQLiteStore) GetStats(ctx context.Context) (map[string]any, error) {
 	tableCounts := make(map[string]int64)
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats", "ingested_objects", "node_metadata"} {
 		var count int64
-		_ = s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
+		if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
+			return nil, fmt.Errorf("failed to count %s: %w", table, err)
+		}
 		tableCounts[table] = count
 	}
 
 	var pageCount, pageSize int64
-	_ = s.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
-	_ = s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return nil, fmt.Errorf("failed to read database page count: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return nil, fmt.Errorf("failed to read database page size: %w", err)
+	}
 
 	var minB, maxB sql.NullInt64
 	var cnt int64
-	_ = s.db.QueryRowContext(ctx,
+	if err := s.db.QueryRowContext(ctx,
 		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs",
-	).Scan(&minB, &maxB, &cnt)
+	).Scan(&minB, &maxB, &cnt); err != nil {
+		return nil, fmt.Errorf("failed to read database data range: %w", err)
+	}
 	dr := &DataRange{}
 	if cnt > 0 && minB.Valid {
 		dr.Earliest = time.Unix(minB.Int64, 0).UTC()

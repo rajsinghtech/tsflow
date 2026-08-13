@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rajsinghtech/tsflow/backend/internal/config"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
 func init() {
@@ -127,5 +130,28 @@ func TestResolveNodeOwner_NilPoller(t *testing.T) {
 	h := &Handlers{}
 	if owner := h.resolveNodeOwner("device1"); owner != "" {
 		t.Errorf("expected empty owner with nil poller, got %q", owner)
+	}
+}
+
+func TestGetServicesAndRecordsPropagatesCancellation(t *testing.T) {
+	service := services.NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  "http://127.0.0.1:1",
+		TailscaleTailnet: "example.com",
+	})
+	h := &Handlers{tailscaleService: service}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest("GET", "/services-records", nil).WithContext(requestCtx)
+	cancel()
+	if _, err := service.GetVIPServices(requestCtx); err == nil {
+		t.Fatal("expected direct VIP service request to return cancellation")
+	}
+
+	h.GetServicesAndRecords(c)
+	c.Writer.WriteHeaderNow()
+
+	if w.Code != 499 {
+		t.Fatalf("status = %d, want 499 for canceled request", w.Code)
 	}
 }

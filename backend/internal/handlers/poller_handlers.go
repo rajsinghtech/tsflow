@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -24,9 +26,22 @@ func (h *Handlers) GetPollerStatus(c *gin.Context) {
 		defer cancel()
 
 		dbStats, err := h.store.GetStats(ctx)
-		if err == nil {
-			stats["database"] = dbStats
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
+				c.Status(499)
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
+				c.Status(http.StatusGatewayTimeout)
+				return
+			}
+			log.Printf("ERROR GetPollerStatus database stats: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to fetch database stats",
+			})
+			return
 		}
+		stats["database"] = dbStats
 	}
 
 	c.JSON(http.StatusOK, stats)

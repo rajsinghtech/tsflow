@@ -86,8 +86,13 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, results PollResults
 
 	const sqliteFormat = "2006-01-02 15:04:05"
 	_, err = tx.ExecContext(ctx,
-		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-		results.PollEnd.UTC().Format(sqliteFormat),
+		`UPDATE poll_state
+		 SET last_poll_end = CASE
+		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+		       THEN ? ELSE last_poll_end END,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = 1`,
+		results.PollEnd.UTC().Format(sqliteFormat), results.PollEnd.UTC().Format(sqliteFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
@@ -142,8 +147,13 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, result ObjectInges
 	}
 
 	_, err = tx.ExecContext(ctx,
-		"UPDATE poll_state SET last_poll_end = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-		result.PollEnd.UTC().Format(sqliteFormat),
+		`UPDATE poll_state
+		 SET last_poll_end = CASE
+		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
+		       THEN ? ELSE last_poll_end END,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = 1`,
+		result.PollEnd.UTC().Format(sqliteFormat), result.PollEnd.UTC().Format(sqliteFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
@@ -859,7 +869,8 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
 			WHERE np.bucket >= ? AND np.bucket < ? AND np.traffic_type != 'physical'%s
-			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}')
+			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
+			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
 		)
 		SELECT b, proto, SUM(bytes)

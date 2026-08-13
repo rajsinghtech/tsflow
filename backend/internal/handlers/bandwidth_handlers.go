@@ -231,7 +231,19 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	for nodeID := range nodeIDs {
 		buckets, err := h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
 		if err != nil {
-			continue // Skip errors for individual nodes
+			if errors.Is(err, context.Canceled) || errors.Is(c.Request.Context().Err(), context.Canceled) {
+				c.Status(499)
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
+				c.Status(http.StatusGatewayTimeout)
+				return
+			}
+			log.Printf("ERROR GetBandwidthByIPs for node %q: %v", nodeID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to fetch bandwidth data",
+			})
+			return
 		}
 		for _, b := range buckets {
 			bucket := b.Time.Unix()

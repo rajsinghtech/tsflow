@@ -113,13 +113,9 @@ func (p *Poller) Start(ctx context.Context) error {
 	log.Printf("Starting background poller (backend: %s, interval: %v, retention: %v)",
 		p.config.FlowBackend, p.config.PollInterval, p.config.Retention)
 
-	// Keep the initial device refresh synchronous for startup callers, but run it
-	// under the owned context so a concurrent Stop can cancel it.
-	if err := p.refreshDeviceCache(runCtx); err != nil && runCtx.Err() == nil {
-		log.Printf("Warning: initial device cache refresh failed: %v", err)
-	}
-
-	// Start the background goroutine. The initial poll happens asynchronously.
+	// Run all network work in the background. In particular, device refreshes can
+	// take several minutes when the Tailscale API is unavailable and must not
+	// block the HTTP server from starting.
 	go p.run(runCtx, stopChan, doneChan, triggerChan)
 
 	return nil
@@ -132,19 +128,21 @@ func (p *Poller) Stop() {
 		p.mu.Unlock()
 		return
 	}
-	p.running = false
 	stopChan := p.stopChan
 	doneChan := p.doneChan
 	cancel := p.cancel
-	p.stopChan = nil
-	p.cancel = nil
+	// Only the first concurrent Stop closes the channel. Keep running=true
+	// until run has actually exited so a concurrent Start cannot overlap two
+	// poll loops.
+	if stopChan != nil {
+		close(stopChan)
+		p.stopChan = nil
+	}
+	p.triggerChan = nil
 	p.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
-	}
-	if stopChan != nil {
-		close(stopChan)
 	}
 	if doneChan != nil {
 		<-doneChan
@@ -198,9 +196,37 @@ func (p *Poller) TriggerPoll() {
 	}
 }
 
-func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan chan<- struct{}, triggerChan <-chan struct{}) {
-	defer close(doneChan)
+func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan chan struct{}, triggerChan <-chan struct{}) {
+	defer func() {
+		p.mu.Lock()
+		// The channel identity protects a newer run if lifecycle methods are
+		// ever extended to permit a restart while an old run is unwinding.
+		if p.doneChan == doneChan {
+			p.running = false
+			p.doneChan = nil
+			p.stopChan = nil
+			p.triggerChan = nil
+			p.cancel = nil
+		}
+		p.mu.Unlock()
+		close(doneChan)
+	}()
+
 	if ctx.Err() != nil {
+		return
+	}
+
+	if p.tsService != nil {
+		if err := p.refreshDeviceCache(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("Warning: initial device cache refresh failed: %v", err)
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	// A poller without a store is not useful, but allowing its lifecycle to
+	// settle cleanly keeps shutdown safe for callers that only use its caches.
+	if p.store == nil || p.tsService == nil && p.objectStore == nil {
 		return
 	}
 

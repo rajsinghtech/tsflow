@@ -146,6 +146,30 @@ func TestDerivedTrafficStatsUnionPairsAcrossTrafficTypes(t *testing.T) {
 	}
 }
 
+func TestDerivedTrafficStatsFallsBackForMalformedProtocolBytes(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO node_pairs
+			(bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, protocols, protocol_bytes)
+		VALUES (?, 'a', 'b', 'virtual', 100, '[6,17]', 'not-json')
+	`, base); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("stats = %+v, want one bucket", stats)
+	}
+	if stats[0].TCPBytes != 50 || stats[0].UDPBytes != 50 {
+		t.Fatalf("protocol stats = %+v, want 50 TCP and 50 UDP", stats[0])
+	}
+}
+
 func TestTrafficStatsRecomputesUniquePairsFromNodePairs(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

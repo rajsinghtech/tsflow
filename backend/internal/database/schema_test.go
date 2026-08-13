@@ -57,6 +57,38 @@ func TestPollState(t *testing.T) {
 	}
 }
 
+func TestPollStateDoesNotMoveBackward(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	future := time.Date(2026, 5, 8, 13, 45, 0, 0, time.UTC)
+	past := future.Add(-time.Hour)
+
+	if err := store.UpdatePollState(ctx, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdatePollState(ctx, past); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPollState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastPollEnd.Equal(future) {
+		t.Fatalf("poll cursor = %v, want %v", state.LastPollEnd, future)
+	}
+}
+
+func TestGetStatsReturnsDatabaseErrors(t *testing.T) {
+	store := setupTestDB(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetStats(context.Background()); err == nil {
+		t.Fatal("expected GetStats to return an error for a closed database")
+	}
+}
+
 func TestGetDataRange_Empty(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

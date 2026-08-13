@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -711,6 +712,9 @@ func (ts *TailscaleService) GetVIPServices(ctx context.Context) (map[string]VIPS
 
 	body, err := ts.makeRequest(ctx, endpoint)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		// VIP services might not be available for all tailnets
 		// Return empty map instead of error for graceful degradation
 		return make(map[string]VIPServiceInfo), nil
@@ -739,6 +743,9 @@ func (ts *TailscaleService) GetStaticRecords(ctx context.Context) (map[string]St
 
 	body, err := ts.makeRequest(ctx, endpoint)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		// Static records might not be available for all tailnets
 		// Return empty map instead of error for graceful degradation
 		return make(map[string]StaticRecordInfo), nil

@@ -24,10 +24,15 @@ export function extractIP(address: string): string {
 export function extractPort(address: string): number | null {
 	//Guard Against Null Values
 	if (!address) return null;
+	const parsePort = (raw: string): number | null => {
+		if (!/^\d+$/.test(raw)) return null;
+		const port = Number(raw);
+		return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+	};
 	// Handle IPv6 addresses like [fd7a:115c:a1e0::9001:b818]:62574
 	if (address.startsWith('[') && address.includes(']:')) {
-		const portStr = address.split(']:')[1];
-		return portStr ? parseInt(portStr, 10) : null;
+		const suffix = address.slice(address.indexOf(']:') + 2);
+		return parsePort(suffix);
 	}
 
 	// IPv6 addresses without brackets have no port (port requires bracket notation)
@@ -38,10 +43,8 @@ export function extractPort(address: string): number | null {
 
 	// Handle IPv4 addresses like 100.72.184.20:53221
 	if (address.includes(':')) {
-		const portStr = address.split(':').pop();
-		const port = portStr ? parseInt(portStr, 10) : null;
-		// Ensure we got a valid port number
-		return port !== null && !isNaN(port) ? port : null;
+		const portStr = address.slice(address.lastIndexOf(':') + 1);
+		return parsePort(portStr);
 	}
 
 	return null;

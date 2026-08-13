@@ -59,14 +59,18 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 
 	// Process virtual traffic
 	for _, traffic := range tsLog.VirtualTraffic {
+		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		if !ok {
+			continue
+		}
 		flowLogs = append(flowLogs, database.FlowLog{
 			LoggedAt:    logTime,
 			NodeID:      tsLog.NodeID,
 			TrafficType: "virtual",
 			Protocol:    traffic.Proto,
-			SrcIP:       extractIP(traffic.Src),
+			SrcIP:       srcIP,
 			SrcPort:     extractPort(traffic.Src),
-			DstIP:       extractIP(traffic.Dst),
+			DstIP:       dstIP,
 			DstPort:     extractPort(traffic.Dst),
 			TxBytes:     int64(traffic.TxBytes),
 			RxBytes:     int64(traffic.RxBytes),
@@ -77,14 +81,18 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 
 	// Process subnet traffic
 	for _, traffic := range tsLog.SubnetTraffic {
+		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		if !ok {
+			continue
+		}
 		flowLogs = append(flowLogs, database.FlowLog{
 			LoggedAt:    logTime,
 			NodeID:      tsLog.NodeID,
 			TrafficType: "subnet",
 			Protocol:    traffic.Proto,
-			SrcIP:       extractIP(traffic.Src),
+			SrcIP:       srcIP,
 			SrcPort:     extractPort(traffic.Src),
-			DstIP:       extractIP(traffic.Dst),
+			DstIP:       dstIP,
 			DstPort:     extractPort(traffic.Dst),
 			TxBytes:     int64(traffic.TxBytes),
 			RxBytes:     int64(traffic.RxBytes),
@@ -95,14 +103,18 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 
 	// Process exit traffic (traffic via exit nodes)
 	for _, traffic := range tsLog.ExitTraffic {
+		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		if !ok {
+			continue
+		}
 		flowLogs = append(flowLogs, database.FlowLog{
 			LoggedAt:    logTime,
 			NodeID:      tsLog.NodeID,
 			TrafficType: "exit",
 			Protocol:    traffic.Proto,
-			SrcIP:       extractIP(traffic.Src),
+			SrcIP:       srcIP,
 			SrcPort:     extractPort(traffic.Src),
-			DstIP:       extractIP(traffic.Dst),
+			DstIP:       dstIP,
 			DstPort:     extractPort(traffic.Dst),
 			TxBytes:     int64(traffic.TxBytes),
 			RxBytes:     int64(traffic.RxBytes),
@@ -113,14 +125,18 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 
 	// Process physical traffic
 	for _, traffic := range tsLog.PhysicalTraffic {
+		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		if !ok {
+			continue
+		}
 		flowLogs = append(flowLogs, database.FlowLog{
 			LoggedAt:    logTime,
 			NodeID:      tsLog.NodeID,
 			TrafficType: "physical",
 			Protocol:    traffic.Proto,
-			SrcIP:       extractIP(traffic.Src),
+			SrcIP:       srcIP,
 			SrcPort:     extractPort(traffic.Src),
-			DstIP:       extractIP(traffic.Dst),
+			DstIP:       dstIP,
 			DstPort:     extractPort(traffic.Dst),
 			TxBytes:     int64(traffic.TxBytes),
 			RxBytes:     0,
@@ -158,6 +174,10 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 			isPhysical := typeName == "physical"
 			for _, t := range traffic {
 				if tMap, ok := t.(map[string]any); ok {
+					srcIP, dstIP, endpointOK := flowEndpoints(getString(tMap, "src"), getString(tMap, "dst"))
+					if !endpointOK {
+						continue
+					}
 					rxBytes := getInt64(tMap, "rxBytes")
 					rxPkts := getInt64(tMap, "rxPkts")
 					// Physical traffic has no RX data in the Tailscale API
@@ -170,9 +190,9 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 						NodeID:      nodeID,
 						TrafficType: typeName,
 						Protocol:    getInt(tMap, "proto"),
-						SrcIP:       extractIP(getString(tMap, "src")),
+						SrcIP:       srcIP,
 						SrcPort:     extractPort(getString(tMap, "src")),
-						DstIP:       extractIP(getString(tMap, "dst")),
+						DstIP:       dstIP,
 						DstPort:     extractPort(getString(tMap, "dst")),
 						TxBytes:     getInt64(tMap, "txBytes"),
 						RxBytes:     rxBytes,
@@ -202,6 +222,12 @@ func extractPort(addr string) int {
 		return 0
 	}
 	return port
+}
+
+func flowEndpoints(src, dst string) (string, string, bool) {
+	srcIP := strings.TrimSpace(extractIP(src))
+	dstIP := strings.TrimSpace(extractIP(dst))
+	return srcIP, dstIP, srcIP != "" && dstIP != ""
 }
 
 // splitEndpoint separates an address from an optional port without treating
