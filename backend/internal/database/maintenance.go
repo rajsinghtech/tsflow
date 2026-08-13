@@ -169,8 +169,11 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
 	}
 	return &DataRange{
 		Earliest: time.Unix(minBucket.Int64, 0).UTC(),
-		Latest:   time.Unix(maxBucket.Int64, 0).UTC(),
-		Count:    count,
+		// Buckets are minute-start timestamps and all range queries use a
+		// half-open end. Return the end of the newest bucket so a database with
+		// one bucket still describes a usable range.
+		Latest: time.Unix(maxBucket.Int64+60, 0).UTC(),
+		Count:  count,
 	}, nil
 }
 
@@ -230,7 +233,7 @@ func (s *SQLiteStore) GetStats(ctx context.Context) (map[string]any, error) {
 	dr := &DataRange{}
 	if cnt > 0 && minB.Valid {
 		dr.Earliest = time.Unix(minB.Int64, 0).UTC()
-		dr.Latest = time.Unix(maxB.Int64, 0).UTC()
+		dr.Latest = time.Unix(maxB.Int64+60, 0).UTC()
 		dr.Count = cnt
 	}
 

@@ -84,6 +84,7 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		rx_pkts      INTEGER DEFAULT 0,
 		flow_count   INTEGER DEFAULT 0,
 		protocols    TEXT    DEFAULT '[]',
+		protocol_bytes TEXT  DEFAULT '{}',
 		ports        TEXT    DEFAULT '[]',
 		PRIMARY KEY (bucket, src_node_id, dst_node_id, traffic_type)
 	);
@@ -150,7 +151,59 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 		return fmt.Errorf("failed to create schema: %w", err)
 	}
 
+	// Add columns introduced after the original flat-table migration. SQLite
+	// has no IF NOT EXISTS form for ADD COLUMN, so an already-present column is
+	// intentionally ignored.
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE node_pairs ADD COLUMN protocol_bytes TEXT DEFAULT '{}'`)
+	if err := s.backfillProtocolBytes(ctx); err != nil {
+		return fmt.Errorf("failed to backfill protocol byte totals: %w", err)
+	}
+
 	log.Printf("Database initialized at %s", s.dbPath)
+	return nil
+}
+
+func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rowid, protocols, tx_bytes + rx_bytes, protocol_bytes
+		FROM node_pairs
+		WHERE protocol_bytes IS NULL OR protocol_bytes = '' OR protocol_bytes = '{}'
+	`)
+	if err != nil {
+		return err
+	}
+
+	type row struct {
+		id        int64
+		protocols string
+		total     int64
+	}
+	var pending []row
+	for rows.Next() {
+		var item row
+		var protocolBytes string
+		if err := rows.Scan(&item.id, &item.protocols, &item.total, &protocolBytes); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, item := range pending {
+		protocolBytes := normalizeProtocolBytes("", item.protocols, item.total)
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE node_pairs SET protocol_bytes = ? WHERE rowid = ?`, protocolBytes, item.id,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

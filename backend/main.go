@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +50,13 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		fmt.Println("TSFlow - Tailscale network flow visualizer")
+		fmt.Println("Usage: tsflow [--help]")
+		fmt.Println("Configuration is supplied through environment variables; see the README for details.")
+		return
+	}
+
 	// Configure logging to stdout for container visibility
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -134,6 +142,8 @@ func main() {
 	}
 
 	poller := services.NewPoller(tailscaleService, store, pollerConfig)
+	pollerCtx, pollerCancel := context.WithCancel(context.Background())
+	defer pollerCancel()
 	if pollerConfig.FlowBackend == "s3" {
 		objectSource, err := services.NewObjectStoreSource(ctx, pollerConfig.ObjectStore)
 		if err != nil {
@@ -143,7 +153,7 @@ func main() {
 	}
 
 	// Start poller in background
-	if err := poller.Start(ctx); err != nil {
+	if err := poller.Start(pollerCtx); err != nil {
 		log.Printf("Warning: Failed to start poller: %v", err)
 	}
 
@@ -170,16 +180,15 @@ func main() {
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	corsConfig := cors.DefaultConfig()
-	// Configure CORS based on allowed origins
-	// In development (no ALLOWED_CORS_ORIGINS set), allow all origins
-	// In production, restrict to specified origins
+	// Configure CORS based on allowed origins. Production deployments must
+	// explicitly opt into cross-origin origins.
 	if len(cfg.AllowedCORSOrigins) > 0 {
 		corsConfig.AllowOrigins = cfg.AllowedCORSOrigins
+	} else if strings.EqualFold(cfg.Environment, "production") {
+		corsConfig.AllowOriginFunc = func(string) bool { return false }
 	} else {
-		// Note: AllowAllOrigins=true with AllowCredentials=true is invalid per CORS spec
-		// Browsers reject this combination. Use AllowOriginFunc for dynamic origin handling.
 		corsConfig.AllowOriginFunc = func(origin string) bool {
-			return true // Allow all origins dynamically (compatible with credentials)
+			return true
 		}
 	}
 	corsConfig.AllowCredentials = true
@@ -329,17 +338,24 @@ func main() {
 		httpSrv.Shutdown(shutdownCtx)
 		tsnetSrv.Close()
 	} else {
+		httpSrv := &http.Server{Addr: "0.0.0.0:" + port, Handler: router}
 		go func() {
-			if err := router.Run("0.0.0.0:" + port); err != nil {
-				log.Fatalf("FATAL Failed to start server: %v", err)
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("FATAL Failed to start server: %v", err)
 			}
 		}()
 
 		<-quit
 		log.Println("Shutting down server...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error shutting down HTTP server: %v", err)
+		}
+		shutdownCancel()
 	}
 
 	// Stop the poller gracefully
+	pollerCancel()
 	poller.Stop()
 
 	// Close database connection

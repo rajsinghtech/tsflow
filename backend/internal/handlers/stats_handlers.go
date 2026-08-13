@@ -32,7 +32,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 	duration := endTime.Sub(startTime)
 	if h.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
-		if cache.HasDataFor(startTime, endTime) {
+		if cache.HasTrafficStatsDataFor(startTime, endTime) {
 			buckets = cache.GetTrafficStats(startTime, endTime)
 			source = "cache"
 		}

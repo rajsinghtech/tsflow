@@ -21,8 +21,10 @@ func (h *Handlers) GetNetworkMap(c *gin.Context) {
 }
 
 func (h *Handlers) GetDeviceFlows(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":   "Not implemented",
-		"message": "Tailscale does not expose per-device flow data",
+	c.Header("Deprecation", "true")
+	c.JSON(http.StatusGone, gin.H{
+		"error":       "per-device raw flow logs are not stored",
+		"replacement": "/api/flow-logs/aggregated",
+		"message":     "Query aggregated flows and filter by srcNodeId or dstNodeId.",
 	})
 }

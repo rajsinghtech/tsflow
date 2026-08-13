@@ -1,6 +1,8 @@
 package services
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -60,6 +62,14 @@ func (c *RollingWindowCache) Update(
 				existing[i].TxPkts += np.TxPkts
 				existing[i].RxPkts += np.RxPkts
 				existing[i].FlowCount += np.FlowCount
+				existing[i].ProtocolBytes = mergeProtocolByteJSON(
+					existing[i].ProtocolBytes, np.ProtocolBytes,
+					existing[i].Protocols, np.Protocols,
+					existing[i].TxBytes+existing[i].RxBytes-np.TxBytes-np.RxBytes,
+					np.TxBytes+np.RxBytes,
+				)
+				existing[i].Protocols = protocolJSONFromBytes(existing[i].ProtocolBytes, existing[i].Protocols, np.Protocols)
+				existing[i].Ports = mergePortJSON(existing[i].Ports, np.Ports)
 				found = true
 				break
 			}
@@ -103,7 +113,8 @@ func (c *RollingWindowCache) Update(
 		}
 	}
 
-	// Add traffic stats by bucket (additive for byte/flow counters, replace for uniquePairs/topPorts)
+	// Add traffic stats by bucket. Port counters are additive because multiple
+	// polls can contribute to the same minute bucket.
 	for _, ts := range trafficStats {
 		if existing, ok := c.trafficStats[ts.Bucket]; ok {
 			existing.TCPBytes += ts.TCPBytes
@@ -114,9 +125,9 @@ func (c *RollingWindowCache) Update(
 			existing.PhysicalBytes += ts.PhysicalBytes
 			existing.TotalFlows += ts.TotalFlows
 			if ts.UniquePairs > existing.UniquePairs {
-			existing.UniquePairs = ts.UniquePairs // max, consistent with DB upsert
-		}
-			existing.TopPorts = ts.TopPorts       // replace: latest snapshot
+				existing.UniquePairs = ts.UniquePairs // max, consistent with DB upsert
+			}
+			existing.TopPorts = mergePortJSON(existing.TopPorts, ts.TopPorts)
 		} else {
 			copied := ts
 			c.trafficStats[ts.Bucket] = &copied
@@ -166,7 +177,7 @@ func (c *RollingWindowCache) GetNodePairs(start, end time.Time) []database.NodeP
 	var result []database.NodePairAggregate
 
 	for bucket, pairs := range c.nodePairs {
-		if bucket >= startUnix && bucket <= endUnix {
+		if bucket >= startUnix && bucket < endUnix {
 			result = append(result, pairs...)
 		}
 	}
@@ -184,7 +195,7 @@ func (c *RollingWindowCache) GetBandwidth(start, end time.Time) []database.Bandw
 	var result []database.BandwidthBucket
 
 	for bucket, bw := range c.bandwidth {
-		if bucket >= startUnix && bucket <= endUnix {
+		if bucket >= startUnix && bucket < endUnix {
 			result = append(result, *bw)
 		}
 	}
@@ -207,7 +218,7 @@ func (c *RollingWindowCache) GetNodeBandwidth(start, end time.Time, nodeID strin
 	var result []database.BandwidthBucket
 
 	for bucket, nodeMap := range c.nodeBandwidth {
-		if bucket >= startUnix && bucket <= endUnix {
+		if bucket >= startUnix && bucket < endUnix {
 			if nb, ok := nodeMap[nodeID]; ok {
 				result = append(result, database.BandwidthBucket{
 					Time:    time.Unix(bucket, 0).UTC(),
@@ -236,7 +247,7 @@ func (c *RollingWindowCache) GetTrafficStats(start, end time.Time) []database.Tr
 	var result []database.TrafficStats
 
 	for bucket, ts := range c.trafficStats {
-		if bucket >= startUnix && bucket <= endUnix {
+		if bucket >= startUnix && bucket < endUnix {
 			result = append(result, *ts)
 		}
 	}
@@ -248,37 +259,190 @@ func (c *RollingWindowCache) GetTrafficStats(start, end time.Time) []database.Tr
 	return result
 }
 
-// HasDataFor returns true if the cache likely has data covering the given time range.
-// Both start and end must be within the cache window, and the cache must have
-// buckets that overlap the requested range.
-func (c *RollingWindowCache) HasDataFor(start, end time.Time) bool {
+func cacheWindowCovers(now time.Time, maxAge time.Duration, start, end time.Time, buckets map[int64]struct{}) bool {
+	if !end.After(start) || len(buckets) == 0 {
+		return false
+	}
+	if start.Before(now.Add(-maxAge)) || end.After(now.Add(time.Minute)) {
+		return false
+	}
+	firstBucket := (start.Unix() / 60) * 60
+	lastBucket := ((end.Unix() - 1) / 60) * 60
+	if lastBucket < firstBucket {
+		return false
+	}
+	for bucket := firstBucket; bucket <= lastBucket; bucket += 60 {
+		if _, ok := buckets[bucket]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *RollingWindowCache) HasNodePairDataFor(start, end time.Time) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	// Check if we have any data at all
-	if len(c.bandwidth) == 0 && len(c.nodePairs) == 0 {
-		return false
-	}
-
-	// Both start and end must be within the cache window
-	cacheStart := time.Now().Add(-c.maxAge)
-	if start.Before(cacheStart) {
-		return false
-	}
-
-	// Verify we have at least one bucket in the requested range
-	startUnix := start.Unix()
-	endUnix := end.Unix()
-	for bucket := range c.bandwidth {
-		if bucket >= startUnix && bucket <= endUnix {
-			return true
-		}
-	}
+	buckets := make(map[int64]struct{}, len(c.nodePairs))
 	for bucket := range c.nodePairs {
-		if bucket >= startUnix && bucket <= endUnix {
-			return true
+		buckets[bucket] = struct{}{}
+	}
+	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+}
+
+func (c *RollingWindowCache) HasBandwidthDataFor(start, end time.Time) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	buckets := make(map[int64]struct{}, len(c.bandwidth))
+	for bucket := range c.bandwidth {
+		buckets[bucket] = struct{}{}
+	}
+	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+}
+
+func (c *RollingWindowCache) HasNodeBandwidthDataFor(start, end time.Time, nodeID string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	buckets := make(map[int64]struct{})
+	for bucket, nodes := range c.nodeBandwidth {
+		if _, ok := nodes[nodeID]; ok {
+			buckets[bucket] = struct{}{}
 		}
 	}
+	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+}
 
-	return false
+func (c *RollingWindowCache) HasTrafficStatsDataFor(start, end time.Time) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	buckets := make(map[int64]struct{}, len(c.trafficStats))
+	for bucket := range c.trafficStats {
+		buckets[bucket] = struct{}{}
+	}
+	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+}
+
+// HasDataFor is retained for callers that do not identify a dataset. It only
+// reports a hit when one complete dataset covers the range.
+func (c *RollingWindowCache) HasDataFor(start, end time.Time) bool {
+	return c.HasNodePairDataFor(start, end) || c.HasBandwidthDataFor(start, end)
+}
+
+func mergeProtocolByteJSON(existing, incoming, existingProtocols, incomingProtocols string, existingTotal, incomingTotal int64) string {
+	merged := make(map[int]int64)
+	add := func(rawBytes, rawProtocols string, total int64) {
+		var values map[string]int64
+		if json.Unmarshal([]byte(rawBytes), &values) == nil && len(values) > 0 {
+			for rawProtocol, bytes := range values {
+				var protocol int
+				if _, err := fmt.Sscanf(rawProtocol, "%d", &protocol); err == nil {
+					merged[protocol] += bytes
+				}
+			}
+			return
+		}
+		var protocols []int
+		if json.Unmarshal([]byte(rawProtocols), &protocols) != nil || len(protocols) == 0 {
+			return
+		}
+		perProtocol := total / int64(len(protocols))
+		remainder := total - perProtocol*int64(len(protocols))
+		for i, protocol := range protocols {
+			bytes := perProtocol
+			if i == 0 {
+				bytes += remainder
+			}
+			merged[protocol] += bytes
+		}
+	}
+	add(existing, existingProtocols, existingTotal)
+	add(incoming, incomingProtocols, incomingTotal)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func protocolJSONFromBytes(rawBytes, fallbackExisting, fallbackIncoming string) string {
+	var values map[string]int64
+	if json.Unmarshal([]byte(rawBytes), &values) != nil || len(values) == 0 {
+		return mergeProtocolJSON(fallbackExisting, fallbackIncoming)
+	}
+	protocols := make([]int, 0, len(values))
+	for rawProtocol := range values {
+		var protocol int
+		if _, err := fmt.Sscanf(rawProtocol, "%d", &protocol); err == nil {
+			protocols = append(protocols, protocol)
+		}
+	}
+	sort.Slice(protocols, func(i, j int) bool {
+		left, right := values[fmt.Sprint(protocols[i])], values[fmt.Sprint(protocols[j])]
+		if left != right {
+			return left > right
+		}
+		return protocols[i] < protocols[j]
+	})
+	encoded, err := json.Marshal(protocols)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func mergeProtocolJSON(existing, incoming string) string {
+	var values []int
+	seen := make(map[int]struct{})
+	for _, raw := range []string{existing, incoming} {
+		var protocols []int
+		if err := json.Unmarshal([]byte(raw), &protocols); err != nil {
+			continue
+		}
+		for _, protocol := range protocols {
+			if _, ok := seen[protocol]; !ok {
+				seen[protocol] = struct{}{}
+				values = append(values, protocol)
+			}
+		}
+	}
+	sort.Ints(values)
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func mergePortJSON(existing, incoming string) string {
+	var all []database.PortStat
+	for _, raw := range []string{existing, incoming} {
+		var ports []database.PortStat
+		if err := json.Unmarshal([]byte(raw), &ports); err == nil {
+			all = append(all, ports...)
+		}
+	}
+	merged := make(map[[2]int]int64, len(all))
+	for _, port := range all {
+		merged[[2]int{port.Proto, port.Port}] += port.Bytes
+	}
+	result := make([]database.PortStat, 0, len(merged))
+	for key, bytes := range merged {
+		result = append(result, database.PortStat{Proto: key[0], Port: key[1], Bytes: bytes})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Bytes != result[j].Bytes {
+			return result[i].Bytes > result[j].Bytes
+		}
+		if result[i].Proto != result[j].Proto {
+			return result[i].Proto < result[j].Proto
+		}
+		return result[i].Port < result[j].Port
+	})
+	if len(result) > 20 {
+		result = result[:20]
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
 }

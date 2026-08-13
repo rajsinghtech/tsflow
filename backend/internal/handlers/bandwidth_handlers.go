@@ -55,7 +55,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	// Try rolling cache first for recent data (within last hour)
 	if h.poller != nil && len(trafficTypes) == 0 {
 		cache := h.poller.GetRollingCache()
-		if cache.HasDataFor(startTime, endTime) {
+		cacheHasData := cache.HasBandwidthDataFor(startTime, endTime)
+		if nodeID != "" {
+			cacheHasData = cache.HasNodeBandwidthDataFor(startTime, endTime, nodeID)
+		}
+		if cacheHasData {
 			if nodeID != "" {
 				buckets = cache.GetNodeBandwidth(startTime, endTime, nodeID)
 			} else {

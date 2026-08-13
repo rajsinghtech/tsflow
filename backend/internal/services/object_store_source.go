@@ -94,8 +94,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		return 0, 0, end, nil
 	}
 	if len(objects) > s.cfg.MaxObjects {
-		log.Printf("Object-store poll found %d candidate objects; processing newest %d", len(objects), s.cfg.MaxObjects)
-		objects = objects[len(objects)-s.cfg.MaxObjects:]
+		log.Printf("Object-store poll found %d candidate objects; processing up to %d oldest un-ingested objects", len(objects), s.cfg.MaxObjects)
 	}
 
 	processedObjects := 0
@@ -105,6 +104,10 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	if existingMetadata, err := p.store.GetNodeMetadata(ctx); err == nil && len(existingMetadata) == 0 {
 		shouldBackfillMetadata = true
 	}
+	// Select un-ingested objects after checking the ingestion guard. This keeps
+	// a timestamp-only cursor progressing even when more than MaxObjects share
+	// the same timestamp and the first page has already been seen.
+	selected := make([]flowObject, 0, minInt(len(objects), s.cfg.MaxObjects))
 	for _, obj := range objects {
 		seen, err := p.store.IsObjectIngested(ctx, obj.key)
 		if err != nil {
@@ -127,7 +130,13 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			}
 			continue
 		}
+		if len(selected) >= s.cfg.MaxObjects {
+			break
+		}
+		selected = append(selected, obj)
+	}
 
+	for _, obj := range selected {
 		flows, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
 		if err != nil {
 			return processedObjects, processedFlows, lastProcessed, fmt.Errorf("failed to read %s: %w", obj.key, err)
@@ -164,6 +173,13 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	}
 
 	return processedObjects, processedFlows, lastProcessed, nil
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Time) ([]flowObject, error) {

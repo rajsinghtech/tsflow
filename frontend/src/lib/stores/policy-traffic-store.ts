@@ -159,15 +159,21 @@ function parseGrantIpSpecs(ipSpecs: string[]): ProtoPort[] {
 	return ipSpecs.map((spec) => {
 		if (spec === '*') return {};
 		const colonIdx = spec.indexOf(':');
-		if (colonIdx === -1) return { proto: spec };
-		const proto = spec.slice(0, colonIdx).toLowerCase();
+		if (colonIdx === -1) return { proto: spec.toLowerCase() };
+		const proto = spec.slice(0, colonIdx).trim().toLowerCase();
 		const portStr = spec.slice(colonIdx + 1);
+		if (!proto) return { proto: '__invalid__' };
 		if (portStr === '*') return { proto };
-		const dashIdx = portStr.indexOf('-');
-		if (dashIdx !== -1) {
-			return { proto, port: parseInt(portStr.slice(0, dashIdx)), portEnd: parseInt(portStr.slice(dashIdx + 1)) };
+		const range = portStr.split('-');
+		if (range.length > 2 || !range.every((part) => /^\d+$/.test(part))) {
+			return { proto: '__invalid__' };
 		}
-		return { proto, port: parseInt(portStr) };
+		const port = Number(range[0]);
+		const portEnd = range.length === 2 ? Number(range[1]) : port;
+		if (port < 1 || port > 65535 || portEnd < port || portEnd > 65535) {
+			return { proto: '__invalid__' };
+		}
+		return range.length === 2 ? { proto, port, portEnd } : { proto, port };
 	});
 }
 
@@ -175,10 +181,10 @@ function parseGrantIpSpecs(ipSpecs: string[]): ProtoPort[] {
 function matchesProtoPort(trafficProto: string, trafficPorts: Set<number>, allowed: ProtoPort[]): boolean {
 	for (const spec of allowed) {
 		if (!spec.proto && !spec.port) return true; // wildcard
-		if (spec.proto && spec.proto !== trafficProto) continue;
-		if (!spec.port) return true; // proto match, any port
+		if (spec.proto && spec.proto !== '*' && spec.proto !== trafficProto) continue;
+		if (spec.port === undefined) return true; // proto match, any port
 		for (const tp of trafficPorts) {
-			if (spec.portEnd) {
+			if (spec.portEnd !== undefined) {
 				if (tp >= spec.port && tp <= spec.portEnd) return true;
 			} else if (tp === spec.port) {
 				return true;
@@ -195,13 +201,19 @@ function portsOverlap(rulePorts: string[], trafficPorts: Set<number>): boolean {
 		if (rp === '*') return true;
 		const dashIdx = rp.indexOf('-');
 		if (dashIdx !== -1) {
-			const start = parseInt(rp.slice(0, dashIdx));
-			const end = parseInt(rp.slice(dashIdx + 1));
+			const startText = rp.slice(0, dashIdx);
+			const endText = rp.slice(dashIdx + 1);
+			if (!/^\d+$/.test(startText) || !/^\d+$/.test(endText)) continue;
+			const start = Number(startText);
+			const end = Number(endText);
+			if (start < 1 || end < start || end > 65535) continue;
 			for (const tp of trafficPorts) {
 				if (tp >= start && tp <= end) return true;
 			}
 		} else {
-			if (trafficPorts.has(parseInt(rp))) return true;
+			if (!/^\d+$/.test(rp)) continue;
+			const port = Number(rp);
+			if (port >= 1 && port <= 65535 && trafficPorts.has(port)) return true;
 		}
 	}
 	return false;
@@ -231,20 +243,22 @@ export function matchPolicyRulesForEdge(
 		...(dstUser ? [dstUser] : []),
 		'*'
 	]);
+	const groupMap = get(policyGroupMap);
+
+	function addEffectiveGroups(selectors: Set<string>) {
+		const pending = [...selectors];
+		while (pending.length > 0) {
+			const member = pending.pop()!;
+			for (const group of groupMap.get(member) ?? []) {
+				if (!selectors.has(group)) {
+					selectors.add(group);
+					pending.push(group);
+				}
+			}
+		}
+	}
 
 	// Add groups that these selectors belong to
-	const groupMap = get(policyGroupMap);
-	for (const sel of [...srcSelectors]) {
-		for (const group of groupMap.get(sel) ?? []) {
-			srcSelectors.add(group);
-		}
-	}
-	for (const sel of [...dstSelectors]) {
-		for (const group of groupMap.get(sel) ?? []) {
-			dstSelectors.add(group);
-		}
-	}
-
 	// Add autogroups from device context
 	const devCtx = get(devicePolicyContext);
 	for (const ip of srcIps ?? []) {
@@ -261,6 +275,8 @@ export function matchPolicyRulesForEdge(
 			for (const g of ctx.groups) dstSelectors.add(g);
 		}
 	}
+	addEffectiveGroups(srcSelectors);
+	addEffectiveGroups(dstSelectors);
 
 	const matches: PolicyRuleMatch[] = [];
 	const trafficProto = edge.protocol; // 'tcp', 'udp', etc
@@ -278,22 +294,19 @@ export function matchPolicyRulesForEdge(
 			// ip: ["*"] = all traffic allowed
 			// ip: ["tcp:443", "tcp:8080"] = specific proto:port combos
 			if (meta?.ip?.length) {
-				const hasWildcard = meta.ip.includes('*');
-				if (!hasWildcard && trafficPorts.size > 0) {
-					const allowed = parseGrantIpSpecs(meta.ip);
-					if (!matchesProtoPort(trafficProto, trafficPorts, allowed)) continue;
-				}
+				const allowed = parseGrantIpSpecs(meta.ip);
+				if (!matchesProtoPort(trafficProto, trafficPorts, allowed)) continue;
 			}
 		} else if (pEdge.type === 'acl') {
 			// ACL rules: meta.proto for protocol, meta.ports for destination ports
 			// Check protocol match
-			if (meta?.proto && trafficProto && meta.proto !== trafficProto) continue;
+			if (meta?.proto && meta.proto !== '*' && trafficProto && meta.proto !== trafficProto) continue;
 			// Check port match
-			if (meta?.ports?.length && trafficPorts.size > 0) {
-				if (!meta.ports.includes('*') && !portsOverlap(meta.ports, trafficPorts)) continue;
-			}
+			if (meta?.ports?.length && !meta.ports.includes('*') && !portsOverlap(meta.ports, trafficPorts)) continue;
+		} else if (pEdge.type === 'ssh') {
+			// SSH policy applies to TCP/22 only.
+			if (trafficProto !== 'tcp' || !trafficPorts.has(22)) continue;
 		}
-		// SSH rules: always match on port 22 implicitly, no port check needed
 
 		matches.push({
 			edgeType: pEdge.type,
@@ -328,6 +341,21 @@ function buildSelectorToNodeIds(
 ): Map<string, Set<string>> {
 	const map = new Map<string, Set<string>>();
 
+	function effectiveGroups(member: string): Set<string> {
+		const groups = new Set<string>();
+		const pending = [member];
+		while (pending.length > 0) {
+			const current = pending.pop()!;
+			for (const group of groupMap.get(current) ?? []) {
+				if (!groups.has(group)) {
+					groups.add(group);
+					pending.push(group);
+				}
+			}
+		}
+		return groups;
+	}
+
 	function addMapping(selector: string, nodeId: string) {
 		const set = map.get(selector) ?? new Set();
 		set.add(nodeId);
@@ -347,13 +375,13 @@ function buildSelectorToNodeIds(
 		addMapping('*', node.id);
 		// Groups (via user membership)
 		if (node.user) {
-			for (const group of groupMap.get(node.user) ?? []) {
+			for (const group of effectiveGroups(node.user)) {
 				addMapping(group, node.id);
 			}
 		}
 		// Groups (via tag membership)
 		for (const tag of node.tags ?? []) {
-			for (const group of groupMap.get(tag) ?? []) {
+			for (const group of effectiveGroups(tag)) {
 				addMapping(group, node.id);
 			}
 		}
@@ -366,6 +394,9 @@ function buildSelectorToNodeIds(
 			}
 			for (const g of ctx.groups) {
 				addMapping(g, node.id);
+				for (const group of effectiveGroups(g)) {
+					addMapping(group, node.id);
+				}
 			}
 		}
 	}

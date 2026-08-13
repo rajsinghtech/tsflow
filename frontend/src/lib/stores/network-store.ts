@@ -399,8 +399,9 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 				dst: flow.dstNodeId,
 				txBytes: flow.totalTxBytes,
 				rxBytes: 0,
-				txPkts: flow.totalTxPkts || 0,
-				rxPkts: 0
+					txPkts: flow.totalTxPkts || 0,
+					rxPkts: 0,
+					ports: flow.ports || []
 			});
 		}
 
@@ -413,8 +414,8 @@ function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart
 				dst: flow.srcNodeId,
 				txBytes: flow.totalRxBytes,
 				rxBytes: 0,
-				txPkts: flow.totalRxPkts || 0,
-				rxPkts: 0
+					txPkts: flow.totalRxPkts || 0,
+					rxPkts: 0
 			});
 		}
 	}

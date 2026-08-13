@@ -256,7 +256,7 @@ func (p *Poller) run(ctx context.Context) {
 }
 
 func (p *Poller) refreshDeviceCache(ctx context.Context) error {
-	devicesResp, err := p.tsService.GetDevices()
+	devicesResp, err := p.tsService.GetDevicesWithContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,13 @@ func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) erro
 		// Move the cursor forward when no object exists yet. Object-store polling
 		// still applies a lookback and an ingested-object guard on the next pass.
 		lastProcessed = end
-		if err := p.store.UpdatePollState(ctx, end); err != nil {
+	}
+	// CommitObjectIngest advances the cursor for newly ingested objects, but
+	// already-ingested objects do not need another aggregate commit. Persist the
+	// source cursor here as well so a restart does not repeatedly scan an old
+	// range when a poll only encounters objects already seen.
+	if !lastProcessed.IsZero() {
+		if err := p.store.UpdatePollState(ctx, lastProcessed); err != nil {
 			return err
 		}
 	}
@@ -378,7 +384,7 @@ func (p *Poller) pollChunked(ctx context.Context, start, end time.Time) error {
 // pollRange fetches and commits logs for a single time range.
 func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 	// Fetch logs from Tailscale API
-	logsResp, err := p.tsService.GetNetworkLogs(
+	logsResp, err := p.tsService.GetNetworkLogsWithContext(ctx,
 		start.Format(time.RFC3339),
 		end.Format(time.RFC3339),
 	)

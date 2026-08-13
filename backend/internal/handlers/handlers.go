@@ -19,8 +19,9 @@ const (
 	ChunkSize = 24 * time.Hour
 	// MaxParallelChunks limits concurrent chunk fetches
 	MaxParallelChunks = 2
-	// MaxLogsInMemory limits logs held in memory during chunked queries
-	MaxLogsInMemory = 10000
+	// MaxLogsInMemory limits logs held in memory during chunked queries. Keep it
+	// above the response cap so the sampling path remains reachable.
+	MaxLogsInMemory = 100000
 	// MaxLogsInResponse limits logs returned in a single response
 	MaxLogsInResponse = 50000
 	// MaxBuckets limits the number of time-series buckets returned

@@ -17,7 +17,7 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 		}
 	}
 
-	devices, err := h.tailscaleService.GetDevices()
+	devices, err := h.tailscaleService.GetDevicesWithContext(c.Request.Context())
 	if err != nil {
 		log.Printf("ERROR GetDevices: %v", err)
 		c.JSON(http.StatusOK, gin.H{"devices": []services.Device{}})

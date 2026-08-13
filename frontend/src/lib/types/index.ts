@@ -26,6 +26,9 @@ export interface TrafficEntry {
 	txBytes: number;
 	rxPkts?: number;
 	rxBytes?: number;
+	// Aggregated historical flows may carry destination port totals directly
+	// because they no longer contain one raw event per port.
+	ports?: PortStat[];
 }
 
 export interface NetworkLog {

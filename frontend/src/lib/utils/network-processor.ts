@@ -132,6 +132,37 @@ function resolveToIP(ipOrId: string, devices: Device[] = []): string {
 	return ipOrId;
 }
 
+// Resolve a flow endpoint to a stable graph identity. Display names are
+// presentation data and are not unique (two devices may share a hostname),
+// so they must never be used as node IDs.
+function resolveToNodeID(
+	ipOrId: string,
+	devices: Device[] = [],
+	services: Record<string, VIPServiceInfo> = {},
+	records: Record<string, StaticRecordInfo> = {}
+): string {
+	if (!isIPAddress(ipOrId)) {
+		return devices.find((device) => device.id === ipOrId)?.id || ipOrId;
+	}
+
+	const ip = extractIP(ipOrId);
+	const device = devices.find((candidate) => candidate.addresses.some((addr) => ipMatches(ip, addr)));
+	if (device) return device.id;
+
+	for (const [serviceName, serviceInfo] of Object.entries(services)) {
+		if (serviceInfo.addrs?.some((addr) => ipMatches(ip, addr))) {
+			return serviceName.startsWith('svc:') ? serviceName : `svc:${serviceName}`;
+		}
+	}
+	for (const [recordName, recordInfo] of Object.entries(records)) {
+		if (recordInfo.addrs?.some((addr) => ipMatches(ip, addr))) {
+			return `record:${recordName}`;
+		}
+	}
+
+	return ip;
+}
+
 // Process network logs to create nodes and links
 export function processNetworkLogs(
 	logs: NetworkLog[],
@@ -147,9 +178,6 @@ export function processNetworkLogs(
 	const linkMap = new Map<string, NetworkLink>();
 
 	logs.forEach((log) => {
-		// Resolve the reporting node's identity for proper byte attribution
-		const reporterIP = resolveToIP(log.nodeId, devices);
-
 		const allTraffic = [
 			...(log.virtualTraffic || []).map((t) => ({ ...t, type: 'virtual' as TrafficType })),
 			...(log.exitTraffic || []).map((t) => ({ ...t, type: 'exit' as TrafficType })),
@@ -172,13 +200,13 @@ export function processNetworkLogs(
 
 			// Create or update source node
 			const srcDeviceName = getDeviceName(traffic.src, devices, services, records);
-			const srcNodeId = isOpaqueTailscaleNodeID(traffic.src) ? traffic.src : (srcDeviceName !== srcIP ? srcDeviceName : srcIP);
+			const srcNodeId = resolveToNodeID(traffic.src, devices, services, records);
 
 			if (!nodeMap.has(srcNodeId)) {
 				const srcAddress = displayAddress(srcIP);
-				const isTailscale = srcAddress ? categorizeIP(srcAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.src, devices);
 				const serviceData = getServiceData(traffic.src, services);
+				const isTailscale = !!deviceData || (srcAddress ? categorizeIP(srcAddress).includes('tailscale') : false);
 				const ipTags = srcAddress ? categorizeIP(srcAddress) : (isOpaqueTailscaleNodeID(traffic.src) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
@@ -226,13 +254,13 @@ export function processNetworkLogs(
 
 			// Create or update destination node
 			const dstDeviceName = getDeviceName(traffic.dst, devices, services, records);
-			const dstNodeId = isOpaqueTailscaleNodeID(traffic.dst) ? traffic.dst : (dstDeviceName !== dstIP ? dstDeviceName : dstIP);
+			const dstNodeId = resolveToNodeID(traffic.dst, devices, services, records);
 
 			if (!nodeMap.has(dstNodeId)) {
 				const dstAddress = displayAddress(dstIP);
-				const isTailscale = dstAddress ? categorizeIP(dstAddress).includes('tailscale') : false;
 				const deviceData = getDeviceData(traffic.dst, devices);
 				const serviceData = getServiceData(traffic.dst, services);
+				const isTailscale = !!deviceData || (dstAddress ? categorizeIP(dstAddress).includes('tailscale') : false);
 				const ipTags = dstAddress ? categorizeIP(dstAddress) : (isOpaqueTailscaleNodeID(traffic.dst) ? ['unresolved'] : []);
 				const deviceTags = deviceData?.tags || [];
 				const serviceTags = serviceData?.tags || [];
@@ -312,6 +340,9 @@ export function processNetworkLogs(
 					dstNode.incomingPorts.add(dstPort);
 				}
 			}
+			for (const port of traffic.ports || []) {
+				if (port.port > 0) dstNode.incomingPorts.add(port.port);
+			}
 
 			// Create or update link - use bidirectional key to combine A->B and B->A
 			const sortedIds = [srcNodeId, dstNodeId].sort();
@@ -337,6 +368,9 @@ export function processNetworkLogs(
 			// TX-only link accounting: attribute txBytes based on direction relative
 			// to the sorted link key. This avoids double-counting when both endpoints report.
 			const link = linkMap.get(linkKey)!;
+			for (const port of traffic.ports || []) {
+				if (port.port > 0) link.ports.add(port.port);
+			}
 			const isSrcFirst = srcNodeId === sortedIds[0];
 			if (isSrcFirst) {
 				link.txBytes += traffic.txBytes || 0;

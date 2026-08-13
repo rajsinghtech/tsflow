@@ -110,13 +110,14 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			agg.FlowCount++
 		} else {
 			agg := &database.NodePairAggregate{
-				Bucket:      bucket,
-				SrcNodeID:   nodeA, // nodeA is always "src" in normalized form
-				DstNodeID:   nodeB, // nodeB is always "dst" in normalized form
-				TrafficType: log.TrafficType,
-				FlowCount:   1,
-				Protocols:   "[]",
-				Ports:       "[]",
+				Bucket:        bucket,
+				SrcNodeID:     nodeA, // nodeA is always "src" in normalized form
+				DstNodeID:     nodeB, // nodeB is always "dst" in normalized form
+				TrafficType:   log.TrafficType,
+				FlowCount:     1,
+				Protocols:     "[]",
+				ProtocolBytes: "{}",
+				Ports:         "[]",
 			}
 			if isReverse {
 				agg.RxBytes = log.TxBytes
@@ -220,14 +221,25 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 	// Serialize protocol/port data into node pair aggregates
 	for key, agg := range nodePairMap {
 		if ppData, ok := pairProtoMap[key]; ok {
-			// Protocols: sorted list of unique protocol numbers
+			// Protocols: most-byte-heavy first, with protocol number as a
+			// deterministic tie-breaker. Consumers use the first item as the
+			// dominant protocol.
 			protos := make([]int, 0, len(ppData.protocols))
 			for p := range ppData.protocols {
 				protos = append(protos, p)
 			}
-			sort.Ints(protos)
+			sort.Slice(protos, func(i, j int) bool {
+				left, right := ppData.protocols[protos[i]], ppData.protocols[protos[j]]
+				if left != right {
+					return left > right
+				}
+				return protos[i] < protos[j]
+			})
 			if b, err := json.Marshal(protos); err == nil {
 				agg.Protocols = string(b)
+			}
+			if b, err := json.Marshal(ppData.protocols); err == nil {
+				agg.ProtocolBytes = string(b)
 			}
 
 			// Ports: top 20 by bytes as [{port, proto, bytes}, ...]
@@ -241,7 +253,13 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 				portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
 			}
 			sort.Slice(portEntries, func(i, j int) bool {
-				return portEntries[i].Bytes > portEntries[j].Bytes
+				if portEntries[i].Bytes != portEntries[j].Bytes {
+					return portEntries[i].Bytes > portEntries[j].Bytes
+				}
+				if portEntries[i].Proto != portEntries[j].Proto {
+					return portEntries[i].Proto < portEntries[j].Proto
+				}
+				return portEntries[i].Port < portEntries[j].Port
 			})
 			if len(portEntries) > 20 {
 				portEntries = portEntries[:20]
@@ -266,7 +284,13 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			portEntries = append(portEntries, portEntry{Port: ppk.port, Proto: ppk.proto, Bytes: bytes})
 		}
 		sort.Slice(portEntries, func(i, j int) bool {
-			return portEntries[i].Bytes > portEntries[j].Bytes
+			if portEntries[i].Bytes != portEntries[j].Bytes {
+				return portEntries[i].Bytes > portEntries[j].Bytes
+			}
+			if portEntries[i].Proto != portEntries[j].Proto {
+				return portEntries[i].Proto < portEntries[j].Proto
+			}
+			return portEntries[i].Port < portEntries[j].Port
 		})
 		if len(portEntries) > 20 {
 			portEntries = portEntries[:20]

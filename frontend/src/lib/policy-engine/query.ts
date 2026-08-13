@@ -1,8 +1,6 @@
 import { type AccessEdgeKind, type GraphEdge, type PolicyGraph, type QueryFilters, type QueryResult } from "./types";
 
 const ACCESS_TYPES: AccessEdgeKind[] = ["grant", "acl", "ssh"];
-const RELATION_TYPES = new Set(["member-of", "owns-tag", "contains", "resolves-to"]);
-
 function resolveFocusNodeId(graph: PolicyGraph, selectorOrNodeId: string): string | null {
   if (graph.nodes.some((n) => n.id === selectorOrNodeId)) {
     return selectorOrNodeId;
@@ -23,16 +21,22 @@ function filterAccessEdges(edges: GraphEdge[], filters?: QueryFilters): GraphEdg
   });
 }
 
-// Resolve all selectors that effectively represent this node:
-// the node itself + groups it belongs to + autogroups (via member-of edges)
+// Resolve all selectors that effectively represent this node: the node itself
+// plus every transitive group/autogroup that contains it. Relation edges use
+// source=container and target=member, so walking backwards handles nested
+// groups without looping on malformed cyclic policy input.
 function resolveEffectiveSelectors(graph: PolicyGraph, nodeId: string): Set<string> {
-  const selectors = new Set<string>([nodeId]);
-  for (const edge of graph.edges) {
-    if (edge.type === "member-of" && edge.target === nodeId) {
-      // member-of: source=group, target=member → this node is in source group
-      selectors.add(edge.source);
-    }
-  }
+	const selectors = new Set<string>([nodeId]);
+	const pending = [nodeId];
+	while (pending.length > 0) {
+		const member = pending.pop()!;
+		for (const edge of graph.edges) {
+			if (edge.type === "member-of" && edge.target === member && !selectors.has(edge.source)) {
+				selectors.add(edge.source);
+				pending.push(edge.source);
+			}
+		}
+	}
   return selectors;
 }
 

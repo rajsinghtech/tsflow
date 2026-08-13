@@ -131,6 +131,7 @@
 			const selectedNode = $filteredNodes.find((n) => n.id === selectedNodeId);
 			if (selectedNode) {
 				selectedNodeIPs = new Set(selectedNode.ips);
+				selectedNodeIPs.add(selectedNode.id);
 			}
 		}
 
@@ -198,6 +199,7 @@
 			const selectedNode = $filteredNodes.find((n) => n.id === selectedNodeId);
 			if (selectedNode) {
 				selectedNodeIPsSet = new Set(selectedNode.ips);
+				selectedNodeIPsSet.add(selectedNode.id);
 			}
 		}
 

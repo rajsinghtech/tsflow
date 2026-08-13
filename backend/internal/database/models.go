@@ -18,7 +18,11 @@ type NodePairAggregate struct {
 	RxPkts      int64  `json:"rxPkts"`
 	FlowCount   int64  `json:"flowCount"`
 	Protocols   string `json:"protocols"` // JSON array of protocols seen
-	Ports       string `json:"ports"`     // JSON array of top ports
+	// ProtocolBytes preserves the byte totals needed to identify the dominant
+	// protocol after multiple polls are merged. It is kept internal to the
+	// aggregate response; callers receive the derived Protocol field instead.
+	ProtocolBytes string `json:"-"`
+	Ports         string `json:"ports"` // JSON array of top ports
 }
 
 // BandwidthBucket represents aggregated bandwidth for a time bucket
