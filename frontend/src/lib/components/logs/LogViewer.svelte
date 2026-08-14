@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { rawLogs, uiStore, filteredNodes, filteredEdges, processedNetwork, filterStore, debouncedFilterStore, devices, services, primaryMatchedNodes } from '$lib/stores';
-	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName } from '$lib/utils';
+	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName, isValidIPv4, isIPv6 } from '$lib/utils';
 	import { ArrowRight, ArrowUpDown } from 'lucide-svelte';
 	import type { NetworkLog, TrafficType } from '$lib/types';
 
@@ -12,7 +12,9 @@
 	function deviceDisplayName(device: { hostname?: string; name: string }): string {
 		const name = device.hostname && device.hostname !== 'localhost'
 			? device.hostname
-			: device.name.split('.')[0] || device.name;
+			: isValidIPv4(device.name) || isIPv6(device.name)
+				? device.name
+				: device.name.split('.')[0] || device.name;
 		return formatUnknownNodeName(name);
 	}
 
@@ -80,12 +82,17 @@
 		const ip = extractIP(address);
 		const parsedPort = extractPort(address);
 		const port = parsedPort === null ? undefined : String(parsedPort);
+		// Check real devices and VIP services (keyed by actual address) before
+		// falling back to deviceIdToName, whose keys include synthetic
+		// devices' self-referential IDs (raw IP strings for unresolved
+		// aggregated-flow endpoints) that would otherwise shadow a real
+		// service name for the same address.
 		let deviceName = ipToDevice.get(ip);
 		if (!deviceName) {
-			deviceName = deviceIdToName.get(ip);
+			deviceName = ipToService.get(ip);
 		}
 		if (!deviceName) {
-			deviceName = ipToService.get(ip);
+			deviceName = deviceIdToName.get(ip);
 		}
 		return { ip, port, deviceName };
 	}

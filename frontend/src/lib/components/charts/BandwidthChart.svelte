@@ -2,7 +2,7 @@
 	import { queryTimeWindow } from '$lib/stores/data-source-store';
 	import { uiStore, filteredNodes, filterStore } from '$lib/stores';
 	import { tailscaleService } from '$lib/services';
-	import { formatBytes, formatBytesRate } from '$lib/utils';
+	import { formatBytes, formatBitsRate } from '$lib/utils';
 
 	// Chart dimensions
 	const height = 80;
@@ -291,7 +291,7 @@
 		const { maxBytes } = chartBounds;
 		return [0, maxBytes / 2, maxBytes].map((bytesPerSec) => ({
 			y: scaleY(bytesPerSec),
-			label: formatBytesRate(bytesPerSec)
+			label: formatBitsRate(bytesPerSec)
 		}));
 	});
 
@@ -519,18 +519,18 @@
 				{#if selectedNodeName}
 					<div class="flex items-center gap-1.5">
 						<span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
-						TX: {formatBytesRate(hoverData.txRate)}
+						TX: {formatBitsRate(hoverData.txRate)}
 						<span class="text-muted-foreground/60">({formatBytes(hoverData.txRaw)})</span>
 					</div>
 					<div class="flex items-center gap-1.5">
 						<span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-						RX: {formatBytesRate(hoverData.rxRate)}
+						RX: {formatBitsRate(hoverData.rxRate)}
 						<span class="text-muted-foreground/60">({formatBytes(hoverData.rxRaw)})</span>
 					</div>
 				{:else}
 					<div class="flex items-center gap-1.5">
 						<span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
-						{formatBytesRate(hoverData.txRate)}
+						{formatBitsRate(hoverData.txRate)}
 						<span class="text-muted-foreground/60">({formatBytes(hoverData.txRaw)})</span>
 					</div>
 				{/if}

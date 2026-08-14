@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink, Info } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/stores';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '$lib/stores';
@@ -136,10 +136,10 @@
 
 <svelte:window onclick={handleCloseAbout} />
 
-<header class="relative z-30 flex h-12 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:h-14 sm:px-4">
+<header class="relative z-30 flex h-12 items-center justify-between gap-1 border-b border-border bg-card px-1 sm:h-14 sm:gap-2 sm:px-4">
 	<!-- Left section: Logo + primary navigation -->
-	<div class="flex min-w-0 items-center gap-2 sm:gap-3">
-		<div class="relative about-flyout-container">
+	<div class="flex shrink-0 items-center gap-2 sm:gap-3">
+		<div class="relative about-flyout-container shrink-0">
 			<button
 				onclick={() => (showAbout = !showAbout)}
 				class="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors hover:bg-secondary sm:gap-2"
@@ -147,7 +147,7 @@
 				aria-label="About TSFlow"
 			>
 				<Activity class="h-4 w-4 text-primary sm:h-5 sm:w-5" />
-				<h1 class="text-base font-semibold sm:text-lg">TSFlow</h1>
+				<h1 class="hidden text-base font-semibold sm:inline sm:text-lg">TSFlow</h1>
 			</button>
 
 			{#if showAbout}
@@ -195,7 +195,7 @@
 		</div>
 
 		<!-- Navigation -->
-		<nav class="flex min-w-0 items-center rounded-md border border-border bg-muted/30 p-0.5" aria-label="Primary">
+		<nav class="flex shrink-0 items-center rounded-md border border-border bg-muted/30 p-0.5" aria-label="Primary">
 			{#each primaryNav as item}
 				{@const Icon = item.icon}
 				{@const active = currentPath === item.href}
@@ -203,7 +203,7 @@
 					href={item.href}
 					aria-current={active ? 'page' : undefined}
 					aria-label={item.label}
-					class="flex min-h-8 items-center gap-1.5 rounded px-2 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
+					class="flex min-h-8 items-center gap-1.5 rounded px-1 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
 					class:bg-background={active}
 					class:text-foreground={active}
 					class:shadow-sm={active}
@@ -262,7 +262,7 @@
 	</div>
 
 	<!-- Compact stats for mobile (<md) -->
-	<div class="flex items-center gap-2 md:hidden">
+	<div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap md:hidden">
 		<span class="text-[10px] font-semibold tabular-nums">{displayNodes}<span class="font-normal text-muted-foreground">n</span></span>
 		<span class="text-[10px] font-semibold tabular-nums text-primary">{formatBytes(displayBytes)}</span>
 	</div>
@@ -282,11 +282,11 @@
 	</div>
 
 	<!-- Right section: Actions -->
-	<div class="flex items-center gap-1 sm:gap-2">
+	<div class="flex shrink-0 items-center gap-1 sm:gap-2">
 		{#if isTrafficPage}
 			<button
 				onclick={handleFilterToggle}
-				class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
+				class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
 				title="Toggle filters"
 				aria-label="Toggle filters"
 			>
@@ -296,7 +296,7 @@
 
 		<button
 			onclick={() => toggleAutoRefresh()}
-			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
+			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
 			title={$isAutoRefreshing ? 'Pause auto-refresh (P)' : 'Resume auto-refresh (P)'}
 			aria-label={$isAutoRefreshing ? 'Pause auto-refresh' : 'Resume auto-refresh'}
 		>
@@ -309,7 +309,7 @@
 
 		<button
 			onclick={handleRefresh}
-			class="flex min-h-9 min-w-9 items-center justify-center gap-2 rounded-md border border-border px-2.5 py-2 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60 sm:px-3"
+			class="flex min-h-8 min-w-8 items-center justify-center gap-2 rounded-md border border-border px-2 py-1.5 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-9 sm:min-w-9 sm:px-3 sm:py-2"
 			disabled={isRefreshing}
 			title="Refresh now (R)"
 			aria-label="Refresh data"
@@ -320,7 +320,7 @@
 
 		<button
 			onclick={cycleTheme}
-			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
+			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
 			title="Theme: {getThemeLabel($themeStore)} (click to cycle)"
 			aria-label="Theme: {getThemeLabel($themeStore)}"
 		>
@@ -329,20 +329,11 @@
 
 		<button
 			onclick={() => uiStore.toggleLogViewer()}
-			class="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary"
+			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
 			title="Toggle log viewer"
 			aria-label="Toggle log viewer"
 		>
 			<ScrollText class="h-4 w-4" />
-		</button>
-
-		<button
-			onclick={() => (showAbout = !showAbout)}
-			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary sm:flex"
-			title="About TSFlow"
-			aria-label="About TSFlow"
-		>
-			<Info class="h-4 w-4" />
 		</button>
 	</div>
 </header>

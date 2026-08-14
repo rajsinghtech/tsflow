@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import type { Device, NetworkLog, NetworkNode, NetworkLink, PortStat, TrafficEntry } from '$lib/types';
 import { tailscaleService, type AggregatedFlow } from '$lib/services';
 import { processNetworkLogs } from '$lib/utils/network-processor';
+import { isValidIPv4, isIPv6 } from '$lib/utils/ip-utils';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
@@ -312,7 +313,7 @@ function addSyntheticDevice(byID: Map<string, Device>, id: string, displayName?:
 	byID.set(id, {
 		id,
 		name,
-		hostname: name.split('.')[0] || name,
+		hostname: isValidIPv4(name) || isIPv6(name) ? name : name.split('.')[0] || name,
 		user: '',
 		os: '',
 		addresses: [],

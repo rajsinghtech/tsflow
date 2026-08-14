@@ -18,6 +18,19 @@ export function formatBytesRate(bytesPerSecond: number): string {
 	return formatBytes(bytesPerSecond) + '/s';
 }
 
+// Format a throughput rate in bits per second (e.g., "1.2 Mbps"), the
+// conventional unit for network throughput as opposed to data volume
+export function formatBitsRate(bytesPerSecond: number): string {
+	if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 bps';
+
+	const bits = bytesPerSecond * 8;
+	const units = ['bps', 'Kbps', 'Mbps', 'Gbps', 'Tbps'];
+	const k = 1000;
+	const i = Math.min(Math.floor(Math.log(bits) / Math.log(k)), units.length - 1);
+
+	return `${parseFloat((bits / Math.pow(k, i)).toFixed(1))} ${units[i]}`;
+}
+
 // Format a duration in seconds to a compact human-readable string
 export function formatDuration(seconds: number): string {
 	if (seconds < 1) return '<1s';

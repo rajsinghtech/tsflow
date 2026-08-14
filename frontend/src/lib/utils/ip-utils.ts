@@ -20,7 +20,7 @@ export function extractIP(address: string): string {
 	return address;
 }
 
-function isValidIPv4(address: string): boolean {
+export function isValidIPv4(address: string): boolean {
 	const parts = address.split('.');
 	return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
 }
