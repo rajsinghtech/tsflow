@@ -20,7 +20,7 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5.0.0",
     "vite": "^7.0.0",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
