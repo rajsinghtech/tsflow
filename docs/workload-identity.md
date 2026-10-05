@@ -24,9 +24,11 @@ Upstream description: [Workload identity federation](https://tailscale.com/kb/15
 
 ### tsnet
 
-`tsnet.Server` accepts `ClientID`, `IDToken`, and `Audience`. tsflow copies `TS_CLIENT_ID`, `TS_ID_TOKEN`, and `TS_AUDIENCE` onto the server in `internal/tsnetserve`. On `Up`, tsnet calls `HookResolveAuthKeyViaWIF` only when the program imports `tailscale.com/feature/identityfederation`. That import is what links the exchange and the platform token helper. tsflow does not import it today, so the fields are stored and validated, and the hook is not registered. Turning the hook on is a separate change from API auth. Until then, a tsnet process that sets only `TS_CLIENT_ID` still falls through to tsnet's later login methods.
+`tsnet.Server` accepts `ClientID`, `IDToken`, and `Audience`. tsflow copies `TS_CLIENT_ID`, `TS_ID_TOKEN`, and `TS_AUDIENCE` onto the server in `internal/tsnetserve`. On `Up`, tsnet calls `HookResolveAuthKeyViaWIF` only when the program imports `tailscale.com/feature/identityfederation`. That import lives in `tsnetserve`, so the hook is linked. If the feature is disabled with `TS_DISABLE_FEATURE=identityfederation`, startup fails instead of ignoring `TS_CLIENT_ID` and falling through to a later login method.
 
-When the hook is registered, tsnet exchanges the JWT for an API token and then creates a one-time auth key for the tags in `TSFLOW_TAGS`. Set either `TS_ID_TOKEN` or `TS_AUDIENCE`, not both. `TS_AUDIENCE` asks the platform for a token. `TS_ID_TOKEN` is the token itself.
+The hook exchanges the JWT for an API token and then creates a one-time auth key for the tags in `TSFLOW_TAGS`. No `TS_AUTHKEY` is required. Set either `TS_ID_TOKEN` or `TS_AUDIENCE`, not both. `TS_AUDIENCE` asks the platform for a token. `TS_ID_TOKEN` is the token itself. OAuth client secret and `TS_AUTHKEY` login are unchanged.
+
+One federated client per tailnet can cover both the API and the tsnet join. Give that identity `auth_keys` plus the node's tags, and the read scopes the poller uses. Point `TS_CLIENT_ID` at the same client id as that tailnet's API workload identity, and use the same token file or audience. A process still has one tsnet node, so the join stays on the process-wide `TS_*` variables. Each tailnet's API client stays its own, with its own cache. With several tailnets, the node joins as the `TS_*` identity and the other tailnets only use their API clients.
 
 ### Object storage
 
@@ -229,7 +231,7 @@ Startup checks that a configured token file exists and is non-empty. It does not
 
 Object storage is the exception: one credential, one bucket, many prefixes. That matches the current poller, which already shares `ObjectStoreConfig` and overrides `Prefix`.
 
-tsnet WIF stays process-wide. It is one embedded node, not one node per configured tailnet. API WIF client ids can differ from `TS_CLIENT_ID`. The node identity needs `auth_keys` and tags. The API identity needs the read scopes the poller uses. They can be the same federated identity or two identities. tsflow does not couple them.
+tsnet WIF is the one embedded node for the process. Use the same federated client as that tailnet's API identity when one client should both join and read. Separate client ids still work if the scopes must differ. tsflow does not copy API WIF fields onto the node automatically.
 
 ## Validation errors
 
@@ -260,7 +262,6 @@ Object storage:
 
 ## Not in this change
 
-- Linking `tailscale.com/feature/identityfederation` for tsnet login.
 - Per-tailnet object-store credentials or buckets.
 - An external ID on `AssumeRole`.
 - Azure metadata discovery for audience mode.
