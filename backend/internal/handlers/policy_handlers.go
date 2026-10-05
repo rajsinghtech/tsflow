@@ -7,7 +7,11 @@ import (
 )
 
 func (h *Handlers) GetUsers(c *gin.Context) {
-	users, err := h.tailscaleService.GetUsersWithContext(c.Request.Context())
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
+	users, err := tn.service.GetUsersWithContext(c.Request.Context())
 	if err != nil {
 		if writeContextError(c, err) {
 			return
@@ -19,7 +23,11 @@ func (h *Handlers) GetUsers(c *gin.Context) {
 }
 
 func (h *Handlers) GetPolicy(c *gin.Context) {
-	policy, err := h.tailscaleService.GetPolicyWithContext(c.Request.Context())
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
+	policy, err := tn.service.GetPolicyWithContext(c.Request.Context())
 	if err != nil {
 		if writeContextError(c, err) {
 			return

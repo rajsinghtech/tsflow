@@ -58,14 +58,9 @@ type Handlers struct {
 	tailscaleService *services.TailscaleService
 	store            database.Store
 	poller           *services.Poller
+	registry         *services.Registry
 	startTime        time.Time
 	version          string
-}
-
-// tailnetID is the only tailnet this process serves. Later phases can select
-// a different id here without changing each store call.
-func (h *Handlers) tailnetID() string {
-	return database.DefaultTailnetID
 }
 
 func NewHandlers(tailscaleService *services.TailscaleService, store database.Store, poller *services.Poller, version string) *Handlers {
@@ -76,6 +71,15 @@ func NewHandlers(tailscaleService *services.TailscaleService, store database.Sto
 		startTime:        time.Now(),
 		version:          version,
 	}
+}
+
+// UseRegistry routes data requests through the tailnet registry. The service
+// and poller fields stay as the fallback for callers that do not set one.
+func (h *Handlers) UseRegistry(registry *services.Registry) {
+	if h == nil {
+		return
+	}
+	h.registry = registry
 }
 
 func (h *Handlers) HealthCheck(c *gin.Context) {
@@ -154,11 +158,11 @@ func (h *Handlers) parseLimitParam(c *gin.Context, defaultLimit, maxLimit int) i
 }
 
 // resolveNodeName returns a human-readable name for a node ID or IP using the device cache.
-func (h *Handlers) resolveNodeName(nodeIDOrIP string) string {
-	if h.poller == nil {
+func (h *Handlers) resolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
+	if poller == nil {
 		return ""
 	}
-	cache := h.poller.GetDeviceCache()
+	cache := poller.GetDeviceCache()
 
 	// Try by device ID first, then by IP
 	var entry *services.DeviceCacheEntry
@@ -183,11 +187,11 @@ func (h *Handlers) resolveNodeName(nodeIDOrIP string) string {
 
 // resolveNodeID normalizes a node identifier (could be IP or device ID) to a
 // consistent device ID. Returns the original value if unresolvable.
-func (h *Handlers) resolveNodeID(nodeIDOrIP string) string {
-	if h.poller == nil {
+func (h *Handlers) resolveNodeID(poller *services.Poller, nodeIDOrIP string) string {
+	if poller == nil {
 		return nodeIDOrIP
 	}
-	cache := h.poller.GetDeviceCache()
+	cache := poller.GetDeviceCache()
 
 	// Already a device ID?
 	if entry := cache.GetDevice(nodeIDOrIP); entry != nil {
@@ -204,11 +208,11 @@ func (h *Handlers) resolveNodeID(nodeIDOrIP string) string {
 
 // resolveNodeOwner returns the owner email for a node ID or IP using the device cache.
 // Returns an empty string if the node is unknown or has no owner.
-func (h *Handlers) resolveNodeOwner(nodeIDOrIP string) string {
-	if h.poller == nil {
+func (h *Handlers) resolveNodeOwner(poller *services.Poller, nodeIDOrIP string) string {
+	if poller == nil {
 		return ""
 	}
-	cache := h.poller.GetDeviceCache()
+	cache := poller.GetDeviceCache()
 
 	var entry *services.DeviceCacheEntry
 	if entry = cache.GetDevice(nodeIDOrIP); entry == nil {
