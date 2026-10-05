@@ -1,6 +1,6 @@
 import ELK, { type ElkNode, type ElkExtendedEdge, type LayoutOptions } from 'elkjs/lib/elk.bundled.js';
 import type { Node, Edge } from '@xyflow/svelte';
-import type { GraphNode, GraphEdge } from '$lib/policy-engine/types';
+import type { GraphNode, GraphEdge } from '#lib/policy-engine/types';
 
 const elk = new ELK({
 	workerFactory: () => {

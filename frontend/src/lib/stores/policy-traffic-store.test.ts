@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { matchPolicyRulesForEdge } from './policy-traffic-matcher';
-import type { AccessEdgeMeta, GraphEdge, PolicyGraph } from '$lib/policy-engine/types';
-import type { NetworkLink, NetworkLog, TrafficEntry } from '$lib/types';
-import { processNetworkLogs } from '$lib/utils/network-processor';
+import type { AccessEdgeMeta, GraphEdge, PolicyGraph } from '#lib/policy-engine/types';
+import type { NetworkLink, NetworkLog, TrafficEntry } from '#lib/types';
+import { processNetworkLogs } from '#lib/utils/network-processor';
 
 const SOURCE_NODE = 'client';
 const TARGET_NODE = 'server';

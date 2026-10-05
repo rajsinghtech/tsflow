@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Shield, ExternalLink } from 'lucide-svelte';
-	import { uiStore, filteredNodes, filteredEdges } from '$lib/stores';
-	import { policyGraph } from '$lib/stores/policy-store';
-	import { matchPolicyRulesForEdge, type PolicyRuleMatch } from '$lib/stores/policy-traffic-store';
+	import { uiStore, filteredNodes, filteredEdges } from '#lib/stores';
+	import { policyGraph } from '#lib/stores/policy-store';
+	import { matchPolicyRulesForEdge, type PolicyRuleMatch } from '#lib/stores/policy-traffic-store';
 
 	const selectedEdge = $derived.by(() => {
 		const edgeId = $uiStore.selectedEdgeId;

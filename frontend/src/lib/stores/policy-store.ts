@@ -6,9 +6,9 @@ import type {
 	QueryResult,
 	EdgeType,
 	NodeType
-} from '$lib/policy-engine/types';
-import { parsePolicyText } from '$lib/policy-engine/parser';
-import { whatCanAccess, whatHasAccessTo } from '$lib/policy-engine/query';
+} from '#lib/policy-engine/types';
+import { parsePolicyText } from '#lib/policy-engine/parser';
+import { whatCanAccess, whatHasAccessTo } from '#lib/policy-engine/query';
 
 // --- Visibility types (local, not from library) ---
 

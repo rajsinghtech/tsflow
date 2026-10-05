@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
-	import { page } from '$app/stores';
-	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '$lib/stores';
-	import { policyGraph } from '$lib/stores/policy-store';
-	import { formatBytes, formatDuration } from '$lib/utils';
-	import type { ThemeMode } from '$lib/stores';
+	import { page } from '$app/state';
+	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '#lib/stores';
+	import { policyGraph } from '#lib/stores/policy-store';
+	import { formatBytes, formatDuration } from '#lib/utils';
+	import type { ThemeMode } from '#lib/stores';
 
 	// Tick every 10s to keep the relative time fresh
 	let tick = $state(0);
@@ -64,7 +64,7 @@
 		return `${diffMin}m ago`;
 	});
 
-	const currentPath = $derived($page.url.pathname);
+	const currentPath = $derived(page.url.pathname);
 	const isTrafficPage = $derived(currentPath === '/');
 
 	const primaryNav = [

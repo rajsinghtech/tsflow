@@ -1,4 +1,4 @@
-import type { Device, NetworkLog, NetworkNode, NetworkLink, TrafficType } from '$lib/types';
+import type { Device, NetworkLog, NetworkNode, NetworkLink, TrafficType } from '#lib/types';
 import { extractIP, extractPort, categorizeIP, ipMatches } from './ip-utils';
 import { getProtocolName } from './protocol';
 

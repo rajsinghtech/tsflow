@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { queryTimeWindow } from '$lib/stores/data-source-store';
-	import { uiStore, filteredNodes, filterStore } from '$lib/stores';
-	import { tailscaleService } from '$lib/services';
-	import { formatBytes, formatBitsRate } from '$lib/utils';
+	import { queryTimeWindow } from '#lib/stores/data-source-store';
+	import { uiStore, filteredNodes, filterStore } from '#lib/stores';
+	import { tailscaleService } from '#lib/services';
+	import { formatBytes, formatBitsRate } from '#lib/utils';
 
 	// Chart dimensions
 	const height = 80;

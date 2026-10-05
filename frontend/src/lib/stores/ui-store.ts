@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { UIState } from '$lib/types';
+import type { UIState } from '#lib/types';
 import { filteredEdges } from './network-store';
 
 const defaultUIState: UIState = {
