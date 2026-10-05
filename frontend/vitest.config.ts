@@ -9,6 +9,10 @@ export default defineConfig({
 	},
 	test: {
 		environment: 'node',
-		include: ['src/**/*.test.ts']
+		include: ['src/**/*.test.ts'],
+		// Let the policy color test read app.css. Other CSS stays stubbed.
+		css: {
+			include: [/app\.css/]
+		}
 	}
 });

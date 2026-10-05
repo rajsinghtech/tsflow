@@ -93,7 +93,7 @@
 
 	function miniMapNodeColor(node: Node): string {
 		const nodeType = (node.data as any)?.nodeType ?? 'unknown';
-		return NODE_COLORS[nodeType] ?? '#111827';
+		return NODE_COLORS[nodeType] ?? NODE_COLORS.unknown;
 	}
 
 	let fitViewRef: ((options?: any) => void) | null = null;
