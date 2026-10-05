@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { NODE_COLORS, EDGE_STYLES } from '#lib/utils/policy-layout';
+	import SelfAccessBadge from './SelfAccessBadge.svelte';
 
 	const nodeLegend: { type: string; label: string }[] = [
 		{ type: 'user', label: 'User' },
@@ -40,5 +41,9 @@
 				{item.label}
 			</div>
 		{/each}
+		<div class="flex items-center gap-1.5 pt-0.5 text-[10px]" title="Can reach other devices with the same tag or selector">
+			<SelfAccessBadge color="var(--color-foreground)" decorative />
+			Self access
+		</div>
 	</div>
 </div>
