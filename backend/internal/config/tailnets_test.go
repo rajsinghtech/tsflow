@@ -27,6 +27,9 @@ func TestResolveTailnetsFromEnvIsDefault(t *testing.T) {
 	if got.ID != database.DefaultTailnetID || got.Name != "example.com" || got.APIKey != "key" || got.APIURL != cfg.TailscaleAPIURL {
 		t.Fatalf("default spec = %+v", got)
 	}
+	if got.AuthMode != TailscaleAuthAPIKey || got.WIFClientID != "" || got.WIFIDToken != "" || got.WIFIDTokenFile != "" || got.WIFAudience != "" {
+		t.Fatalf("default spec auth = %+v", got)
+	}
 	if got.S3Prefix != "" {
 		t.Fatalf("env spec should inherit the process prefix, got %q", got.S3Prefix)
 	}

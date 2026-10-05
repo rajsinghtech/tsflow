@@ -20,9 +20,16 @@ type Config struct {
 	TailscaleOAuthClientID     string
 	TailscaleOAuthClientSecret string
 	TailscaleOAuthScopes       []string
-	Port                       string
-	Environment                string
-	AllowedCORSOrigins         []string
+	// TailscaleAuth is oauth, api_key, or wif. Empty keeps the historical
+	// resolution from the credential variables.
+	TailscaleAuth           string
+	TailscaleWIFClientID    string
+	TailscaleWIFAudience    string
+	TailscaleWIFIDToken     string
+	TailscaleWIFIDTokenFile string
+	Port                    string
+	Environment             string
+	AllowedCORSOrigins      []string
 	// tsnet serve mode
 	TsnetServe    bool
 	TsnetHostname string
@@ -44,9 +51,13 @@ type Config struct {
 	FlowObjectStorePathStyle  bool
 	FlowObjectStoreLookback   string
 	FlowObjectStoreMaxObjects int
-	PollInterval              string
-	InitialBackfill           string
-	Retention                 string
+	// FlowObjectStoreAuth is static, aws_default, or gcs_adc. Empty means
+	// static when object-store credentials are configured.
+	FlowObjectStoreAuth    string
+	FlowObjectStoreRoleARN string
+	PollInterval           string
+	InitialBackfill        string
+	Retention              string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
@@ -62,6 +73,11 @@ func Load() *Config {
 		TailscaleOAuthClientID:     getEnvWithFallback("TAILSCALE_OAUTH_CLIENT_ID"),
 		TailscaleOAuthClientSecret: getEnvWithFallback("TAILSCALE_OAUTH_CLIENT_SECRET"),
 		TailscaleOAuthScopes:       parseScopes(getEnvWithFallback("TAILSCALE_OAUTH_SCOPES")),
+		TailscaleAuth:              strings.ToLower(strings.TrimSpace(getEnvWithFallback("TAILSCALE_AUTH"))),
+		TailscaleWIFClientID:       strings.TrimSpace(getEnvWithFallback("TAILSCALE_WIF_CLIENT_ID")),
+		TailscaleWIFAudience:       strings.TrimSpace(getEnvWithFallback("TAILSCALE_WIF_AUDIENCE")),
+		TailscaleWIFIDToken:        strings.TrimSpace(getEnvWithFallback("TAILSCALE_WIF_ID_TOKEN")),
+		TailscaleWIFIDTokenFile:    strings.TrimSpace(getEnvWithFallback("TAILSCALE_WIF_ID_TOKEN_FILE")),
 		Port:                       getEnvWithDefault("PORT", "8080"),
 		Environment:                getEnvWithDefault("ENVIRONMENT", "development"),
 		AllowedCORSOrigins:         parseCORSOrigins(getEnvWithFallback("ALLOWED_CORS_ORIGINS")),
@@ -80,9 +96,11 @@ func Load() *Config {
 		FlowObjectStoreRegion:      getEnvWithDefault("TSFLOW_S3_REGION", getEnvWithDefault("AWS_REGION", getEnvWithDefault("AWS_DEFAULT_REGION", firstEnv("region")))),
 		FlowObjectStoreAccessKey:   firstEnv("TSFLOW_S3_ACCESS_KEY_ID", "TAILSCALE_LOGS_S3_ACCESS_KEY", "AWS_ACCESS_KEY_ID"),
 		FlowObjectStoreSecretKey:   firstEnv("TSFLOW_S3_SECRET_ACCESS_KEY", "TAILSCALE_LOGS_S3_SECRET_KEY", "AWS_SECRET_ACCESS_KEY"),
-		FlowObjectStorePathStyle:   parseBool(getEnvWithDefault("TSFLOW_S3_PATH_STYLE", "true"), true),
+		FlowObjectStorePathStyle:   loadObjectStorePathStyle(strings.ToLower(strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_AUTH")))),
 		FlowObjectStoreLookback:    getEnvWithDefault("TSFLOW_S3_LOOKBACK", "15m"),
 		FlowObjectStoreMaxObjects:  parsePositiveInt(getEnvWithDefault("TSFLOW_S3_MAX_OBJECTS_PER_POLL", "500")),
+		FlowObjectStoreAuth:        strings.ToLower(strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_AUTH"))),
+		FlowObjectStoreRoleARN:     strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_ROLE_ARN")),
 		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
@@ -94,50 +112,27 @@ func Load() *Config {
 func (c *Config) Validate() error {
 	hasAPIKey := c.TailscaleAPIKey != ""
 	hasOAuth := c.TailscaleOAuthClientID != "" && c.TailscaleOAuthClientSecret != ""
-	hasWIF := c.TsnetClientID != ""
-	backend := strings.ToLower(strings.TrimSpace(c.FlowBackend))
-	if backend != "" && backend != "api" && backend != "s3" {
-		return errors.New("TSFLOW_FLOW_BACKEND must be either api or s3")
+	hasTsnetWIF := c.TsnetClientID != ""
+	effectiveBackend, err := c.EffectiveFlowBackend()
+	if err != nil {
+		return err
 	}
-
-	hasObjectCredentials := c.FlowObjectStoreBucket != "" &&
-		c.FlowObjectStoreEndpoint != "" &&
-		c.FlowObjectStoreAccessKey != "" &&
-		c.FlowObjectStoreSecretKey != ""
-	effectiveBackend := backend
-	if effectiveBackend == "" {
-		// Preserve the historical auto-detection behavior only when the
-		// backend was not explicitly selected.
-		if hasObjectCredentials {
-			effectiveBackend = "s3"
-		} else {
-			effectiveBackend = "api"
+	apiMode := ""
+	if c.TailnetsFile == "" {
+		apiMode, err = c.tailscaleAuthMode()
+		if err != nil {
+			return err
 		}
 	}
 
 	// A tailnet file carries credentials per entry. The single-tailnet
 	// environment variables are not required in that mode, and combining the
 	// two sources is rejected by ResolveTailnets.
-	if c.TailnetsFile == "" && effectiveBackend == "api" && !hasAPIKey && !hasOAuth {
+	if c.TailnetsFile == "" && effectiveBackend == FlowBackendAPI && apiMode == "" {
 		return errors.New("api flow backend requires TAILSCALE_API_KEY or both TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET")
 	}
-	if effectiveBackend == "s3" && !hasObjectCredentials {
-		return errors.New("s3 flow backend requires TSFLOW_S3_BUCKET, TSFLOW_S3_ENDPOINT, TSFLOW_S3_ACCESS_KEY_ID, and TSFLOW_S3_SECRET_ACCESS_KEY")
-	}
-	if effectiveBackend == "s3" {
-		parsedEndpoint, err := url.Parse(c.FlowObjectStoreEndpoint)
-		if err != nil || parsedEndpoint.Scheme == "" || parsedEndpoint.Host == "" {
-			return errors.New("TSFLOW_S3_ENDPOINT must be a valid absolute URL")
-		}
-		if parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https" {
-			return errors.New("TSFLOW_S3_ENDPOINT must use http or https")
-		}
-		if err := validateDuration("TSFLOW_S3_LOOKBACK", c.FlowObjectStoreLookback, false); err != nil {
-			return err
-		}
-		if c.FlowObjectStoreMaxObjects <= 0 {
-			return errors.New("TSFLOW_S3_MAX_OBJECTS_PER_POLL must be a positive integer")
-		}
+	if err := c.validateObjectStore(effectiveBackend); err != nil {
+		return err
 	}
 
 	if c.TailscaleAPIURL == "" {
@@ -166,7 +161,7 @@ func (c *Config) Validate() error {
 		return errors.New("PORT must be a number between 1 and 65535")
 	}
 
-	if hasAPIKey && hasOAuth {
+	if c.TailscaleAuth == "" && hasAPIKey && hasOAuth {
 		log.Println("Both API key and OAuth credentials provided. OAuth will take precedence.")
 	}
 
@@ -179,10 +174,10 @@ func (c *Config) Validate() error {
 	}
 
 	if c.TsnetServe {
-		if !hasOAuth && !hasWIF {
+		if !hasOAuth && !hasTsnetWIF {
 			return errors.New("TSFLOW_SERVE=true requires either OAuth credentials or workload identity federation (TS_CLIENT_ID)")
 		}
-		if hasWIF {
+		if hasTsnetWIF {
 			if c.TsnetIDToken == "" && c.TsnetAudience == "" {
 				return errors.New("workload identity federation requires TS_ID_TOKEN or TS_AUDIENCE")
 			}
@@ -217,6 +212,93 @@ func getEnvWithFallback(key string) string {
 		return value
 	}
 	return ""
+}
+
+func loadObjectStorePathStyle(auth string) bool {
+	if value, ok := lookupNonEmpty("TSFLOW_S3_PATH_STYLE"); ok {
+		return parseBool(value, true)
+	}
+	// AWS virtual-hosted style is the SDK default. Garage and other
+	// S3-compatible stores keep the historical path-style default.
+	if auth == ObjectStoreAuthAWSDefault {
+		return false
+	}
+	return true
+}
+
+func (c *Config) validateObjectStore(backend string) error {
+	if strings.TrimSpace(c.FlowObjectStoreRoleARN) != "" && c.objectStoreAuth() != ObjectStoreAuthAWSDefault {
+		return errors.New("TSFLOW_S3_ROLE_ARN requires TSFLOW_S3_AUTH=aws_default")
+	}
+	switch backend {
+	case FlowBackendGCS:
+		return c.validateGCS()
+	case FlowBackendS3:
+	default:
+		return nil
+	}
+	if c.objectStoreAuth() == ObjectStoreAuthAWSDefault {
+		if strings.TrimSpace(c.FlowObjectStoreBucket) == "" {
+			return errors.New("TSFLOW_S3_AUTH=aws_default requires TSFLOW_S3_BUCKET")
+		}
+		if strings.TrimSpace(c.FlowObjectStoreRegion) == "" {
+			return errors.New("TSFLOW_S3_AUTH=aws_default requires a region (TSFLOW_S3_REGION or AWS_REGION)")
+		}
+		if staticObjectStoreEnvSet() {
+			return errors.New("TSFLOW_S3_AUTH=aws_default does not use TSFLOW_S3_ACCESS_KEY_ID or TSFLOW_S3_SECRET_ACCESS_KEY")
+		}
+		if err := c.validateObjectStoreEndpoint(false); err != nil {
+			return err
+		}
+	} else if !c.hasStaticObjectStoreCredentials() {
+		return errors.New("s3 flow backend requires TSFLOW_S3_BUCKET, TSFLOW_S3_ENDPOINT, TSFLOW_S3_ACCESS_KEY_ID, and TSFLOW_S3_SECRET_ACCESS_KEY")
+	} else if err := c.validateObjectStoreEndpoint(true); err != nil {
+		return err
+	}
+	if err := validateDuration("TSFLOW_S3_LOOKBACK", c.FlowObjectStoreLookback, false); err != nil {
+		return err
+	}
+	if c.FlowObjectStoreMaxObjects <= 0 {
+		return errors.New("TSFLOW_S3_MAX_OBJECTS_PER_POLL must be a positive integer")
+	}
+	return nil
+}
+
+func (c *Config) validateGCS() error {
+	if strings.TrimSpace(c.FlowObjectStoreBucket) == "" {
+		return errors.New("TSFLOW_FLOW_BACKEND=gcs requires TSFLOW_S3_BUCKET")
+	}
+	if strings.TrimSpace(c.FlowObjectStoreEndpoint) != "" {
+		return errors.New("TSFLOW_FLOW_BACKEND=gcs does not use TSFLOW_S3_ENDPOINT; S3-compatible GCS interop is TSFLOW_FLOW_BACKEND=s3 with static keys")
+	}
+	if staticObjectStoreEnvSet() {
+		return errors.New("TSFLOW_FLOW_BACKEND=gcs does not use TSFLOW_S3_ACCESS_KEY_ID or TSFLOW_S3_SECRET_ACCESS_KEY")
+	}
+	if err := validateDuration("TSFLOW_S3_LOOKBACK", c.FlowObjectStoreLookback, false); err != nil {
+		return err
+	}
+	if c.FlowObjectStoreMaxObjects <= 0 {
+		return errors.New("TSFLOW_S3_MAX_OBJECTS_PER_POLL must be a positive integer")
+	}
+	return nil
+}
+
+func (c *Config) validateObjectStoreEndpoint(required bool) error {
+	endpoint := strings.TrimSpace(c.FlowObjectStoreEndpoint)
+	if endpoint == "" {
+		if required {
+			return errors.New("TSFLOW_S3_ENDPOINT must be a valid absolute URL")
+		}
+		return nil
+	}
+	parsedEndpoint, err := url.Parse(endpoint)
+	if err != nil || parsedEndpoint.Scheme == "" || parsedEndpoint.Host == "" {
+		return errors.New("TSFLOW_S3_ENDPOINT must be a valid absolute URL")
+	}
+	if parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https" {
+		return errors.New("TSFLOW_S3_ENDPOINT must use http or https")
+	}
+	return nil
 }
 
 func firstEnv(keys ...string) string {

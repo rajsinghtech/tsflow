@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,14 +49,11 @@ func PollerConfigFrom(cfg *config.Config) (PollerConfig, error) {
 			return PollerConfig{}, fmt.Errorf("TSFLOW_RETENTION: %w", err)
 		}
 	}
-	pc.FlowBackend = cfg.FlowBackend
-	if pc.FlowBackend == "" {
-		pc.FlowBackend = "api"
-		if cfg.FlowObjectStoreEndpoint != "" && cfg.FlowObjectStoreAccessKey != "" && cfg.FlowObjectStoreSecretKey != "" {
-			pc.FlowBackend = "s3"
-		}
+	pc.FlowBackend, err = cfg.EffectiveFlowBackend()
+	if err != nil {
+		return PollerConfig{}, err
 	}
-	if pc.FlowBackend == "s3" && cfg.Retention == "" {
+	if (pc.FlowBackend == config.FlowBackendS3 || pc.FlowBackend == config.FlowBackendGCS) && cfg.Retention == "" {
 		pc.Retention = 0
 	}
 	// Match the historical startup path: a lookback that is not used by the
@@ -72,8 +70,18 @@ func PollerConfigFrom(cfg *config.Config) (PollerConfig, error) {
 		UsePathStyle: cfg.FlowObjectStorePathStyle,
 		Lookback:     lookback,
 		MaxObjects:   cfg.FlowObjectStoreMaxObjects,
+		AuthMode:     objectStoreAuth(cfg, pc.FlowBackend),
+		RoleARN:      cfg.FlowObjectStoreRoleARN,
 	}
 	return pc, nil
+}
+
+func objectStoreAuth(cfg *config.Config, backend string) string {
+	auth := strings.ToLower(strings.TrimSpace(cfg.FlowObjectStoreAuth))
+	if backend == config.FlowBackendGCS && auth == "" {
+		return config.ObjectStoreAuthGCSADC
+	}
+	return auth
 }
 
 // NewRegistry builds one Tailscale service and one poller per spec. The
@@ -103,7 +111,7 @@ func NewRegistry(ctx context.Context, specs []config.TailnetSpec, store database
 			return nil, fmt.Errorf("tailnet %q is missing an API URL", spec.ID)
 		}
 		poller := NewPoller(service, store, pollerCfg)
-		if pollerCfg.FlowBackend == "s3" {
+		if pollerCfg.FlowBackend == config.FlowBackendS3 || pollerCfg.FlowBackend == config.FlowBackendGCS {
 			source, err := NewObjectStoreSource(ctx, pollerCfg.ObjectStore)
 			if err != nil {
 				return nil, fmt.Errorf("tailnet %q object store: %w", spec.ID, err)
