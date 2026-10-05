@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
+	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 )
 
@@ -74,6 +75,15 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 func (s *Server) TLSListener() net.Listener  { return s.tlsListener }
 func (s *Server) HTTPListener() net.Listener { return s.httpListener }
+
+// LocalClient is the tsnet node's LocalAPI client. WhoIs on a request
+// RemoteAddr reads the peer and its application capability grants.
+func (s *Server) LocalClient() (*local.Client, error) {
+	if s == nil || s.tsServer == nil {
+		return nil, fmt.Errorf("tsnet server is not running")
+	}
+	return s.tsServer.LocalClient()
+}
 
 func (s *Server) Close() error {
 	if s.httpListener != nil {

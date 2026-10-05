@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/rajsinghtech/tsflow/backend/frontend"
+	"github.com/rajsinghtech/tsflow/backend/internal/access"
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
@@ -130,6 +131,8 @@ func main() {
 	handlerService := handlers.NewHandlers(tailscaleService, store, poller, Version)
 	handlerService.UseRegistry(registry)
 
+	requestWhoIs, lazyWhoIs := openAccessWhoIs(cfg)
+
 	// Configure Gin logging
 	var router *gin.Engine
 	if cfg.Environment == "production" {
@@ -175,6 +178,10 @@ func main() {
 	api.Use(middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()))
 	{
 		api.GET("/health", handlerService.HealthCheck)
+		if cfg.Access.Enabled {
+			api.Use(access.Middleware(cfg.Access, requestWhoIs))
+		}
+		api.GET("/whoami", handlerService.WhoAmI)
 		// Existing endpoints (live API queries) - short cache
 		liveCache := middleware.CacheMiddleware(middleware.ShortCacheConfig())
 		api.GET("/devices", liveCache, handlerService.GetDevices)
@@ -273,6 +280,19 @@ func main() {
 		}
 	}
 
+	if cfg.Access.Enabled {
+		log.Printf("Access control: mode=%s", cfg.Access.Mode)
+		if cfg.Access.Capability != "" {
+			log.Printf("Access control: capability=%s", cfg.Access.Capability)
+		}
+		if cfg.Access.Autoscope != config.AccessAutoscopeOff {
+			log.Printf("Access control: autoscope=%s", cfg.Access.Autoscope)
+		}
+		if cfg.TsnetFunnel {
+			log.Printf("Access control: funnel has no tailnet identity, so those requests are denied")
+		}
+	}
+
 	if cfg.TsnetServe {
 		log.Printf("Mode: tsnet (embedded Tailscale node)")
 		log.Printf("Hostname: %s", cfg.TsnetHostname)
@@ -300,6 +320,13 @@ func main() {
 		tsnetCancel()
 		if err != nil {
 			log.Fatalf("Failed to start tsnet server: %v", err)
+		}
+		if lazyWhoIs != nil {
+			localClient, err := tsnetSrv.LocalClient()
+			if err != nil {
+				log.Fatalf("Failed to open tsnet local client: %v", err)
+			}
+			lazyWhoIs.Set(localClient)
 		}
 
 		tlsSrv := &http.Server{Handler: router}
@@ -350,4 +377,33 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+// openAccessWhoIs prepares the WhoIs client for an enabled access mode.
+// Header mode probes the local tailscaled socket and falls back to
+// identity headers when it is not there. tsnet mode fills the client
+// in after the node is up.
+func openAccessWhoIs(cfg *config.Config) (access.WhoIsClient, *access.LazyWhoIs) {
+	if cfg == nil || !cfg.Access.Enabled {
+		return nil, nil
+	}
+	if cfg.Access.Mode == config.AccessModeHeader {
+		client, err := access.OpenLocalWhoIs(cfg.Access)
+		if err != nil {
+			log.Fatalf("Configuration error: %v", err)
+		}
+		if client != nil {
+			log.Printf("Access control: WhoIs for proxied peers via local tailscaled")
+			return client, nil
+		}
+		if cfg.Access.LocalWhoIs != "off" {
+			log.Printf("Access control: local tailscaled not reachable; trusting identity headers from trusted proxies")
+		}
+		return nil, nil
+	}
+	if cfg.Access.Mode == config.AccessModeTsnet {
+		lazy := access.NewLazyWhoIs()
+		return lazy, lazy
+	}
+	return nil, nil
 }

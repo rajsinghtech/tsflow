@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rajsinghtech/tsflow/backend/internal/access"
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
@@ -74,12 +75,14 @@ func TestSingleTailnetResponsesMatchDirectHandlers(t *testing.T) {
 
 	directRouter := dataRouter(direct)
 	routedRouter := dataRouter(routed)
+	openRouter := dataRouter(direct, access.Middleware(config.Access{}, nil))
 	for _, ep := range endpoints {
 		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
 			directCode, directBody := serve(directRouter, ep.method, ep.path)
 			routedCode, routedBody := serve(routedRouter, ep.method, ep.path)
 			selectedCode, selectedBody := serve(routedRouter, ep.method, withTailnet(ep.path, database.DefaultTailnetID))
 			plainCode, plainBody := serve(directRouter, ep.method, withTailnet(ep.path, database.DefaultTailnetID))
+			openCode, openBody := serve(openRouter, ep.method, ep.path)
 			if directCode != ep.status {
 				t.Fatalf("direct status=%d body=%s", directCode, directBody)
 			}
@@ -91,6 +94,9 @@ func TestSingleTailnetResponsesMatchDirectHandlers(t *testing.T) {
 			}
 			if plainCode != directCode || !bytes.Equal(plainBody, directBody) {
 				t.Fatalf("direct ?tailnet=default differs\nplain: %d %s\ntagged: %d %s", directCode, directBody, plainCode, plainBody)
+			}
+			if openCode != directCode || !bytes.Equal(openBody, directBody) {
+				t.Fatalf("access control off differs\ndirect: %d %s\nopen: %d %s", directCode, directBody, openCode, openBody)
 			}
 		})
 	}
@@ -402,9 +408,14 @@ func seedTailnet(t *testing.T, store *database.SQLiteStore, id string, tx int64)
 	}
 }
 
-func dataRouter(h *Handlers) http.Handler {
+func dataRouter(h *Handlers, extra ...gin.HandlerFunc) http.Handler {
 	router := gin.New()
 	api := router.Group("/api")
+	for _, mw := range extra {
+		if mw != nil {
+			api.Use(mw)
+		}
+	}
 	api.GET("/devices", h.GetDevices)
 	api.GET("/services-records", h.GetServicesAndRecords)
 	api.GET("/network-logs", h.GetNetworkLogs)

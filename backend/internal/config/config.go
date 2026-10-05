@@ -50,12 +50,14 @@ type Config struct {
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
+	// Access is opt-in tailnet identity. The zero value leaves requests open.
+	Access Access
 }
 
 // Load loads configuration from environment variables
 // Supports both TAILSCALE_* and VITE_TAILSCALE_* prefixes for backwards compatibility
 func Load() *Config {
-	return &Config{
+	cfg := &Config{
 		TailscaleAPIKey:            getEnvWithFallback("TAILSCALE_API_KEY"),
 		TailscaleTailnet:           getEnvWithDefault("TAILSCALE_TAILNET", "-"),
 		TailscaleAPIURL:            getEnvWithDefault("TAILSCALE_API_URL", "https://api.tailscale.com"),
@@ -88,6 +90,8 @@ func Load() *Config {
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 	}
+	cfg.Access = cfg.loadAccess()
+	return cfg
 }
 
 // Validate validates the configuration
@@ -176,6 +180,10 @@ func (c *Config) Validate() error {
 	}
 	if c.TsnetFunnel && len(tailnets) > 1 {
 		return errors.New("TSFLOW_FUNNEL cannot be enabled when more than one tailnet is configured")
+	}
+
+	if err := c.prepareAccess(); err != nil {
+		return err
 	}
 
 	if c.TsnetServe {
