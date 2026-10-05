@@ -20,10 +20,12 @@ export const NODE_COLORS: Record<string, string> = {
 	host: '#2563eb',
 	ipset: '#0891b2',
 	service: '#dc2626',
-	ip: '#4b5563',
-	cidr: '#4b5563',
-	wildcard: '#374151',
-	unknown: '#111827'
+	// Theme variables: dark ink on light backgrounds, light ink on dark ones.
+	// See --color-policy-* in app.css.
+	ip: 'var(--color-policy-ip)',
+	cidr: 'var(--color-policy-cidr)',
+	wildcard: 'var(--color-policy-wildcard)',
+	unknown: 'var(--color-policy-unknown)'
 };
 
 export const EDGE_STYLES: Record<string, { color: string; strokeDasharray?: string; width: number; opacity: number }> = {
