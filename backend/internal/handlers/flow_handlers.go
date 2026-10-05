@@ -146,6 +146,10 @@ func dominantProtocolFromBytes(protocolBytesJSON, protocolsJSON string, totalByt
 }
 
 func (h *Handlers) GetNetworkLogs(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	st, et, err := h.parseTimeRange(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -156,7 +160,7 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 	duration := et.Sub(st)
 	// Use chunking for queries longer than threshold to prevent response size issues
 	if duration > ChunkThreshold {
-		chunks, err := h.tailscaleService.GetNetworkLogsChunkedParallelWithContext(c.Request.Context(), start, end, ChunkSize, MaxParallelChunks)
+		chunks, err := tn.service.GetNetworkLogsChunkedParallelWithContext(c.Request.Context(), start, end, ChunkSize, MaxParallelChunks)
 		if err != nil {
 			if writeContextError(c, err) {
 				return
@@ -221,7 +225,7 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 		return
 	}
 
-	logs, err := h.tailscaleService.GetNetworkLogsWithContext(c.Request.Context(), start, end)
+	logs, err := tn.service.GetNetworkLogsWithContext(c.Request.Context(), start, end)
 	if err != nil {
 		if writeContextError(c, err) {
 			return
@@ -249,6 +253,9 @@ func sampleLogs(logs []any, maxCount int) ([]any, int) {
 }
 
 func (h *Handlers) GetStoredFlowLogs(c *gin.Context) {
+	if _, ok := h.bindTailnet(c); !ok {
+		return
+	}
 	c.Header("Deprecation", "true")
 	c.JSON(http.StatusGone, gin.H{
 		"error":       "raw flow logs are no longer stored",
@@ -259,6 +266,10 @@ func (h *Handlers) GetStoredFlowLogs(c *gin.Context) {
 // GetAggregatedFlowLogs returns pre-aggregated node-to-node traffic
 // This is the scalable endpoint for large networks - uses pre-computed node pairs
 func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Database not configured",
@@ -281,8 +292,8 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 	source := "database"
 
 	// Try rolling cache first for recent data (within last hour)
-	if h.poller != nil && duration <= time.Hour {
-		cache := h.poller.GetRollingCache()
+	if tn.poller != nil && duration <= time.Hour {
+		cache := tn.poller.GetRollingCache()
 		if cache.HasNodePairDataFor(startTime, endTime) {
 			aggregates = cache.GetNodePairs(startTime, endTime)
 			source = "cache"
@@ -295,7 +306,7 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		defer cancel()
 
 		// Use pre-computed node pair aggregates
-		aggregates, err = h.store.GetNodePairAggregates(ctx, h.tailnetID(), startTime, endTime)
+		aggregates, err = h.store.GetNodePairAggregates(ctx, tn.id, startTime, endTime)
 		if err != nil {
 			if writeContextError(c, err) {
 				return
@@ -351,8 +362,8 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 			continue
 		}
 
-		srcID := h.resolveNodeID(agg.SrcNodeID)
-		dstID := h.resolveNodeID(agg.DstNodeID)
+		srcID := h.resolveNodeID(tn.poller, agg.SrcNodeID)
+		dstID := h.resolveNodeID(tn.poller, agg.DstNodeID)
 		key := mergeKey{srcID, dstID, agg.TrafficType}
 		ports := parsePortStats(agg.Ports)
 		protocolBytes := parseProtocolBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes)
@@ -413,10 +424,10 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 				RxPorts:         rxPorts,
 				protocolBytes:   protocolBytes,
 			}
-			if name := h.resolveNodeName(srcID); name != "" {
+			if name := h.resolveNodeName(tn.poller, srcID); name != "" {
 				flow.SrcDisplayName = name
 			}
-			if name := h.resolveNodeName(dstID); name != "" {
+			if name := h.resolveNodeName(tn.poller, dstID); name != "" {
 				flow.DstDisplayName = name
 			}
 			merged[key] = flow
@@ -482,6 +493,10 @@ func dominantProtocolFromMap(bytesByProtocol map[int]int64, ports []database.Por
 
 // GetDataRange returns the available time range of stored data
 func (h *Handlers) GetDataRange(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Database not configured",
@@ -492,7 +507,7 @@ func (h *Handlers) GetDataRange(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), ShortQueryTimeout)
 	defer cancel()
 
-	dataRange, err := h.store.GetDataRange(ctx, h.tailnetID())
+	dataRange, err := h.store.GetDataRange(ctx, tn.id)
 	if err != nil {
 		if writeContextError(c, err) {
 			return

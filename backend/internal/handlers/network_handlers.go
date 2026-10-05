@@ -8,7 +8,11 @@ import (
 )
 
 func (h *Handlers) GetNetworkMap(c *gin.Context) {
-	networkMap, err := h.tailscaleService.GetNetworkMapWithContext(c.Request.Context())
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
+	networkMap, err := tn.service.GetNetworkMapWithContext(c.Request.Context())
 	if err != nil {
 		if writeContextError(c, err) {
 			return
@@ -24,6 +28,9 @@ func (h *Handlers) GetNetworkMap(c *gin.Context) {
 }
 
 func (h *Handlers) GetDeviceFlows(c *gin.Context) {
+	if _, ok := h.bindTailnet(c); !ok {
+		return
+	}
 	c.Header("Deprecation", "true")
 	c.JSON(http.StatusGone, gin.H{
 		"error":       "per-device raw flow logs are not stored",

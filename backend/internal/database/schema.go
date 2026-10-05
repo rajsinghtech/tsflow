@@ -20,6 +20,9 @@ type SQLiteStore struct {
 	// dropped and before the transaction commits. Tests use it to prove a
 	// failed upgrade leaves the previous rows in place.
 	migrateFailAfter string
+	// nodePairReadHook, when set, runs immediately before the graph query.
+	// Tests use it to show the store mutex is not held across that read.
+	nodePairReadHook func()
 }
 
 // NewSQLiteStore creates a new SQLite store

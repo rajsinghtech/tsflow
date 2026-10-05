@@ -115,23 +115,20 @@ func main() {
 		log.Printf("Warning: Failed to start poller: %v", err)
 	}
 
-	// Existing routes serve tailnet id default. A file that omits that id
-	// still polls its own tailnets, and these routes have no client to call.
+	// Data routes resolve ?tailnet= from the registry on each request. The
+	// service and poller fields stay pointed at id default when it exists so
+	// a handler constructed without the registry still matches that path.
 	var tailscaleService *services.TailscaleService
 	var poller *services.Poller
 	if entry, ok := registry.Default(); ok {
 		tailscaleService = entry.Service
 		poller = entry.Poller
-	} else {
-		log.Printf("No tailnet with id %s is configured. Existing API routes read that id only.", database.DefaultTailnetID)
-		tailscaleService = services.NewTailscaleService(&config.Config{
-			TailscaleAPIURL:  cfg.TailscaleAPIURL,
-			TailscaleTailnet: "-",
-		})
+	} else if len(tailnets) > 1 {
+		log.Printf("No tailnet with id %s is configured. Data routes need a tailnet query parameter.", database.DefaultTailnetID)
 	}
 
-	// Create handlers with store and poller
 	handlerService := handlers.NewHandlers(tailscaleService, store, poller, Version)
+	handlerService.UseRegistry(registry)
 
 	// Configure Gin logging
 	var router *gin.Engine
@@ -210,6 +207,7 @@ func main() {
 
 		// Status endpoints - no cache
 		noCache := middleware.CacheMiddleware(middleware.NoCacheConfig())
+		api.GET("/tailnets", noCache, handlerService.ListTailnets)
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
 	}
