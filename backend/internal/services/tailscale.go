@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/utils"
 	tailscale "tailscale.com/client/tailscale/v2"
+	"tailscale.com/wif"
 )
 
 type TailscaleService struct {
@@ -69,6 +71,11 @@ func NewTailscaleService(cfg *config.Config) *TailscaleService {
 		baseURL: baseURL,
 	}
 
+	if strings.EqualFold(strings.TrimSpace(cfg.TailscaleAuth), config.TailscaleAuthWIF) {
+		ts.configureWorkloadIdentity(cfg, parsedBaseURL)
+		return ts
+	}
+
 	if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {
 		// Use the Tailscale client's built-in OAuth support
 		oauthConfig := tailscale.OAuthConfig{
@@ -103,6 +110,54 @@ func NewTailscaleService(cfg *config.Config) *TailscaleService {
 	}
 
 	return ts
+}
+
+// configureWorkloadIdentity exchanges an OIDC token for a Tailscale API token.
+// useOAuth means the HTTP transport adds the bearer token, which is also how
+// the OAuth client credentials path works. The token source is per service,
+// so each tailnet caches its own token.
+func (ts *TailscaleService) configureWorkloadIdentity(cfg *config.Config, baseURL *url.URL) {
+	authed := wifHTTPClient(ts.baseURL, cfg)
+	ts.client = authed
+	ts.tsClient = &tailscale.Client{
+		BaseURL: baseURL,
+		HTTP:    authed,
+		Tailnet: cfg.TailscaleTailnet,
+	}
+	ts.useOAuth = true
+}
+
+// tailscaleIDTokenFunc returns the JWT for one tailnet. The Tailscale client
+// caches the JWT until exp and caches the exchanged API token until expires_in,
+// so this function does not run on every request.
+func tailscaleIDTokenFunc(cfg *config.Config) func() (string, error) {
+	file := strings.TrimSpace(cfg.TailscaleWIFIDTokenFile)
+	token := strings.TrimSpace(cfg.TailscaleWIFIDToken)
+	audience := strings.TrimSpace(cfg.TailscaleWIFAudience)
+	return func() (string, error) {
+		switch {
+		case file != "":
+			body, err := os.ReadFile(file)
+			if err != nil {
+				return "", fmt.Errorf("read tailscale workload identity token: %w", err)
+			}
+			value := strings.TrimSpace(string(body))
+			if value == "" {
+				return "", fmt.Errorf("tailscale workload identity token file %s is empty", file)
+			}
+			return value, nil
+		case token != "":
+			return token, nil
+		case audience != "":
+			idToken, err := wif.ObtainProviderToken(context.Background(), audience)
+			if err != nil {
+				return "", fmt.Errorf("tailscale workload identity audience: %w", err)
+			}
+			return idToken, nil
+		default:
+			return "", fmt.Errorf("tailscale workload identity has no ID token")
+		}
+	}
 }
 
 func (ts *TailscaleService) makeRequest(ctx context.Context, endpoint string) ([]byte, error) {

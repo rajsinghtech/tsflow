@@ -17,8 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/klauspost/compress/zstd"
+	tsconfig "github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
@@ -32,11 +35,29 @@ type ObjectStoreConfig struct {
 	UsePathStyle bool
 	Lookback     time.Duration
 	MaxObjects   int
+	// AuthMode is static, aws_default, gcs_adc, or empty. Empty keeps the
+	// historical static provider when keys are set.
+	AuthMode string
+	// RoleARN, when set with aws_default, is assumed using the default chain.
+	RoleARN string
+}
+
+type blobObject struct {
+	Key          string
+	LastModified time.Time
+	Size         int64
+}
+
+// blobClient lists and opens objects. S3 and GCS each have an implementation.
+// One client is created per tailnet reader and reused for every poll.
+type blobClient interface {
+	List(ctx context.Context, prefix string) ([]blobObject, error)
+	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
 type ObjectStoreSource struct {
-	cfg    ObjectStoreConfig
-	client *s3.Client
+	cfg   ObjectStoreConfig
+	blobs blobClient
 }
 
 type flowObject struct {
@@ -47,42 +68,20 @@ type flowObject struct {
 }
 
 func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectStoreSource, error) {
-	if cfg.Bucket == "" {
-		return nil, fmt.Errorf("object-store bucket is required")
-	}
-	if cfg.Endpoint != "" {
-		endpoint, err := url.Parse(cfg.Endpoint)
-		if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
-			return nil, fmt.Errorf("object-store endpoint must be a valid absolute URL")
-		}
-		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-			return nil, fmt.Errorf("object-store endpoint must use http or https")
-		}
-	}
-	if cfg.Prefix == "" {
-		cfg.Prefix = "network/"
-	}
-	if cfg.Region == "" {
-		cfg.Region = "garage"
-	}
-	if cfg.Lookback <= 0 {
-		cfg.Lookback = 15 * time.Minute
-	}
-	if cfg.MaxObjects <= 0 {
-		cfg.MaxObjects = 500
-	}
-
-	loadOptions := []func(*config.LoadOptions) error{
-		config.WithRegion(cfg.Region),
-	}
-	if cfg.AccessKey != "" || cfg.SecretKey != "" {
-		loadOptions = append(loadOptions, config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
-		))
-	}
-	awsCfg, err := config.LoadDefaultConfig(ctx, loadOptions...)
+	cfg, err := normalizeObjectStoreConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load object-store config: %w", err)
+		return nil, err
+	}
+	if cfg.AuthMode == tsconfig.ObjectStoreAuthGCSADC {
+		blobs, err := newGCSBlobClient(ctx, cfg.Bucket)
+		if err != nil {
+			return nil, err
+		}
+		return &ObjectStoreSource{cfg: cfg, blobs: blobs}, nil
+	}
+	awsCfg, err := loadObjectStoreAWSConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
@@ -92,7 +91,121 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 		}
 	})
 
-	return &ObjectStoreSource{cfg: cfg, client: client}, nil
+	return &ObjectStoreSource{cfg: cfg, blobs: &s3BlobClient{client: client, bucket: cfg.Bucket}}, nil
+}
+
+type s3BlobClient struct {
+	client *s3.Client
+	bucket string
+}
+
+func (c *s3BlobClient) List(ctx context.Context, prefix string) ([]blobObject, error) {
+	paginator := s3.NewListObjectsV2Paginator(c.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String(prefix),
+	})
+	var objects []blobObject
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Contents {
+			lastModified := time.Time{}
+			if item.LastModified != nil {
+				lastModified = *item.LastModified
+			}
+			objects = append(objects, blobObject{
+				Key:          aws.ToString(item.Key),
+				LastModified: lastModified,
+				Size:         aws.ToInt64(item.Size),
+			})
+		}
+	}
+	return objects, nil
+}
+
+func (c *s3BlobClient) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out.Body, nil
+}
+
+func normalizeObjectStoreConfig(cfg ObjectStoreConfig) (ObjectStoreConfig, error) {
+	cfg.AuthMode = strings.ToLower(strings.TrimSpace(cfg.AuthMode))
+	switch cfg.AuthMode {
+	case "", tsconfig.ObjectStoreAuthStatic, tsconfig.ObjectStoreAuthAWSDefault, tsconfig.ObjectStoreAuthGCSADC:
+	default:
+		return ObjectStoreConfig{}, fmt.Errorf("object store auth %q is not supported yet", cfg.AuthMode)
+	}
+	if cfg.AuthMode == tsconfig.ObjectStoreAuthGCSADC && strings.TrimSpace(cfg.Endpoint) != "" {
+		return ObjectStoreConfig{}, fmt.Errorf("GCS application default credentials do not use an S3 endpoint")
+	}
+	if cfg.Bucket == "" {
+		return ObjectStoreConfig{}, fmt.Errorf("object-store bucket is required")
+	}
+	if cfg.Endpoint != "" {
+		endpoint, err := url.Parse(cfg.Endpoint)
+		if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+			return ObjectStoreConfig{}, fmt.Errorf("object-store endpoint must be a valid absolute URL")
+		}
+		if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+			return ObjectStoreConfig{}, fmt.Errorf("object-store endpoint must use http or https")
+		}
+	}
+	if strings.TrimSpace(cfg.RoleARN) != "" && cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault {
+		return ObjectStoreConfig{}, fmt.Errorf("object-store role ARN requires auth %s", tsconfig.ObjectStoreAuthAWSDefault)
+	}
+	if cfg.Prefix == "" {
+		cfg.Prefix = "network/"
+	}
+	// aws_default uses the SDK region, or the region on the config. The
+	// historical garage default is only for the static S3-compatible path.
+	if cfg.Region == "" && cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault && cfg.AuthMode != tsconfig.ObjectStoreAuthGCSADC {
+		cfg.Region = "garage"
+	}
+	if cfg.Lookback <= 0 {
+		cfg.Lookback = 15 * time.Minute
+	}
+	if cfg.MaxObjects <= 0 {
+		cfg.MaxObjects = 500
+	}
+	return cfg, nil
+}
+
+func loadObjectStoreAWSConfig(ctx context.Context, cfg ObjectStoreConfig) (aws.Config, error) {
+	loadOptions := []func(*config.LoadOptions) error{}
+	if cfg.Region != "" {
+		loadOptions = append(loadOptions, config.WithRegion(cfg.Region))
+	}
+	// aws_default must not install a static provider. Keys copied from
+	// AWS_ACCESS_KEY_ID belong to the SDK chain, and tsflow static key
+	// variables are rejected before this runs.
+	if cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault && (cfg.AccessKey != "" || cfg.SecretKey != "") {
+		loadOptions = append(loadOptions, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
+		))
+	}
+	awsCfg, err := config.LoadDefaultConfig(ctx, loadOptions...)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("failed to load object-store config: %w", err)
+	}
+	if cfg.AuthMode == tsconfig.ObjectStoreAuthAWSDefault && strings.TrimSpace(cfg.RoleARN) != "" {
+		// Cache the assumed role. Without this, every GetObject calls STS.
+		awsCfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(
+			sts.NewFromConfig(awsCfg),
+			strings.TrimSpace(cfg.RoleARN),
+			func(options *stscreds.AssumeRoleOptions) {
+				options.RoleSessionName = "tsflow"
+			},
+		))
+	}
+	return awsCfg, nil
 }
 
 func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time.Time) (int, int, time.Time, error) {
@@ -250,32 +363,21 @@ func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Tim
 	prefixes := dayPrefixes(s.cfg.Prefix, start, end)
 	var objects []flowObject
 	for _, prefix := range prefixes {
-		paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-			Bucket: aws.String(s.cfg.Bucket),
-			Prefix: aws.String(prefix),
-		})
-		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("failed to list %s: %w", prefix, err)
+		listed, err := s.blobs.List(ctx, prefix)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list %s: %w", prefix, err)
+		}
+		for _, item := range listed {
+			logTime, ok := objectTime(item.Key)
+			if !ok || logTime.Before(start) || !logTime.Before(end) {
+				continue
 			}
-			for _, item := range page.Contents {
-				key := aws.ToString(item.Key)
-				logTime, ok := objectTime(key)
-				if !ok || logTime.Before(start) || !logTime.Before(end) {
-					continue
-				}
-				lastModified := time.Time{}
-				if item.LastModified != nil {
-					lastModified = *item.LastModified
-				}
-				objects = append(objects, flowObject{
-					key:          key,
-					lastModified: lastModified,
-					size:         aws.ToInt64(item.Size),
-					logTime:      logTime,
-				})
-			}
+			objects = append(objects, flowObject{
+				key:          item.Key,
+				lastModified: item.LastModified,
+				size:         item.Size,
+				logTime:      logTime,
+			})
 		}
 	}
 	sort.Slice(objects, func(i, j int) bool {
@@ -288,28 +390,25 @@ func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Tim
 }
 
 func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key string) ([]database.FlowLog, []database.NodeMetadata, error) {
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.cfg.Bucket),
-		Key:    aws.String(key),
-	})
+	body, err := s.blobs.Open(ctx, key)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer out.Body.Close()
+	defer body.Close()
 
-	var reader io.Reader = out.Body
+	var reader io.Reader = body
 	var zstdReader *zstd.Decoder
 	var gzipReader *gzip.Reader
 	switch {
 	case strings.HasSuffix(key, ".zst") || strings.HasSuffix(key, ".zstd"):
-		zstdReader, err = zstd.NewReader(out.Body)
+		zstdReader, err = zstd.NewReader(body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
 		}
 		defer zstdReader.Close()
 		reader = zstdReader
 	case strings.HasSuffix(key, ".gz") || strings.HasSuffix(key, ".gzip"):
-		gzipReader, err = gzip.NewReader(out.Body)
+		gzipReader, err = gzip.NewReader(body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
