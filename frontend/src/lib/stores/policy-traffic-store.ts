@@ -1,8 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import { policyGraph, tailnetUsers } from './policy-store';
 import { filteredEdges, filteredNodes, devices } from './network-store';
-import type { PolicyGraph, GraphEdge } from '$lib/policy-engine/types';
-import type { NetworkLink, NetworkNode } from '$lib/types';
+import type { PolicyGraph, GraphEdge } from '#lib/policy-engine/types';
+import type { NetworkLink, NetworkNode } from '#lib/types';
 import {
 	matchPolicyRulesForEdge as matchPolicyRulesForEdgePure,
 	type PolicyRuleMatch

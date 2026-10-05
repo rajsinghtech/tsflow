@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ArrowLeft, ArrowRight, CalendarClock, Clock, MoveHorizontal, RotateCcw } from 'lucide-svelte';
 	import { onMount } from 'svelte';
-	import { dataSourceStore, hasStoredData } from '$lib/stores/data-source-store';
-	import { loadNetworkData } from '$lib/stores';
+	import { dataSourceStore, hasStoredData } from '#lib/stores/data-source-store';
+	import { loadNetworkData } from '#lib/stores';
 
 	let { onWindowChange = loadNetworkData }: { onWindowChange?: () => void | Promise<void> } = $props();
 

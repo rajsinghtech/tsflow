@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { FilterState, Protocol, TrafficType } from '$lib/types';
+import type { FilterState, Protocol, TrafficType } from '#lib/types';
 
 const DEFAULT_TRAFFIC_TYPES: TrafficType[] = ['virtual', 'subnet'];
 const ALL_TRAFFIC_TYPES = new Set<TrafficType>(['virtual', 'subnet', 'exit', 'physical']);

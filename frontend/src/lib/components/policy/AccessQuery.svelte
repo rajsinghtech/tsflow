@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { X } from 'lucide-svelte';
-	import { queryText, queryDirection, queryResult, runQuery, clearQuery, policyGraph } from '$lib/stores/policy-store';
-	import type { AccessEdgeMeta } from '$lib/policy-engine/types';
+	import { queryText, queryDirection, queryResult, runQuery, clearQuery, policyGraph } from '#lib/stores/policy-store';
+	import type { AccessEdgeMeta } from '#lib/policy-engine/types';
 
 	let selectorInput = $state($queryText);
 	let direction = $state<'inbound' | 'outbound'>($queryDirection);

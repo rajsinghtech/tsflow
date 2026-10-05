@@ -1,9 +1,9 @@
 import { writable, derived, get } from 'svelte/store';
-import { tailscaleService } from '$lib/services/tailscale-service';
+import { tailscaleService } from '#lib/services/tailscale-service';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
 import { filterStore } from './filter-store';
-import { extractIP, ipMatches } from '$lib/utils/ip-utils';
-import type { TrafficStatsSummary, TrafficStatsBucket, TopTalker, TopPair, PortStat } from '$lib/types';
+import { extractIP, ipMatches } from '#lib/utils/ip-utils';
+import type { TrafficStatsSummary, TrafficStatsBucket, TopTalker, TopPair, PortStat } from '#lib/types';
 
 interface StatsState {
 	summary: TrafficStatsSummary | null;

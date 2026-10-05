@@ -1,5 +1,5 @@
-import type { AccessEdgeMeta, PolicyGraph } from '$lib/policy-engine/types';
-import type { NetworkLink } from '$lib/types';
+import type { AccessEdgeMeta, PolicyGraph } from '#lib/policy-engine/types';
+import type { NetworkLink } from '#lib/types';
 
 const RELATION_TYPES = new Set(['member-of', 'owns-tag', 'contains', 'resolves-to']);
 

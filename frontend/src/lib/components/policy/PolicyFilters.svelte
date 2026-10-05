@@ -5,9 +5,9 @@
 		toggleNodeType,
 		toggleHideIsolated,
 		edgeTypeCounts
-	} from '$lib/stores/policy-store';
-	import type { NodeVisibilityOptions } from '$lib/stores/policy-store';
-	import { NODE_COLORS } from '$lib/utils/policy-layout';
+	} from '#lib/stores/policy-store';
+	import type { NodeVisibilityOptions } from '#lib/stores/policy-store';
+	import { NODE_COLORS } from '#lib/utils/policy-layout';
 
 	const edgeTypes: { key: 'showGrantEdges' | 'showAclEdges' | 'showSshEdges' | 'showRelationEdges'; label: string; color: string; countKey: 'grant' | 'acl' | 'ssh' | 'relation' }[] = [
 		{ key: 'showGrantEdges', label: 'Grants', color: '#0d9488', countKey: 'grant' },

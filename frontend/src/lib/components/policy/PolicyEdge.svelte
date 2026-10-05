@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { BaseEdge, getBezierPath } from '@xyflow/svelte';
-	import { highlightedPolicyEdgeIds, hasQuery } from '$lib/stores/policy-store';
+	import { highlightedPolicyEdgeIds, hasQuery } from '#lib/stores/policy-store';
 
 	interface Props {
 		id: string;

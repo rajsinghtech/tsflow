@@ -8,8 +8,8 @@
 	import { bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
 	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 	import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
-	import { renderPolicy, isParsing, policyText } from '$lib/stores/policy-store';
-	import { themeStore } from '$lib/stores';
+	import { renderPolicy, isParsing, policyText } from '#lib/stores/policy-store';
+	import { themeStore } from '#lib/stores';
 
 	interface Props {
 		onerror?: (msg: string) => void;
