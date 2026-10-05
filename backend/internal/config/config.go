@@ -47,6 +47,9 @@ type Config struct {
 	PollInterval              string
 	InitialBackfill           string
 	Retention                 string
+	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
+	// empty, the single-tailnet environment variables are used as id default.
+	TailnetsFile string
 }
 
 // Load loads configuration from environment variables
@@ -83,6 +86,7 @@ func Load() *Config {
 		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
+		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 	}
 }
 
@@ -111,7 +115,10 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if effectiveBackend == "api" && !hasAPIKey && !hasOAuth {
+	// A tailnet file carries credentials per entry. The single-tailnet
+	// environment variables are not required in that mode, and combining the
+	// two sources is rejected by ResolveTailnets.
+	if c.TailnetsFile == "" && effectiveBackend == "api" && !hasAPIKey && !hasOAuth {
 		return errors.New("api flow backend requires TAILSCALE_API_KEY or both TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET")
 	}
 	if effectiveBackend == "s3" && !hasObjectCredentials {
@@ -161,6 +168,14 @@ func (c *Config) Validate() error {
 
 	if hasAPIKey && hasOAuth {
 		log.Println("Both API key and OAuth credentials provided. OAuth will take precedence.")
+	}
+
+	tailnets, err := c.ResolveTailnets()
+	if err != nil {
+		return err
+	}
+	if c.TsnetFunnel && len(tailnets) > 1 {
+		return errors.New("TSFLOW_FUNNEL cannot be enabled when more than one tailnet is configured")
 	}
 
 	if c.TsnetServe {

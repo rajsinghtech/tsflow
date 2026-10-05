@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,9 @@ type PollerConfig struct {
 	FlowBackend string
 	// ObjectStore is used when FlowBackend is "s3".
 	ObjectStore ObjectStoreConfig
+	// TailnetID selects the rows this poller reads and writes. Empty means
+	// the default tailnet, which is what a single-tailnet process uses.
+	TailnetID string
 }
 
 // DefaultPollerConfig returns sensible defaults
@@ -69,11 +73,15 @@ type Poller struct {
 
 // NewPoller creates a new background poller
 func NewPoller(tsService *TailscaleService, store database.Store, config PollerConfig) *Poller {
+	tailnetID := strings.TrimSpace(config.TailnetID)
+	if tailnetID == "" {
+		tailnetID = database.DefaultTailnetID
+	}
 	return &Poller{
 		tsService:    tsService,
 		store:        store,
 		config:       config,
-		tailnetID:    database.DefaultTailnetID,
+		tailnetID:    tailnetID,
 		deviceCache:  NewDeviceCache(),
 		rollingCache: NewRollingWindowCache(time.Hour), // Keep 1 hour in memory
 		stopChan:     make(chan struct{}),
@@ -134,8 +142,8 @@ func (p *Poller) Start(ctx context.Context) error {
 	p.cancel = cancel
 	p.mu.Unlock()
 
-	log.Printf("Starting background poller (backend: %s, interval: %v, retention: %v)",
-		p.config.FlowBackend, p.config.PollInterval, p.config.Retention)
+	log.Printf("Starting background poller for tailnet %s (backend: %s, interval: %v, retention: %v)",
+		p.tailnetIDOrDefault(), p.config.FlowBackend, p.config.PollInterval, p.config.Retention)
 
 	// Run all network work in the background. In particular, device refreshes can
 	// take several minutes when the Tailscale API is unavailable and must not
@@ -171,7 +179,7 @@ func (p *Poller) Stop() {
 	if doneChan != nil {
 		<-doneChan
 	}
-	log.Println("Background poller stopped")
+	log.Printf("Background poller stopped for tailnet %s", p.tailnetIDOrDefault())
 }
 
 // Stats returns current poller statistics

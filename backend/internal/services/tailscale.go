@@ -212,6 +212,12 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 		// Convert tailscale client devices to our format
 		var ourDevices []Device
 		for _, device := range devices {
+			lastSeen := ""
+			online := false
+			if device.LastSeen != nil {
+				lastSeen = device.LastSeen.Time.Format(time.RFC3339)
+				online = !device.LastSeen.IsZero() && time.Since(device.LastSeen.Time) < 2*time.Minute
+			}
 			ourDevices = append(ourDevices, Device{
 				ID:                        device.ID,
 				Name:                      device.Name,
@@ -219,8 +225,8 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 				User:                      device.User,
 				OS:                        device.OS,
 				Addresses:                 device.Addresses,
-				Online:                    !device.LastSeen.IsZero() && time.Since(device.LastSeen.Time) < 2*time.Minute,
-				LastSeen:                  device.LastSeen.Time.Format(time.RFC3339),
+				Online:                    online,
+				LastSeen:                  lastSeen,
 				Authorized:                device.Authorized,
 				KeyExpiryDisabled:         device.KeyExpiryDisabled,
 				Created:                   device.Created.Time.Format(time.RFC3339),
