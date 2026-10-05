@@ -93,55 +93,41 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Create services
-	tailscaleService := services.NewTailscaleService(cfg)
+	// Create one service and poller per tailnet. Env-only configuration is a
+	// single entry with id default, which is what the current API reads.
+	tailnets, err := cfg.ResolveTailnets()
+	if err != nil {
+		log.Fatalf("Configuration error: %v", err)
+	}
+	pollerConfig, err := services.PollerConfigFrom(cfg)
+	if err != nil {
+		log.Fatalf("Configuration error: %v", err)
+	}
+	registry, err := services.NewRegistry(ctx, tailnets, store, pollerConfig)
+	if err != nil {
+		log.Fatalf("Failed to configure tailnets: %v", err)
+	}
+	registry.LogConfigured()
 
-	// Create and start background poller
-	pollerConfig := services.DefaultPollerConfig()
-
-	// Configuration values have already been syntax-checked by Config.Validate.
-	pollerConfig.PollInterval, _ = time.ParseDuration(cfg.PollInterval)
-	pollerConfig.InitialBackfill, _ = time.ParseDuration(cfg.InitialBackfill)
-	if cfg.Retention != "" {
-		pollerConfig.Retention, _ = time.ParseDuration(cfg.Retention)
-	}
-	pollerConfig.FlowBackend = cfg.FlowBackend
-	if pollerConfig.FlowBackend == "" {
-		pollerConfig.FlowBackend = "api"
-		if cfg.FlowObjectStoreEndpoint != "" && cfg.FlowObjectStoreAccessKey != "" && cfg.FlowObjectStoreSecretKey != "" {
-			pollerConfig.FlowBackend = "s3"
-		}
-	}
-	if pollerConfig.FlowBackend == "s3" && cfg.Retention == "" {
-		pollerConfig.Retention = 0
-	}
-	lookback, _ := time.ParseDuration(cfg.FlowObjectStoreLookback)
-	pollerConfig.ObjectStore = services.ObjectStoreConfig{
-		Bucket:       cfg.FlowObjectStoreBucket,
-		Prefix:       cfg.FlowObjectStorePrefix,
-		Endpoint:     cfg.FlowObjectStoreEndpoint,
-		Region:       cfg.FlowObjectStoreRegion,
-		AccessKey:    cfg.FlowObjectStoreAccessKey,
-		SecretKey:    cfg.FlowObjectStoreSecretKey,
-		UsePathStyle: cfg.FlowObjectStorePathStyle,
-		Lookback:     lookback,
-		MaxObjects:   cfg.FlowObjectStoreMaxObjects,
-	}
-
-	poller := services.NewPoller(tailscaleService, store, pollerConfig)
 	pollerCtx, pollerCancel := context.WithCancel(context.Background())
 	defer pollerCancel()
-	if pollerConfig.FlowBackend == "s3" {
-		objectSource, err := services.NewObjectStoreSource(ctx, pollerConfig.ObjectStore)
-		if err != nil {
-			log.Fatalf("Failed to configure object-store flow backend: %v", err)
-		}
-		poller.ConfigureObjectStore(objectSource)
+	if err := registry.Start(pollerCtx); err != nil {
+		log.Printf("Warning: Failed to start poller: %v", err)
 	}
 
-	// Start poller in background
-	if err := poller.Start(pollerCtx); err != nil {
-		log.Printf("Warning: Failed to start poller: %v", err)
+	// Existing routes serve tailnet id default. A file that omits that id
+	// still polls its own tailnets, and these routes have no client to call.
+	var tailscaleService *services.TailscaleService
+	var poller *services.Poller
+	if entry, ok := registry.Default(); ok {
+		tailscaleService = entry.Service
+		poller = entry.Poller
+	} else {
+		log.Printf("No tailnet with id %s is configured. Existing API routes read that id only.", database.DefaultTailnetID)
+		tailscaleService = services.NewTailscaleService(&config.Config{
+			TailscaleAPIURL:  cfg.TailscaleAPIURL,
+			TailscaleTailnet: "-",
+		})
 	}
 
 	// Create handlers with store and poller
@@ -247,7 +233,11 @@ func main() {
 
 	log.Printf("=== TSFlow Server Starting ===")
 	log.Printf("Port: %s", port)
-	log.Printf("Tailnet: %s", cfg.TailscaleTailnet)
+	if len(tailnets) == 1 {
+		log.Printf("Tailnet: %s", tailnets[0].Name)
+	} else {
+		log.Printf("Tailnets: %d", len(tailnets))
+	}
 	log.Printf("API URL: %s", cfg.TailscaleAPIURL)
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Database: %s", dbPath)
@@ -263,15 +253,26 @@ func main() {
 		)
 	}
 
-	// Log authentication method being used
-	if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {
-		maskedID := cfg.TailscaleOAuthClientID
-		if len(maskedID) > 4 {
-			maskedID = "****" + maskedID[len(maskedID)-4:]
+	// Log authentication method being used. The single-tailnet env path keeps
+	// the original line. A tailnet file logs only the method, not the secret.
+	if cfg.TailnetsFile == "" {
+		if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {
+			maskedID := cfg.TailscaleOAuthClientID
+			if len(maskedID) > 4 {
+				maskedID = "****" + maskedID[len(maskedID)-4:]
+			}
+			log.Printf("Authentication: OAuth Client Credentials (Client ID: %s)", maskedID)
+		} else {
+			log.Printf("Authentication: API Key")
 		}
-		log.Printf("Authentication: OAuth Client Credentials (Client ID: %s)", maskedID)
 	} else {
-		log.Printf("Authentication: API Key")
+		for _, spec := range tailnets {
+			method := "API key"
+			if spec.OAuthClientID != "" {
+				method = "OAuth"
+			}
+			log.Printf("Tailnet %s authentication: %s", spec.ID, method)
+		}
 	}
 
 	if cfg.TsnetServe {
@@ -341,9 +342,9 @@ func main() {
 		shutdownCancel()
 	}
 
-	// Stop the poller gracefully
+	// Stop the pollers gracefully. Each poller cancels its own requests.
 	pollerCancel()
-	poller.Stop()
+	registry.Stop()
 
 	// Close database connection
 	if err := store.Close(); err != nil {
