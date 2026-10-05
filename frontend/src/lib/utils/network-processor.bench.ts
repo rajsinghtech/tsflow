@@ -1,5 +1,5 @@
 // Run with: npx vite-node src/lib/utils/network-processor.bench.ts
-import type { Device, NetworkLog } from '$lib/types';
+import type { Device, NetworkLog } from '#lib/types';
 import {
 	indexedDeviceLookup,
 	linearDeviceLookup,

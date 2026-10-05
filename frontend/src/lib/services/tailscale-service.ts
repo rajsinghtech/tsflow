@@ -1,5 +1,5 @@
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '$lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '#lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];

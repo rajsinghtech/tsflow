@@ -45,6 +45,7 @@ type Poller struct {
 	tsService    *TailscaleService
 	store        database.Store
 	config       PollerConfig
+	tailnetID    string
 	deviceCache  *DeviceCache
 	rollingCache *RollingWindowCache
 	objectStore  *ObjectStoreSource
@@ -72,6 +73,7 @@ func NewPoller(tsService *TailscaleService, store database.Store, config PollerC
 		tsService:    tsService,
 		store:        store,
 		config:       config,
+		tailnetID:    database.DefaultTailnetID,
 		deviceCache:  NewDeviceCache(),
 		rollingCache: NewRollingWindowCache(time.Hour), // Keep 1 hour in memory
 		stopChan:     make(chan struct{}),
@@ -324,6 +326,13 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 	}
 }
 
+func (p *Poller) tailnetIDOrDefault() string {
+	if p == nil || p.tailnetID == "" {
+		return database.DefaultTailnetID
+	}
+	return p.tailnetID
+}
+
 func (p *Poller) canRefreshDeviceCache() bool {
 	return p != nil && p.tsService != nil && p.tsService.HasCredentials()
 }
@@ -335,7 +344,7 @@ func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 	}
 	p.deviceCache.Update(devicesResp.Devices)
 	if p.store != nil {
-		nodeMetadata, err := p.store.GetNodeMetadata(ctx)
+		nodeMetadata, err := p.store.GetNodeMetadata(ctx, p.tailnetIDOrDefault())
 		if err != nil {
 			return fmt.Errorf("node metadata cache hydration failed: %w", err)
 		}
@@ -353,7 +362,7 @@ const maxPollChunk = 30 * time.Minute
 
 func (p *Poller) poll(ctx context.Context) error {
 	// Get last poll state
-	pollState, err := p.store.GetPollState(ctx)
+	pollState, err := p.store.GetPollState(ctx, p.tailnetIDOrDefault())
 	if err != nil {
 		return err
 	}
@@ -396,7 +405,7 @@ func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) erro
 	// source cursor here as well so a restart does not repeatedly scan an old
 	// range when a poll only encounters objects already seen.
 	if !lastProcessed.IsZero() {
-		if err := p.store.UpdatePollState(ctx, lastProcessed); err != nil {
+		if err := p.store.UpdatePollState(ctx, p.tailnetIDOrDefault(), lastProcessed); err != nil {
 			return err
 		}
 	}
@@ -475,14 +484,14 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 	flowLogs := p.convertLogs(logsResp)
 	if len(flowLogs) == 0 {
 		// Update poll state even with no logs
-		return p.store.UpdatePollState(ctx, end)
+		return p.store.UpdatePollState(ctx, p.tailnetIDOrDefault(), end)
 	}
 
 	// Pre-aggregate at poll time: node pairs, bandwidth, and traffic stats
 	nodePairs, totalBandwidth, nodeBandwidth, trafficStats := p.aggregate(flowLogs)
 
 	// Atomically commit all aggregates + poll state in a single transaction.
-	if err := p.store.CommitPollResults(ctx, database.PollResults{
+	if err := p.store.CommitPollResults(ctx, p.tailnetIDOrDefault(), database.PollResults{
 		NodePairs:     nodePairs,
 		Bandwidth:     totalBandwidth,
 		NodeBandwidth: nodeBandwidth,
@@ -511,7 +520,7 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 }
 
 func (p *Poller) cleanup(ctx context.Context) error {
-	deleted, err := p.store.Cleanup(ctx, p.config.Retention)
+	deleted, err := p.store.Cleanup(ctx, p.tailnetIDOrDefault(), p.config.Retention)
 	if err != nil {
 		return err
 	}

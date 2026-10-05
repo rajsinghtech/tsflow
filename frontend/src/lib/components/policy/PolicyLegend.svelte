@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { NODE_COLORS, EDGE_STYLES } from '$lib/utils/policy-layout';
+	import { NODE_COLORS, EDGE_STYLES } from '#lib/utils/policy-layout';
 
 	const nodeLegend: { type: string; label: string }[] = [
 		{ type: 'user', label: 'User' },

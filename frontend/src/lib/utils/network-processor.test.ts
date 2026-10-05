@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Device, NetworkLog, NetworkNode, NetworkLink } from '$lib/types';
+import type { Device, NetworkLog, NetworkNode, NetworkLink } from '#lib/types';
 import {
 	indexedDeviceLookup,
 	linearDeviceLookup,

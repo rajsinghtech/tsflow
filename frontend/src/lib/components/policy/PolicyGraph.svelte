@@ -14,9 +14,9 @@
 	import '@xyflow/svelte/dist/style.css';
 	import PolicyNode from './PolicyNode.svelte';
 	import PolicyEdge from './PolicyEdge.svelte';
-	import { NODE_COLORS, isFastRenderMode, applyPolicyElkLayout } from '$lib/utils/policy-layout';
-	import { runQuery, clearQuery } from '$lib/stores/policy-store';
-	import { themeStore } from '$lib/stores';
+	import { NODE_COLORS, isFastRenderMode, applyPolicyElkLayout } from '#lib/utils/policy-layout';
+	import { runQuery, clearQuery } from '#lib/stores/policy-store';
+	import { themeStore } from '#lib/stores';
 
 	interface Props {
 		nodes: Node[];

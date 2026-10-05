@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
-	import { highlightedPolicyNodeIds, hasQuery } from '$lib/stores/policy-store';
-	import type { NodeType } from '$lib/policy-engine/types';
+	import { highlightedPolicyNodeIds, hasQuery } from '#lib/stores/policy-store';
+	import type { NodeType } from '#lib/policy-engine/types';
 
 	interface Props {
 		data: {

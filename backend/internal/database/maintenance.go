@@ -8,15 +8,21 @@ import (
 	"time"
 )
 
-func (s *SQLiteStore) GetPollState(ctx context.Context) (*PollState, error) {
+func (s *SQLiteStore) GetPollState(ctx context.Context, tailnetID string) (*PollState, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var state PollState
 	var lastPollEnd, updatedAt sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		"SELECT last_poll_end, updated_at FROM poll_state WHERE id = 1",
+		"SELECT last_poll_end, updated_at FROM poll_state WHERE tailnet_id = ?", tailnetID,
 	).Scan(&lastPollEnd, &updatedAt)
+	if err == sql.ErrNoRows {
+		return &PollState{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get poll state: %w", err)
 	}
@@ -29,34 +35,52 @@ func (s *SQLiteStore) GetPollState(ctx context.Context) (*PollState, error) {
 	return &state, nil
 }
 
-func (s *SQLiteStore) UpdatePollState(ctx context.Context, lastPollEnd time.Time) error {
+func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, lastPollEnd time.Time) error {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return upsertPollCursor(ctx, s.db, tailnetID, lastPollEnd)
+}
 
+type sqlExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// upsertPollCursor moves a tailnet's cursor forward and leaves it unchanged
+// when the incoming time is missing or older.
+func upsertPollCursor(ctx context.Context, exec sqlExecer, tailnetID string, lastPollEnd time.Time) error {
 	const sqliteFormat = "2006-01-02 15:04:05"
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE poll_state
-		 SET last_poll_end = CASE
-		       WHEN last_poll_end IS NULL OR last_poll_end = '' OR datetime(last_poll_end) IS NULL OR datetime(last_poll_end) < datetime(?)
-		       THEN ? ELSE last_poll_end END,
-		     updated_at = CURRENT_TIMESTAMP
-		 WHERE id = 1`,
-		lastPollEnd.UTC().Format(sqliteFormat), lastPollEnd.UTC().Format(sqliteFormat),
-	)
+	stamp := lastPollEnd.UTC().Format(sqliteFormat)
+	_, err := exec.ExecContext(ctx, `
+		INSERT INTO poll_state (tailnet_id, last_poll_end, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(tailnet_id) DO UPDATE SET
+			last_poll_end = CASE
+				WHEN poll_state.last_poll_end IS NULL OR poll_state.last_poll_end = ''
+				  OR datetime(poll_state.last_poll_end) IS NULL
+				  OR datetime(poll_state.last_poll_end) < datetime(?)
+				THEN ? ELSE poll_state.last_poll_end END,
+			updated_at = CURRENT_TIMESTAMP
+	`, tailnetID, stamp, stamp, stamp)
 	if err != nil {
 		return fmt.Errorf("failed to update poll state: %w", err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) IsObjectIngested(ctx context.Context, key string) (bool, error) {
+func (s *SQLiteStore) IsObjectIngested(ctx context.Context, tailnetID string, key string) (bool, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return false, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var exists int
 	err := s.db.QueryRowContext(ctx,
-		"SELECT 1 FROM ingested_objects WHERE object_key = ? LIMIT 1",
-		key,
+		"SELECT 1 FROM ingested_objects WHERE tailnet_id = ? AND object_key = ? LIMIT 1",
+		tailnetID, key,
 	).Scan(&exists)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -71,7 +95,10 @@ func (s *SQLiteStore) IsObjectIngested(ctx context.Context, key string) (bool, e
 // metadata has not been hydrated, or whose previously recorded nodes are
 // missing from node_metadata. The latter makes hydration repair partial
 // metadata-table loss without rescanning the entire object store.
-func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, limit int) ([]string, error) {
+func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, tailnetID string, limit int) ([]string, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -81,18 +108,23 @@ func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, limit int) 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.object_key
 		FROM ingested_objects o
-		WHERE o.metadata_hydrated = 0
-		   OR EXISTS (
+		WHERE o.tailnet_id = ?
+		  AND (
+			o.metadata_hydrated = 0
+			OR EXISTS (
 				SELECT 1
 				FROM object_metadata_nodes m
-				WHERE m.object_key = o.object_key
+				WHERE m.tailnet_id = o.tailnet_id
+				  AND m.object_key = o.object_key
 				  AND NOT EXISTS (
-					SELECT 1 FROM node_metadata n WHERE n.node_id = m.node_id
+					SELECT 1 FROM node_metadata n
+					WHERE n.tailnet_id = o.tailnet_id AND n.node_id = m.node_id
 				  )
 			)
+		  )
 		ORDER BY o.ingested_at ASC, o.object_key ASC
 		LIMIT ?
-	`, limit)
+	`, tailnetID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query objects needing metadata: %w", err)
 	}
@@ -115,7 +147,10 @@ func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, limit int) 
 // MarkObjectMetadataHydrated records the node IDs found while rereading an
 // already-ingested object. It is transactional so a failed metadata upsert
 // never makes the object look complete on the next poll.
-func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, key string, nodeIDs []string) error {
+func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, tailnetID string, key string, nodeIDs []string) error {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return err
+	}
 	if key == "" {
 		return fmt.Errorf("object key is required")
 	}
@@ -127,7 +162,7 @@ func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, key string
 		return fmt.Errorf("failed to begin metadata hydration transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if err := recordObjectMetadataTx(ctx, tx, key, nodeIDs); err != nil {
+	if err := recordObjectMetadataTx(ctx, tx, tailnetID, key, nodeIDs); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -136,14 +171,14 @@ func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, key string
 	return nil
 }
 
-func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, nodes []NodeMetadata) error {
+func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, tailnetID string, nodes []NodeMetadata) error {
 	if len(nodes) == 0 {
 		return nil
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO node_metadata (node_id, name, hostname, owner, ips, tags, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(node_id) DO UPDATE SET
+		INSERT INTO node_metadata (tailnet_id, node_id, name, hostname, owner, ips, tags, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(tailnet_id, node_id) DO UPDATE SET
 			name = CASE WHEN excluded.name != '' THEN excluded.name ELSE node_metadata.name END,
 			hostname = CASE WHEN excluded.hostname != '' THEN excluded.hostname ELSE node_metadata.hostname END,
 			owner = CASE WHEN excluded.owner != '' THEN excluded.owner ELSE node_metadata.owner END,
@@ -168,20 +203,20 @@ func upsertNodeMetadataTx(ctx context.Context, tx *sql.Tx, nodes []NodeMetadata)
 		if err != nil {
 			return fmt.Errorf("failed to marshal node metadata tags: %w", err)
 		}
-		if _, err := stmt.ExecContext(ctx, node.NodeID, node.Name, node.Hostname, node.Owner, string(ips), string(tags)); err != nil {
+		if _, err := stmt.ExecContext(ctx, tailnetID, node.NodeID, node.Name, node.Hostname, node.Owner, string(ips), string(tags)); err != nil {
 			return fmt.Errorf("failed to upsert node metadata: %w", err)
 		}
 	}
 	return nil
 }
 
-func recordObjectMetadataTx(ctx context.Context, tx *sql.Tx, key string, nodeIDs []string) error {
+func recordObjectMetadataTx(ctx context.Context, tx *sql.Tx, tailnetID, key string, nodeIDs []string) error {
 	if key == "" {
 		return fmt.Errorf("object key is required")
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO object_metadata_nodes (object_key, node_id)
-		VALUES (?, ?)
+		INSERT OR IGNORE INTO object_metadata_nodes (tailnet_id, object_key, node_id)
+		VALUES (?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare object metadata index: %w", err)
@@ -197,12 +232,13 @@ func recordObjectMetadataTx(ctx context.Context, tx *sql.Tx, key string, nodeIDs
 			continue
 		}
 		seen[nodeID] = struct{}{}
-		if _, err := stmt.ExecContext(ctx, key, nodeID); err != nil {
+		if _, err := stmt.ExecContext(ctx, tailnetID, key, nodeID); err != nil {
 			return fmt.Errorf("failed to index metadata for object %q: %w", key, err)
 		}
 	}
 	result, err := tx.ExecContext(ctx,
-		`UPDATE ingested_objects SET metadata_hydrated = 1 WHERE object_key = ?`, key,
+		`UPDATE ingested_objects SET metadata_hydrated = 1 WHERE tailnet_id = ? AND object_key = ?`,
+		tailnetID, key,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to mark object metadata hydrated: %w", err)
@@ -215,7 +251,10 @@ func recordObjectMetadataTx(ctx context.Context, tx *sql.Tx, key string, nodeIDs
 	return nil
 }
 
-func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error {
+func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, tailnetID string, nodes []NodeMetadata) error {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return err
+	}
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -227,20 +266,24 @@ func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, nodes []NodeMetada
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if err := upsertNodeMetadataTx(ctx, tx, nodes); err != nil {
+	if err := upsertNodeMetadataTx(ctx, tx, tailnetID, nodes); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error) {
+func (s *SQLiteStore) GetNodeMetadata(ctx context.Context, tailnetID string) ([]NodeMetadata, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT node_id, name, hostname, owner, ips, tags, updated_at
 		FROM node_metadata
-	`)
+		WHERE tailnet_id = ?
+	`, tailnetID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node metadata: %w", err)
 	}
@@ -269,14 +312,18 @@ func (s *SQLiteStore) GetNodeMetadata(ctx context.Context) ([]NodeMetadata, erro
 }
 
 // GetDataRange returns the time range of data stored in node_pairs.
-func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
+func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*DataRange, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var minBucket, maxBucket sql.NullInt64
 	var count int64
 	err := s.db.QueryRowContext(ctx,
-		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs",
+		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?",
+		tailnetID,
 	).Scan(&minBucket, &maxBucket, &count)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get data range: %w", err)
@@ -295,7 +342,10 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context) (*DataRange, error) {
 }
 
 // Cleanup deletes rows older than retention from all four data tables.
-func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int64, error) {
+func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention time.Duration) (int64, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return 0, err
+	}
 	if retention <= 0 {
 		return 0, nil
 	}
@@ -313,7 +363,7 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int
 	var total int64
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"} {
 		result, err := tx.ExecContext(ctx,
-			fmt.Sprintf("DELETE FROM %s WHERE bucket < ?", table), cutoff,
+			fmt.Sprintf("DELETE FROM %s WHERE tailnet_id = ? AND bucket < ?", table), tailnetID, cutoff,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to cleanup %s: %w", table, err)
@@ -328,17 +378,18 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM object_metadata_nodes
-		 WHERE object_key IN (
+		 WHERE tailnet_id = ?
+		   AND object_key IN (
 			SELECT object_key FROM ingested_objects
-			WHERE ingested_at < datetime('now', '-' || ? || ' seconds')
+			WHERE tailnet_id = ? AND ingested_at < datetime('now', '-' || ? || ' seconds')
 		 )`,
-		int64(retention.Seconds()),
+		tailnetID, tailnetID, int64(retention.Seconds()),
 	); err != nil {
 		return 0, fmt.Errorf("failed to cleanup object metadata index: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM ingested_objects WHERE ingested_at < datetime('now', '-' || ? || ' seconds')",
-		int64(retention.Seconds()),
+		"DELETE FROM ingested_objects WHERE tailnet_id = ? AND ingested_at < datetime('now', '-' || ? || ' seconds')",
+		tailnetID, int64(retention.Seconds()),
 	); err != nil {
 		return 0, fmt.Errorf("failed to cleanup ingested_objects: %w", err)
 	}
@@ -349,14 +400,19 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, retention time.Duration) (int
 }
 
 // GetStats returns row counts, database size, and data range.
-func (s *SQLiteStore) GetStats(ctx context.Context) (map[string]any, error) {
+// Counts and the data range are limited to tailnetID. dbSizeBytes is the
+// whole database file, which is shared by every tailnet.
+func (s *SQLiteStore) GetStats(ctx context.Context, tailnetID string) (map[string]any, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	tableCounts := make(map[string]int64)
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats", "ingested_objects", "node_metadata"} {
 		var count int64
-		if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count); err != nil {
+		if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE tailnet_id = ?", table), tailnetID).Scan(&count); err != nil {
 			return nil, fmt.Errorf("failed to count %s: %w", table, err)
 		}
 		tableCounts[table] = count
@@ -373,7 +429,7 @@ func (s *SQLiteStore) GetStats(ctx context.Context) (map[string]any, error) {
 	var minB, maxB sql.NullInt64
 	var cnt int64
 	if err := s.db.QueryRowContext(ctx,
-		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs",
+		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?", tailnetID,
 	).Scan(&minB, &maxB, &cnt); err != nil {
 		return nil, fmt.Errorf("failed to read database data range: %w", err)
 	}

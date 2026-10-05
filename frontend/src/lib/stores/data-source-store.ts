@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import { tailscaleService, type DataRange, type PollerStatus } from '$lib/services';
+import { tailscaleService, type DataRange, type PollerStatus } from '#lib/services';
 
 const DEFAULT_WINDOW_MS = 2 * 60 * 60 * 1000;
 const MIN_WINDOW_MS = 5 * 60 * 1000;

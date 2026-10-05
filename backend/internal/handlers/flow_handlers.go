@@ -295,7 +295,7 @@ func (h *Handlers) GetAggregatedFlowLogs(c *gin.Context) {
 		defer cancel()
 
 		// Use pre-computed node pair aggregates
-		aggregates, err = h.store.GetNodePairAggregates(ctx, startTime, endTime)
+		aggregates, err = h.store.GetNodePairAggregates(ctx, h.tailnetID(), startTime, endTime)
 		if err != nil {
 			if writeContextError(c, err) {
 				return
@@ -492,7 +492,7 @@ func (h *Handlers) GetDataRange(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), ShortQueryTimeout)
 	defer cancel()
 
-	dataRange, err := h.store.GetDataRange(ctx)
+	dataRange, err := h.store.GetDataRange(ctx, h.tailnetID())
 	if err != nil {
 		if writeContextError(c, err) {
 			return
