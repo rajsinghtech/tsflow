@@ -64,7 +64,9 @@ TSFlow supports OAuth (recommended) or API key authentication.
 
 ### Several tailnets
 
-The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. The current API and UI read only id `default`, so include that id when those routes should keep showing a network. Secrets are not written in the file. Each entry points at an environment variable or a file.
+The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. Secrets are not written in the file. Each entry points at an environment variable or a file.
+
+Data routes take an optional `tailnet` query parameter. With one configured tailnet the parameter can be omitted, and the JSON matches a single-tailnet install. With several tailnets, a missing parameter uses id `default` when that id is configured. If it is not, the response is 400 and lists the valid ids. An unknown id is 404. `GET /api/tailnets` returns each id, display name, and poller status, including the last error. It does not return credentials. The UI does not send the parameter yet, so it follows those rules and shows `default` when that id exists.
 
 ```yaml
 tailnets:

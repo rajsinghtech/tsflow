@@ -9,15 +9,19 @@ import (
 )
 
 func (h *Handlers) GetDevices(c *gin.Context) {
-	if h.poller != nil {
-		cachedDevices := h.poller.GetDeviceCache().Devices()
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
+	if tn.poller != nil {
+		cachedDevices := tn.poller.GetDeviceCache().Devices()
 		if len(cachedDevices) > 0 {
 			c.JSON(http.StatusOK, gin.H{"devices": cachedDevices})
 			return
 		}
 	}
 
-	devices, err := h.tailscaleService.GetDevicesWithContext(c.Request.Context())
+	devices, err := tn.service.GetDevicesWithContext(c.Request.Context())
 	if err != nil {
 		if writeContextError(c, err) {
 			return
@@ -31,13 +35,17 @@ func (h *Handlers) GetDevices(c *gin.Context) {
 }
 
 func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	ctx := c.Request.Context()
 	if err := ctx.Err(); err != nil && writeContextError(c, err) {
 		return
 	}
 
 	// Fetch VIP services
-	vipServices, servicesErr := h.tailscaleService.GetVIPServices(ctx)
+	vipServices, servicesErr := tn.service.GetVIPServices(ctx)
 	if servicesErr != nil {
 		if writeContextError(c, servicesErr) {
 			return
@@ -47,7 +55,7 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 	}
 
 	// Fetch static records
-	staticRecords, recordsErr := h.tailscaleService.GetStaticRecords(ctx)
+	staticRecords, recordsErr := tn.service.GetStaticRecords(ctx)
 	if recordsErr != nil {
 		if writeContextError(c, recordsErr) {
 			return
@@ -65,7 +73,11 @@ func (h *Handlers) GetServicesAndRecords(c *gin.Context) {
 }
 
 func (h *Handlers) GetDNSNameservers(c *gin.Context) {
-	nameservers, err := h.tailscaleService.GetDNSNameserversWithContext(c.Request.Context())
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
+	nameservers, err := tn.service.GetDNSNameserversWithContext(c.Request.Context())
 	if err != nil {
 		if writeContextError(c, err) {
 			return
