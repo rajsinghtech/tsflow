@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import TailnetSwitcher from './TailnetSwitcher.svelte';
+	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
+	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '#lib/stores';
@@ -132,6 +135,10 @@
 	}
 
 	const ThemeIcon = $derived(getThemeIcon($themeStore));
+
+	$effect(() => {
+		void ensureTailnetQuery();
+	});
 </script>
 
 <svelte:window onclick={handleCloseAbout} />
@@ -200,7 +207,7 @@
 				{@const Icon = item.icon}
 				{@const active = currentPath === item.href}
 				<a
-					href={item.href}
+					href={hrefWithTailnet(item.href, $selectedTailnetId)}
 					aria-current={active ? 'page' : undefined}
 					aria-label={item.label}
 					class="flex min-h-8 items-center gap-1.5 rounded px-1 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
@@ -213,6 +220,8 @@
 				</a>
 			{/each}
 		</nav>
+
+		<TailnetSwitcher />
 	</div>
 
 	<!-- Center section: Network Stats (desktop only) -->

@@ -18,6 +18,10 @@ import (
 
 // GetBandwidthAggregated returns aggregated bandwidth data for the chart
 func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Database not configured",
@@ -46,8 +50,8 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	// If nodeId looks like an IP address, resolve it to a device ID via the device cache.
 	// The bandwidth tables store data keyed by device ID (e.g. "7911952361817638"),
 	// but the frontend may send an IP for VIP/service nodes that lack a device object.
-	if nodeID != "" && net.ParseIP(nodeID) != nil && h.poller != nil {
-		resolved := h.poller.GetDeviceCache().ResolveIP(nodeID)
+	if nodeID != "" && net.ParseIP(nodeID) != nil && tn.poller != nil {
+		resolved := tn.poller.GetDeviceCache().ResolveIP(nodeID)
 		if resolved != nodeID {
 			nodeID = resolved
 		}
@@ -57,8 +61,8 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 	source := "database"
 
 	// Try rolling cache first for recent data (within last hour)
-	if h.poller != nil && len(trafficTypes) == 0 {
-		cache := h.poller.GetRollingCache()
+	if tn.poller != nil && len(trafficTypes) == 0 {
+		cache := tn.poller.GetRollingCache()
 		cacheHasData := cache.HasBandwidthDataFor(startTime, endTime)
 		if nodeID != "" {
 			cacheHasData = cache.HasNodeBandwidthDataFor(startTime, endTime, nodeID)
@@ -79,11 +83,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		defer cancel()
 
 		if nodeID != "" {
-			buckets, err = h.store.GetNodeBandwidth(ctx, h.tailnetID(), startTime, endTime, nodeID)
+			buckets, err = h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, nodeID)
 		} else if len(trafficTypes) > 0 && len(trafficTypes) < 4 {
-			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes)
+			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes)
 		} else {
-			buckets, err = h.store.GetBandwidth(ctx, h.tailnetID(), startTime, endTime)
+			buckets, err = h.store.GetBandwidth(ctx, tn.id, startTime, endTime)
 		}
 
 		if err != nil {
@@ -176,6 +180,10 @@ func parseBandwidthTrafficTypes(raw string) ([]string, error) {
 // GetBandwidthByIPs returns bandwidth data filtered by IP addresses
 // This is for backwards compatibility - converts IPs to node IDs using device cache
 func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Database not configured",
@@ -194,6 +202,9 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	// If no IPs provided, return total bandwidth
 	if ipsStr == "" {
 		redirectURL := "/api/bandwidth?start=" + url.QueryEscape(startTime.Format(time.RFC3339)) + "&end=" + url.QueryEscape(endTime.Format(time.RFC3339))
+		if c.Query("tailnet") != "" {
+			redirectURL += "&tailnet=" + url.QueryEscape(tn.id)
+		}
 		c.Redirect(http.StatusTemporaryRedirect, redirectURL)
 		return
 	}
@@ -210,8 +221,8 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 
 	// Use poller's device cache to resolve IPs to node IDs
 	nodeIDs := make(map[string]bool)
-	if h.poller != nil {
-		cache := h.poller.GetDeviceCache()
+	if tn.poller != nil {
+		cache := tn.poller.GetDeviceCache()
 		for _, ip := range ips {
 			nodeID := cache.ResolveIP(ip)
 			nodeIDs[nodeID] = true
@@ -231,7 +242,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	bucketMap := make(map[int64]*database.BandwidthBucket)
 
 	for nodeID := range nodeIDs {
-		buckets, err := h.store.GetNodeBandwidth(ctx, h.tailnetID(), startTime, endTime, nodeID)
+		buckets, err := h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, nodeID)
 		if err != nil {
 			if writeContextError(c, err) {
 				return

@@ -13,6 +13,10 @@ import (
 
 // GetStatsOverview returns network-wide statistics for a time range
 func (h *Handlers) GetStatsOverview(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not configured"})
 		return
@@ -34,8 +38,8 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	// Try rolling cache first for recent data
 	duration := endTime.Sub(startTime)
-	if h.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
-		cache := h.poller.GetRollingCache()
+	if tn.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
+		cache := tn.poller.GetRollingCache()
 		if cache.HasTrafficStatsDataFor(startTime, endTime) {
 			buckets = cache.GetTrafficStats(startTime, endTime)
 			source = "cache"
@@ -48,9 +52,9 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		defer cancel()
 
 		if len(trafficTypes) > 0 {
-			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes)
+			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes)
 		} else {
-			buckets, err = h.store.GetTrafficStats(ctx, h.tailnetID(), startTime, endTime)
+			buckets, err = h.store.GetTrafficStats(ctx, tn.id, startTime, endTime)
 		}
 		if err != nil {
 			if writeContextError(c, err) {
@@ -70,7 +74,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		// polls that share a minute still use MAX(recount, stored).
 		if len(trafficTypes) == 0 {
 			var derivedBuckets []database.TrafficStats
-			derivedBuckets, err = h.store.FillMissingTrafficStats(ctx, h.tailnetID(), startTime, endTime, buckets)
+			derivedBuckets, err = h.store.FillMissingTrafficStats(ctx, tn.id, startTime, endTime, buckets)
 			if err != nil {
 				if writeContextError(c, err) {
 					return
@@ -158,6 +162,10 @@ func mergeTrafficStatsBuckets(primary, derived []database.TrafficStats) []databa
 
 // GetTopTalkers returns the top N nodes by total traffic
 func (h *Handlers) GetTopTalkers(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not configured"})
 		return
@@ -182,9 +190,9 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
 	var talkers []database.TopTalker
 	if len(trafficTypes) > 0 {
-		talkers, err = h.store.GetTopTalkersByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes, limit*10)
+		talkers, err = h.store.GetTopTalkersByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes, limit*10)
 	} else {
-		talkers, err = h.store.GetTopTalkers(ctx, h.tailnetID(), startTime, endTime, limit*10)
+		talkers, err = h.store.GetTopTalkers(ctx, tn.id, startTime, endTime, limit*10)
 	}
 	if err != nil {
 		if writeContextError(c, err) {
@@ -208,8 +216,8 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	}
 	merged := make(map[string]*talkerAccum)
 	for _, t := range talkers {
-		resolvedID := h.resolveNodeID(t.NodeID)
-		name := h.resolveNodeName(resolvedID)
+		resolvedID := h.resolveNodeID(tn.poller, t.NodeID)
+		name := h.resolveNodeName(tn.poller, resolvedID)
 		if name == "" {
 			name = resolvedID
 		}
@@ -220,7 +228,7 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 		} else {
 			merged[resolvedID] = &talkerAccum{
 				displayName: name,
-				owner:       h.resolveNodeOwner(resolvedID),
+				owner:       h.resolveNodeOwner(tn.poller, resolvedID),
 				txBytes:     t.TxBytes,
 				rxBytes:     t.RxBytes,
 				totalBytes:  t.TotalBytes,
@@ -266,6 +274,10 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 
 // GetTopPairs returns the top N node pairs by total traffic
 func (h *Handlers) GetTopPairs(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not configured"})
 		return
@@ -290,9 +302,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
 	var pairs []database.TopPair
 	if len(trafficTypes) > 0 {
-		pairs, err = h.store.GetTopPairsByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes, limit*10)
+		pairs, err = h.store.GetTopPairsByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes, limit*10)
 	} else {
-		pairs, err = h.store.GetTopPairs(ctx, h.tailnetID(), startTime, endTime, limit*10)
+		pairs, err = h.store.GetTopPairs(ctx, tn.id, startTime, endTime, limit*10)
 	}
 	if err != nil {
 		if writeContextError(c, err) {
@@ -320,10 +332,10 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	}
 	pairMerged := make(map[pairKey]*pairAccum)
 	for _, p := range pairs {
-		srcID := h.resolveNodeID(p.SrcNodeID)
-		dstID := h.resolveNodeID(p.DstNodeID)
-		srcName := h.resolveNodeName(srcID)
-		dstName := h.resolveNodeName(dstID)
+		srcID := h.resolveNodeID(tn.poller, p.SrcNodeID)
+		dstID := h.resolveNodeID(tn.poller, p.DstNodeID)
+		srcName := h.resolveNodeName(tn.poller, srcID)
+		dstName := h.resolveNodeName(tn.poller, dstID)
 		if srcName == "" {
 			srcName = srcID
 		}
@@ -339,9 +351,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 		} else {
 			pairMerged[key] = &pairAccum{
 				srcName:    srcName,
-				srcOwner:   h.resolveNodeOwner(srcID),
+				srcOwner:   h.resolveNodeOwner(tn.poller, srcID),
 				dstName:    dstName,
-				dstOwner:   h.resolveNodeOwner(dstID),
+				dstOwner:   h.resolveNodeOwner(tn.poller, dstID),
 				txBytes:    p.TxBytes,
 				rxBytes:    p.RxBytes,
 				totalBytes: p.TotalBytes,
@@ -395,6 +407,10 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 
 // GetNodeDetailStats returns detailed stats for a specific node
 func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
+	tn, ok := h.bindTailnet(c)
+	if !ok {
+		return
+	}
 	if h.store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database not configured"})
 		return
@@ -415,7 +431,7 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 
-	stats, err := h.store.GetNodeStats(ctx, h.tailnetID(), nodeID, startTime, endTime)
+	stats, err := h.store.GetNodeStats(ctx, tn.id, nodeID, startTime, endTime)
 	if err != nil {
 		if writeContextError(c, err) {
 			return

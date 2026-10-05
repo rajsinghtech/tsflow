@@ -64,7 +64,9 @@ TSFlow supports OAuth (recommended) or API key authentication.
 
 ### Several tailnets
 
-The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. The current API and UI read only id `default`, so include that id when those routes should keep showing a network. Secrets are not written in the file. Each entry points at an environment variable or a file.
+The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. Secrets are not written in the file. Each entry points at an environment variable or a file.
+
+Data routes take an optional `tailnet` query parameter. With one configured tailnet the parameter can be omitted, and the JSON matches a single-tailnet install. With several tailnets, a missing parameter uses id `default` when that id is configured. If it is not, the response is 400 and lists the valid ids. An unknown id is 404. `GET /api/tailnets` returns each id, display name, and poller status, including the last error. It does not return credentials. The UI calls `GET /api/tailnets` once on load. With one tailnet it shows no switcher and leaves data requests unchanged. With several, a header switcher keeps the choice in the `tailnet` query parameter and sends that id on data requests.
 
 ```yaml
 tailnets:
@@ -79,7 +81,7 @@ tailnets:
     s3_prefix: lab/network/
 ```
 
-`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret.
+`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
 
 JSON uses the same fields:
 
@@ -97,6 +99,11 @@ JSON uses the same fields:
 | `TAILSCALE_OAUTH_CLIENT_SECRET` | OAuth client secret | - |
 | `TAILSCALE_OAUTH_SCOPES` | OAuth scopes (comma-separated) | `all:read` |
 | `TAILSCALE_API_KEY` | API key (alternative to OAuth) | - |
+| `TAILSCALE_AUTH` | `oauth`, `api_key`, or `wif`. Unset keeps the historical choice. | - |
+| `TAILSCALE_WIF_CLIENT_ID` | Federated client id for API calls. Requires `TAILSCALE_AUTH=wif`. | - |
+| `TAILSCALE_WIF_ID_TOKEN` | OIDC token for API workload identity. One token source only. | - |
+| `TAILSCALE_WIF_ID_TOKEN_FILE` | File containing that OIDC token. | - |
+| `TAILSCALE_WIF_AUDIENCE` | Audience used to request a platform token when no token is supplied. | - |
 | `TAILSCALE_TAILNET` | Tailnet name (`-` for auto-detect) | `-` |
 | `TAILSCALE_API_URL` | API endpoint | `https://api.tailscale.com` |
 | `TSFLOW_TAILNETS_FILE` | YAML or JSON list of tailnets. Do not combine with the single-tailnet variables above. | - |
@@ -132,7 +139,7 @@ tsnet mode supports [workload identity federation](https://tailscale.com/kb/1236
 
 When `TS_CLIENT_ID` is set, tsflow uses WIF instead of OAuth `ClientSecret` for the tsnet node. The platform token is auto-detected from the runtime environment. Set either `TS_ID_TOKEN` or `TS_AUDIENCE`, not both. You must also set `TSFLOW_TAGS`.
 
-> **Note:** OAuth credentials (`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`) are still required for Tailscale API access (fetching devices, network logs). WIF only replaces the tsnet node authentication secret.
+tsnet WIF registers the embedded node only. API calls and the flow-log bucket have their own opt-in modes, described in [docs/workload-identity.md](docs/workload-identity.md). `TAILSCALE_AUTH=wif` is the API mode. `TSFLOW_S3_AUTH=aws_default` is the bucket mode. Leaving both unset keeps OAuth, API key, and static S3 keys.
 
 **Requirements:**
 - OAuth credentials or workload identity federation (API keys are not supported in tsnet mode)
@@ -182,7 +189,9 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 | `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
-| `TSFLOW_FLOW_BACKEND` | Flow backend: `api` or `s3` | `api` |
+| `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
+| `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |
+| `TSFLOW_S3_ROLE_ARN` | Optional role to assume when auth is `aws_default` | - |
 | `TSFLOW_S3_BUCKET` | S3/Garage bucket containing exported flow logs | `tailscale-logs` |
 | `TSFLOW_S3_PREFIX` | Object prefix for network flow objects | `network/` |
 | `TSFLOW_S3_ENDPOINT` | S3-compatible endpoint URL | - |

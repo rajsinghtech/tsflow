@@ -128,7 +128,7 @@ func TestParseTimeRange_InvalidFormat(t *testing.T) {
 
 func TestResolveNodeOwner_NilPoller(t *testing.T) {
 	h := &Handlers{}
-	if owner := h.resolveNodeOwner("device1"); owner != "" {
+	if owner := h.resolveNodeOwner(nil, "device1"); owner != "" {
 		t.Errorf("expected empty owner with nil poller, got %q", owner)
 	}
 }

@@ -165,7 +165,7 @@ func newTestObjectStoreWithPageSize(t *testing.T, objects []testObject, maxObjec
 			Lookback:   time.Hour,
 			MaxObjects: maxObjects,
 		},
-		client: client,
+		blobs: &s3BlobClient{client: client, bucket: "bucket"},
 	}
 	return source, server
 }
