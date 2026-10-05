@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { queryTimeWindow } from '#lib/stores/data-source-store';
+	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { uiStore, filteredNodes, filterStore } from '#lib/stores';
 	import { tailscaleService } from '#lib/services';
 	import { formatBytes, formatBitsRate } from '#lib/utils';
@@ -78,7 +79,8 @@
 			range.start.toISOString(),
 			range.end.toISOString(),
 			deviceId || 'network',
-			chartTrafficTypes?.join(',') || 'all'
+			chartTrafficTypes?.join(',') || 'all',
+			$selectedTailnetId || ''
 		].join('|');
 		if (key === lastBandwidthKey) return;
 		lastBandwidthKey = key;

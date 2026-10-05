@@ -169,6 +169,15 @@ export function startStatsRefresh(intervalMs = 60_000) {
 	refreshTimer = setInterval(() => loadStats(0), intervalMs);
 }
 
+export function clearStatsData() {
+	if (statsController) {
+		statsController.abort();
+		statsController = null;
+	}
+	clearStatsRetryState();
+	statsState.set(defaultState);
+}
+
 export function stopStatsRefresh() {
 	if (refreshTimer) {
 		clearInterval(refreshTimer);

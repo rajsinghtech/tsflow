@@ -1,3 +1,5 @@
+import { ensureTailnetQuery, withTailnet } from './tailnet-query';
+
 const BASE_URL = '/api';
 
 class APIError extends Error {
@@ -11,7 +13,8 @@ class APIError extends Error {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-	const url = `${BASE_URL}${endpoint}`;
+	await ensureTailnetQuery();
+	const url = `${BASE_URL}${withTailnet(endpoint)}`;
 
 	const response = await fetch(url, {
 		...options,
@@ -42,5 +45,10 @@ export const api = {
 			signal: options?.signal
 		})
 };
+
+export async function apiUrl(endpoint: string): Promise<string> {
+	await ensureTailnetQuery();
+	return `${BASE_URL}${withTailnet(endpoint)}`;
+}
 
 export { APIError };
