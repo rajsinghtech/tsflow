@@ -26,8 +26,8 @@ type tailnetTable struct {
 // Indexes lead with tailnet_id so a query for one tailnet is a prefix scan.
 // Equality on a single tailnet id, then the same bucket or node column the
 // previous schema used, keeps the one-tailnet access path. The endpoint index
-// serves the per-pair merges in the graph query when one tailnet has on the
-// order of 20k nodes and many minute buckets.
+// covers a lookup of one pair across minute buckets. The graph read does not
+// use it. That read scans the primary key for one tailnet and time range.
 var tailnetTables = []tailnetTable{
 	{
 		name: "node_pairs",
