@@ -35,7 +35,7 @@ func TestPollState(t *testing.T) {
 	ctx := context.Background()
 
 	// Initial state should have zero time
-	state, err := store.GetPollState(ctx)
+	state, err := store.GetPollState(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,11 +45,11 @@ func TestPollState(t *testing.T) {
 
 	// Update and verify
 	now := time.Now().UTC().Truncate(time.Second)
-	if err := store.UpdatePollState(ctx, now); err != nil {
+	if err := store.UpdatePollState(ctx, DefaultTailnetID, now); err != nil {
 		t.Fatal(err)
 	}
 
-	state, err = store.GetPollState(ctx)
+	state, err = store.GetPollState(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,14 +64,14 @@ func TestPollStateDoesNotMoveBackward(t *testing.T) {
 	future := time.Date(2026, 5, 8, 13, 45, 0, 0, time.UTC)
 	past := future.Add(-time.Hour)
 
-	if err := store.UpdatePollState(ctx, future); err != nil {
+	if err := store.UpdatePollState(ctx, DefaultTailnetID, future); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdatePollState(ctx, past); err != nil {
+	if err := store.UpdatePollState(ctx, DefaultTailnetID, past); err != nil {
 		t.Fatal(err)
 	}
 
-	state, err := store.GetPollState(ctx)
+	state, err := store.GetPollState(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestGetStatsReturnsDatabaseErrors(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetStats(context.Background()); err == nil {
+	if _, err := store.GetStats(context.Background(), DefaultTailnetID); err == nil {
 		t.Fatal("expected GetStats to return an error for a closed database")
 	}
 }
@@ -94,7 +94,7 @@ func TestGetDataRange_Empty(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 
-	dr, err := store.GetDataRange(ctx)
+	dr, err := store.GetDataRange(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestCleanup_EmptyDB(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 
-	deleted, err := store.Cleanup(ctx, 24*time.Hour)
+	deleted, err := store.Cleanup(ctx, DefaultTailnetID, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +187,13 @@ func TestInit_Migration(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 row in node_pairs after migration, got %d", count)
+	}
+	var tailnetID string
+	if err := store.db.QueryRowContext(ctx, "SELECT tailnet_id FROM node_pairs").Scan(&tailnetID); err != nil {
+		t.Fatalf("migrated node_pairs row has no tailnet id: %v", err)
+	}
+	if tailnetID != DefaultTailnetID {
+		t.Fatalf("migrated tailnet id = %q, want %q", tailnetID, DefaultTailnetID)
 	}
 	var exitColumn int
 	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('traffic_stats') WHERE name = 'exit_bytes'").Scan(&exitColumn); err != nil {
@@ -286,7 +293,7 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 		}
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
+	pairs, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
 	if err != nil {
 		t.Fatalf("querying migrated node pairs failed: %v", err)
 	}
@@ -301,7 +308,7 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 	}
 	assertProtocolByteMap(t, pairs[0].ProtocolBytes, map[string]int64{"6": 75, "17": 75})
 
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket:        120,
 		SrcNodeID:     "legacy-a",
 		DstNodeID:     "legacy-b",
@@ -318,7 +325,7 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 		t.Fatalf("upserting into migrated node_pairs failed: %v", err)
 	}
 
-	pairs, err = store.GetNodePairAggregates(ctx, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
+	pairs, err = store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
 	if err != nil {
 		t.Fatalf("querying upserted node pair failed: %v", err)
 	}
@@ -330,14 +337,14 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 	}
 	assertProtocolByteMap(t, pairs[0].ProtocolBytes, map[string]int64{"6": 100, "17": 75})
 
-	stats, err := store.GetTrafficStats(ctx, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
+	stats, err := store.GetTrafficStats(ctx, DefaultTailnetID, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
 	if err != nil {
 		t.Fatalf("querying migrated traffic stats failed: %v", err)
 	}
 	if len(stats) != 1 || stats[0].TCPBytes != 10 || stats[0].ExitBytes != 0 {
 		t.Fatalf("unexpected migrated traffic stats: %+v", stats)
 	}
-	if err := store.UpsertTrafficStats(ctx, []TrafficStats{{
+	if err := store.UpsertTrafficStats(ctx, DefaultTailnetID, []TrafficStats{{
 		Bucket:      120,
 		TCPBytes:    5,
 		ExitBytes:   7,
@@ -347,7 +354,7 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("upserting into migrated traffic_stats failed: %v", err)
 	}
-	stats, err = store.GetTrafficStats(ctx, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
+	stats, err = store.GetTrafficStats(ctx, DefaultTailnetID, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
 	if err != nil {
 		t.Fatalf("querying upserted traffic stats failed: %v", err)
 	}
@@ -355,20 +362,20 @@ func TestInit_Migration_LegacyFlatTables(t *testing.T) {
 		t.Fatalf("unexpected upserted traffic stats: %+v", stats)
 	}
 
-	keys, err := store.GetObjectsNeedingMetadata(ctx, 10)
+	keys, err := store.GetObjectsNeedingMetadata(ctx, DefaultTailnetID, 10)
 	if err != nil {
 		t.Fatalf("querying migrated ingested objects failed: %v", err)
 	}
 	if len(keys) != 1 || keys[0] != "legacy-object.ndjson" {
 		t.Fatalf("migrated object metadata queue = %v", keys)
 	}
-	if err := store.UpsertNodeMetadata(ctx, []NodeMetadata{{NodeID: "legacy-a"}}); err != nil {
+	if err := store.UpsertNodeMetadata(ctx, DefaultTailnetID, []NodeMetadata{{NodeID: "legacy-a"}}); err != nil {
 		t.Fatalf("seeding migrated object node metadata failed: %v", err)
 	}
-	if err := store.MarkObjectMetadataHydrated(ctx, keys[0], []string{"legacy-a"}); err != nil {
+	if err := store.MarkObjectMetadataHydrated(ctx, DefaultTailnetID, keys[0], []string{"legacy-a"}); err != nil {
 		t.Fatalf("marking migrated object metadata hydrated failed: %v", err)
 	}
-	keys, err = store.GetObjectsNeedingMetadata(ctx, 10)
+	keys, err = store.GetObjectsNeedingMetadata(ctx, DefaultTailnetID, 10)
 	if err != nil {
 		t.Fatalf("querying hydrated ingested objects failed: %v", err)
 	}
@@ -435,7 +442,7 @@ func TestInit_Migration_MalformedProtocolJSON(t *testing.T) {
 	assertProtocolByteMap(t, validRaw, map[string]int64{"6": 60, "17": 60})
 	assertProtocolByteMap(t, invalidRaw, map[string]int64{})
 
-	pairs, err := store.GetNodePairAggregates(ctx, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
+	pairs, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(0, 0).UTC(), time.Unix(600, 0).UTC())
 	if err != nil {
 		t.Fatalf("querying rows with malformed protocol JSON failed: %v", err)
 	}
@@ -547,14 +554,14 @@ func TestCommitObjectIngest_Idempotent(t *testing.T) {
 		PollEnd: pollEnd,
 	}
 
-	if err := store.CommitObjectIngest(ctx, result); err != nil {
+	if err := store.CommitObjectIngest(ctx, DefaultTailnetID, result); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CommitObjectIngest(ctx, result); err != nil {
+	if err := store.CommitObjectIngest(ctx, DefaultTailnetID, result); err != nil {
 		t.Fatal(err)
 	}
 
-	seen, err := store.IsObjectIngested(ctx, result.Key)
+	seen, err := store.IsObjectIngested(ctx, DefaultTailnetID, result.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +569,7 @@ func TestCommitObjectIngest_Idempotent(t *testing.T) {
 		t.Fatal("expected object to be marked ingested")
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, pollEnd.Add(-time.Minute), pollEnd.Add(time.Minute))
+	pairs, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, pollEnd.Add(-time.Minute), pollEnd.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +580,7 @@ func TestCommitObjectIngest_Idempotent(t *testing.T) {
 		t.Fatalf("object ingest was double counted: %+v", pairs[0])
 	}
 
-	nodes, err := store.GetNodeMetadata(ctx)
+	nodes, err := store.GetNodeMetadata(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,10 +603,10 @@ func TestObjectMetadataHydrationStateRepairsMissingNodes(t *testing.T) {
 		NodeMetadata: []NodeMetadata{{NodeID: "node-a"}, {NodeID: "node-b"}},
 		PollEnd:      time.Unix(60, 0).UTC(),
 	}
-	if err := store.CommitObjectIngest(ctx, result); err != nil {
+	if err := store.CommitObjectIngest(ctx, DefaultTailnetID, result); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := store.GetObjectsNeedingMetadata(ctx, 10)
+	keys, err := store.GetObjectsNeedingMetadata(ctx, DefaultTailnetID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,20 +616,20 @@ func TestObjectMetadataHydrationStateRepairsMissingNodes(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, "DELETE FROM node_metadata WHERE node_id = ?", "node-b"); err != nil {
 		t.Fatal(err)
 	}
-	keys, err = store.GetObjectsNeedingMetadata(ctx, 10)
+	keys, err = store.GetObjectsNeedingMetadata(ctx, DefaultTailnetID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(keys) != 1 || keys[0] != result.Key {
 		t.Fatalf("objects needing repair = %v, want %q", keys, result.Key)
 	}
-	if err := store.UpsertNodeMetadata(ctx, []NodeMetadata{{NodeID: "node-b"}}); err != nil {
+	if err := store.UpsertNodeMetadata(ctx, DefaultTailnetID, []NodeMetadata{{NodeID: "node-b"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectMetadataHydrated(ctx, result.Key, []string{"node-a", "node-b"}); err != nil {
+	if err := store.MarkObjectMetadataHydrated(ctx, DefaultTailnetID, result.Key, []string{"node-a", "node-b"}); err != nil {
 		t.Fatal(err)
 	}
-	keys, err = store.GetObjectsNeedingMetadata(ctx, 10)
+	keys, err = store.GetObjectsNeedingMetadata(ctx, DefaultTailnetID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,8 +647,8 @@ func TestGetBandwidth_Bucketing(t *testing.T) {
 	base = (base / 60) * 60
 	for i := int64(0); i < 3; i++ {
 		_, err := store.db.ExecContext(ctx,
-			"INSERT INTO bandwidth (bucket, tx_bytes, rx_bytes) VALUES (?, ?, ?)",
-			base+i*60, 100, 50,
+			"INSERT INTO bandwidth (tailnet_id, bucket, tx_bytes, rx_bytes) VALUES (?, ?, ?, ?)",
+			DefaultTailnetID, base+i*60, 100, 50,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -652,7 +659,7 @@ func TestGetBandwidth_Bucketing(t *testing.T) {
 	end := time.Unix(base+3*60, 0)
 
 	// Small range (≤2h) → should return 3 individual 1-min buckets
-	buckets, err := store.GetBandwidth(ctx, start, end)
+	buckets, err := store.GetBandwidth(ctx, DefaultTailnetID, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
