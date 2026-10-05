@@ -168,7 +168,7 @@ func TestPollerS3OnlyStartIngestsCompressedObjectAndStops(t *testing.T) {
 	defer deadline.Stop()
 	defer ticker.Stop()
 	for {
-		seen, err := db.store.IsObjectIngested(ctx, key)
+		seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +182,7 @@ func TestPollerS3OnlyStartIngestsCompressedObjectAndStops(t *testing.T) {
 		}
 	}
 
-	pairs, err := db.store.GetNodePairAggregates(ctx, loggedAt.Add(-time.Minute), loggedAt.Add(time.Minute))
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, loggedAt.Add(-time.Minute), loggedAt.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestPollChunkedPropagatesFailureAfterCommittedProgress(t *testing.T) {
 		t.Fatalf("pollChunked error = %v, want second chunk failure", err)
 	}
 
-	state, err := store.GetPollState(context.Background())
+	state, err := store.GetPollState(context.Background(), database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}

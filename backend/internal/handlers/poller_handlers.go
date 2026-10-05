@@ -24,7 +24,7 @@ func (h *Handlers) GetPollerStatus(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), ShortQueryTimeout)
 		defer cancel()
 
-		dbStats, err := h.store.GetStats(ctx)
+		dbStats, err := h.store.GetStats(ctx, h.tailnetID())
 		if err != nil {
 			if writeContextError(c, err) {
 				return

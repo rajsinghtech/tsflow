@@ -170,48 +170,49 @@ type FlowLog struct {
 	RxPkts      int64     `json:"rxPkts"`
 }
 
-// Store defines the interface for flow log storage
+// Store defines the interface for flow log storage.
+// Data methods take a tailnet id and never read or write another tailnet's rows.
 type Store interface {
 	Init(ctx context.Context) error
 	Close() error
 
 	// Pre-aggregated data operations
-	UpsertNodePairAggregates(ctx context.Context, aggregates []NodePairAggregate) error
-	GetNodePairAggregates(ctx context.Context, start, end time.Time) ([]NodePairAggregate, error)
+	UpsertNodePairAggregates(ctx context.Context, tailnetID string, aggregates []NodePairAggregate) error
+	GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error)
 
 	// Bandwidth operations
-	UpsertBandwidth(ctx context.Context, buckets []BandwidthBucket) error
-	UpsertNodeBandwidth(ctx context.Context, buckets []NodeBandwidth) error
-	GetBandwidth(ctx context.Context, start, end time.Time) ([]BandwidthBucket, error)
-	GetBandwidthByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
-	GetNodeBandwidth(ctx context.Context, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
+	UpsertBandwidth(ctx context.Context, tailnetID string, buckets []BandwidthBucket) error
+	UpsertNodeBandwidth(ctx context.Context, tailnetID string, buckets []NodeBandwidth) error
+	GetBandwidth(ctx context.Context, tailnetID string, start, end time.Time) ([]BandwidthBucket, error)
+	GetBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
+	GetNodeBandwidth(ctx context.Context, tailnetID string, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
 
 	// Traffic stats operations
-	UpsertTrafficStats(ctx context.Context, stats []TrafficStats) error
-	GetTrafficStats(ctx context.Context, start, end time.Time) ([]TrafficStats, error)
-	GetTrafficStatsFromNodePairs(ctx context.Context, start, end time.Time) ([]TrafficStats, error)
-	GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string) ([]TrafficStats, error)
-	GetTopTalkers(ctx context.Context, start, end time.Time, limit int) ([]TopTalker, error)
-	GetTopTalkersByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
-	GetTopPairs(ctx context.Context, start, end time.Time, limit int) ([]TopPair, error)
-	GetTopPairsByTrafficTypes(ctx context.Context, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
-	GetNodeStats(ctx context.Context, nodeID string, start, end time.Time) (*NodeDetailStats, error)
+	UpsertTrafficStats(ctx context.Context, tailnetID string, stats []TrafficStats) error
+	GetTrafficStats(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
+	GetTrafficStatsFromNodePairs(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
+	GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]TrafficStats, error)
+	GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error)
+	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
+	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
+	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
+	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 
 	// Atomic poll commit
-	CommitPollResults(ctx context.Context, results PollResults) error
-	CommitObjectIngest(ctx context.Context, result ObjectIngestResult) error
-	IsObjectIngested(ctx context.Context, key string) (bool, error)
-	GetObjectsNeedingMetadata(ctx context.Context, limit int) ([]string, error)
-	MarkObjectMetadataHydrated(ctx context.Context, key string, nodeIDs []string) error
-	UpsertNodeMetadata(ctx context.Context, nodes []NodeMetadata) error
-	GetNodeMetadata(ctx context.Context) ([]NodeMetadata, error)
+	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error
+	CommitObjectIngest(ctx context.Context, tailnetID string, result ObjectIngestResult) error
+	IsObjectIngested(ctx context.Context, tailnetID string, key string) (bool, error)
+	GetObjectsNeedingMetadata(ctx context.Context, tailnetID string, limit int) ([]string, error)
+	MarkObjectMetadataHydrated(ctx context.Context, tailnetID string, key string, nodeIDs []string) error
+	UpsertNodeMetadata(ctx context.Context, tailnetID string, nodes []NodeMetadata) error
+	GetNodeMetadata(ctx context.Context, tailnetID string) ([]NodeMetadata, error)
 
 	// State operations
-	GetPollState(ctx context.Context) (*PollState, error)
-	UpdatePollState(ctx context.Context, lastPollEnd time.Time) error
-	GetDataRange(ctx context.Context) (*DataRange, error)
+	GetPollState(ctx context.Context, tailnetID string) (*PollState, error)
+	UpdatePollState(ctx context.Context, tailnetID string, lastPollEnd time.Time) error
+	GetDataRange(ctx context.Context, tailnetID string) (*DataRange, error)
 
 	// Maintenance
-	Cleanup(ctx context.Context, retention time.Duration) (int64, error)
-	GetStats(ctx context.Context) (map[string]any, error)
+	Cleanup(ctx context.Context, tailnetID string, retention time.Duration) (int64, error)
+	GetStats(ctx context.Context, tailnetID string) (map[string]any, error)
 }

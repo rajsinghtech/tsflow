@@ -298,7 +298,7 @@ func TestObjectStorePollsRealGzipAndZstdBodies(t *testing.T) {
 	}
 
 	for _, object := range objects {
-		seen, err := db.store.IsObjectIngested(ctx, object.key)
+		seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, object.key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,7 +306,7 @@ func TestObjectStorePollsRealGzipAndZstdBodies(t *testing.T) {
 			t.Fatalf("expected compressed object %s to be ingested", object.key)
 		}
 	}
-	pairs, err := db.store.GetNodePairAggregates(ctx, base.Add(-time.Minute), base.Add(time.Minute))
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, base.Add(-time.Minute), base.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestObjectStorePollPaginatesAndUsesHalfOpenEnd(t *testing.T) {
 	}
 
 	for _, object := range objects[:2] {
-		seen, err := db.store.IsObjectIngested(ctx, object.key)
+		seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, object.key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,14 +340,14 @@ func TestObjectStorePollPaginatesAndUsesHalfOpenEnd(t *testing.T) {
 			t.Fatalf("expected in-range object %s to be ingested", object.key)
 		}
 	}
-	seen, err := db.store.IsObjectIngested(ctx, objects[2].key)
+	seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, objects[2].key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if seen {
 		t.Fatalf("object at exclusive end %s was ingested", objects[2].key)
 	}
-	pairs, err := db.store.GetNodePairAggregates(ctx, base, end)
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, base, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,14 +371,14 @@ func TestObjectStoreContinuesAfterMalformedCompressedObject(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), badKey) {
 		t.Fatalf("malformed compression error = %v, want error naming %s", err, badKey)
 	}
-	seen, err := db.store.IsObjectIngested(ctx, goodKey)
+	seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, goodKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
 		t.Fatalf("expected valid compressed object %s to be ingested", goodKey)
 	}
-	pairs, err := db.store.GetNodePairAggregates(ctx, base, base.Add(time.Hour))
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, base, base.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 		t.Fatal(err)
 	}
 	for _, key := range []string{objects[1].key, objects[2].key} {
-		seen, err := store.IsObjectIngested(ctx, key)
+		seen, err := store.IsObjectIngested(ctx, database.DefaultTailnetID, key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -413,7 +413,7 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 			t.Fatalf("expected %s to be ingested", key)
 		}
 	}
-	seen, err := store.IsObjectIngested(ctx, objects[0].key)
+	seen, err := store.IsObjectIngested(ctx, database.DefaultTailnetID, objects[0].key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,14 +421,14 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 		t.Fatalf("expected cap to defer %s", objects[0].key)
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, start, end)
+	pairs, err := store.GetNodePairAggregates(ctx, database.DefaultTailnetID, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pairs) != 1 || pairs[0].TxBytes != 30 || pairs[0].FlowCount != 2 {
 		t.Fatalf("first capped poll pairs = %+v, want 30 bytes and two flows", pairs)
 	}
-	state, err := store.GetPollState(ctx)
+	state, err := store.GetPollState(ctx, database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,14 +440,14 @@ func TestObjectStorePollCapsObjectsAndUsesDeterministicEqualTimestampOrder(t *te
 	if err := poller.pollObjectStore(ctx, state.LastPollEnd, end); err != nil {
 		t.Fatal(err)
 	}
-	seen, err = store.IsObjectIngested(ctx, objects[0].key)
+	seen, err = store.IsObjectIngested(ctx, database.DefaultTailnetID, objects[0].key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
 		t.Fatalf("expected deferred object %s to be ingested on repoll", objects[0].key)
 	}
-	pairs, err = store.GetNodePairAggregates(ctx, start, end)
+	pairs, err = store.GetNodePairAggregates(ctx, database.DefaultTailnetID, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,21 +504,21 @@ func TestObjectStoreRepollAndRestartAreIdempotentAndBackfillMetadata(t *testing.
 		t.Fatal(err)
 	}
 
-	pairs, err := store.GetNodePairAggregates(ctx, start, end)
+	pairs, err := store.GetNodePairAggregates(ctx, database.DefaultTailnetID, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pairs) != 1 || pairs[0].TxBytes != 25 || pairs[0].FlowCount != 1 {
 		t.Fatalf("repoll double-counted object: %+v", pairs)
 	}
-	metadata, err := store.GetNodeMetadata(ctx)
+	metadata, err := store.GetNodeMetadata(ctx, database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(metadata) != 2 {
 		t.Fatalf("metadata rows = %+v, want source and destination metadata", metadata)
 	}
-	state, err := store.GetPollState(ctx)
+	state, err := store.GetPollState(ctx, database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestObjectStoreRepollAndRestartAreIdempotentAndBackfillMetadata(t *testing.
 	if err := restarted.pollObjectStore(ctx, state.LastPollEnd, end); err != nil {
 		t.Fatal(err)
 	}
-	pairs, err = store.GetNodePairAggregates(ctx, start, end)
+	pairs, err = store.GetNodePairAggregates(ctx, database.DefaultTailnetID, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ func TestObjectStoreRepairsPartiallyMissingMetadataOutsideLookback(t *testing.T)
 	if err := poller.pollObjectStore(ctx, end, end.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := store.GetNodeMetadata(ctx)
+	metadata, err := store.GetNodeMetadata(ctx, database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestObjectStoreContinuesWhenHistoricalMetadataObjectIsMalformed(t *testing.
 
 	// Seed the malformed object as an already-ingested row needing metadata
 	// repair. It must not block ingestion of the newer valid object.
-	if err := db.store.CommitObjectIngest(ctx, database.ObjectIngestResult{
+	if err := db.store.CommitObjectIngest(ctx, database.DefaultTailnetID, database.ObjectIngestResult{
 		Key:          oldKey,
 		LastModified: base,
 		PollEnd:      base.Add(30 * time.Minute),
@@ -618,14 +618,14 @@ func TestObjectStoreContinuesWhenHistoricalMetadataObjectIsMalformed(t *testing.
 	if err := poller.pollObjectStore(ctx, base, base.Add(time.Hour)); err != nil {
 		t.Fatalf("metadata repair should not block newer ingestion: %v", err)
 	}
-	seen, err := db.store.IsObjectIngested(ctx, newKey)
+	seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, newKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
 		t.Fatalf("expected valid object %s to be ingested", newKey)
 	}
-	pairs, err := db.store.GetNodePairAggregates(ctx, base, base.Add(time.Hour))
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, base, base.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,21 +650,21 @@ func TestObjectStoreProcessesLaterObjectsWhenEarlierCandidateIsMalformed(t *test
 	if err == nil || !strings.Contains(err.Error(), oldKey) {
 		t.Fatalf("malformed candidate error = %v, want error naming %s", err, oldKey)
 	}
-	seen, err := db.store.IsObjectIngested(ctx, newKey)
+	seen, err := db.store.IsObjectIngested(ctx, database.DefaultTailnetID, newKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
 		t.Fatalf("expected later valid object %s to be ingested", newKey)
 	}
-	state, err := db.store.GetPollState(ctx)
+	state, err := db.store.GetPollState(ctx, database.DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !state.LastPollEnd.Equal(base.Add(30 * time.Minute)) {
 		t.Fatalf("poll cursor = %v, want earliest unreadable object at %v", state.LastPollEnd, base.Add(30*time.Minute))
 	}
-	pairs, err := db.store.GetNodePairAggregates(ctx, base, base.Add(time.Hour))
+	pairs, err := db.store.GetNodePairAggregates(ctx, database.DefaultTailnetID, base, base.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
