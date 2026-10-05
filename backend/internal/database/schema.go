@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,9 +29,9 @@ type SQLiteStore struct {
 	// Tests use it to prove a covered minute is not part of that read.
 	derivedStatsHook func(ranges [][2]int64)
 
-	// protocolBackfillScans counts repair passes over node_pairs. A completed
-	// backfill does not increment it. protocolBackfillTailnets is the order
-	// those passes ran.
+	// protocolBackfillScans counts passes that read node_pairs past a tailnet's
+	// high-water bucket. A startup with nothing newer does not increment it.
+	// protocolBackfillTailnets is the order those passes ran.
 	protocolBackfillScans    int
 	protocolBackfillTailnets []string
 }
@@ -208,33 +209,67 @@ func (s *SQLiteStore) ensureLegacyColumns(ctx context.Context) error {
 	return nil
 }
 
-// backfillPassTailnet is not a tailnet id. checkTailnetID rejects empty, so it
-// cannot collide with a real tailnet. A row with this id means the protocol
-// byte pass has finished for every tailnet that existed at the time.
-const backfillPassTailnet = ""
+// protocolBackfillNewerMaxSQL is the startup probe for one tailnet. The primary
+// key starts with (tailnet_id, bucket), so this is a seek to the newest bucket
+// after the high-water mark. An empty range does not read older rows.
+const protocolBackfillNewerMaxSQL = `
+	SELECT MAX(bucket) FROM node_pairs
+	WHERE tailnet_id = ? AND bucket > ?
+`
 
-// ensureBackfillState creates the completion table. It is not part of the
+// protocolBackfillNewerRowsSQL reads only the rows past the high-water mark
+// that still need protocol byte totals. The same primary key bounds the read.
+const protocolBackfillNewerRowsSQL = `
+	SELECT bucket, src_node_id, dst_node_id, traffic_type, protocols, tx_bytes + rx_bytes
+	FROM node_pairs
+	WHERE tailnet_id = ? AND bucket > ?
+	  AND (protocol_bytes IS NULL OR protocol_bytes = '' OR protocol_bytes = '{}'
+	       OR NOT json_valid(protocol_bytes))
+`
+
+// ensureBackfillState creates the high-water table. It is not part of the
 // tailnet rewrite: there is no pre-tailnet copy of it, and a failed tailnet
-// migration should not have to rebuild it.
+// migration should not have to rebuild it. A table created by an earlier
+// build of this change, which only stored a completion time, gains the bucket
+// column. Those rows start at -1, so the next start checks every bucket once
+// and then records the real high-water mark.
 func (s *SQLiteStore) ensureBackfillState(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS backfill_state (
 			tailnet_id TEXT NOT NULL PRIMARY KEY,
+			protocol_bytes_bucket INTEGER NOT NULL DEFAULT -1,
 			completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		) WITHOUT ROWID
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create backfill_state: %w", err)
 	}
+	hasBucket, err := s.columnExists(ctx, "backfill_state", "protocol_bytes_bucket")
+	if err != nil {
+		return fmt.Errorf("failed to inspect backfill_state: %w", err)
+	}
+	if !hasBucket {
+		if _, err := s.db.ExecContext(ctx, `
+			ALTER TABLE backfill_state
+			ADD COLUMN protocol_bytes_bucket INTEGER NOT NULL DEFAULT -1
+		`); err != nil {
+			return fmt.Errorf("failed to add backfill_state.protocol_bytes_bucket: %w", err)
+		}
+	}
+	// The first cut of this table used an empty tailnet id as a pass-wide
+	// "done" flag. High-water marks are per tailnet, so that row is not a mark.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM backfill_state WHERE tailnet_id = ''`); err != nil {
+		return fmt.Errorf("failed to drop the protocol backfill sentinel: %w", err)
+	}
 	return nil
 }
 
 // backfillProtocolBytes fills protocol_bytes on rows written before that
-// column existed. The completion row is per tailnet. Once every tailnet that
-// had rows has been recorded, later startups do not read node_pairs. A gap
-// left by a crash is still filled, because a tailnet is recorded only after
-// its updates commit. New writes already store protocol totals, so a finished
-// pass does not need to watch for later rows.
+// column carried totals. Each tailnet stores the newest bucket the pass has
+// covered. Later startups read only rows past that bucket, which is how a
+// downgrade that writes empty protocol bytes gets repaired without reading
+// the rows already checked. The mark moves forward in the same transaction
+// as the updates, so a crash resumes from the previous bucket.
 func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
 	exists, err := s.tableExists(ctx, "node_pairs")
 	if err != nil || !exists {
@@ -244,24 +279,6 @@ func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
 	if err != nil || !hasProtocolBytes {
 		return err
 	}
-	done, err := s.protocolBackfillDone(ctx, backfillPassTailnet)
-	if err != nil || done {
-		return err
-	}
-
-	hasRows, err := s.nodePairsHasRows(ctx)
-	if err != nil {
-		return err
-	}
-	if !hasRows {
-		// Fresh database. Record default as well as the pass so the tailnet
-		// this process serves is marked without a json_valid scan.
-		if err := s.markProtocolBackfill(ctx, s.db, DefaultTailnetID); err != nil {
-			return err
-		}
-		return s.markProtocolBackfill(ctx, s.db, backfillPassTailnet)
-	}
-
 	hasTailnet, err := s.columnExists(ctx, "node_pairs", "tailnet_id")
 	if err != nil {
 		return err
@@ -269,41 +286,65 @@ func (s *SQLiteStore) backfillProtocolBytes(ctx context.Context) error {
 	if !hasTailnet {
 		return fmt.Errorf("node_pairs is missing tailnet_id")
 	}
-	tailnets, err := s.distinctNodePairTailnets(ctx)
+
+	tailnets, err := s.protocolBackfillTailnetIDs(ctx)
 	if err != nil {
 		return err
 	}
 	if len(tailnets) == 0 {
-		return fmt.Errorf("node_pairs has rows but no tailnet id")
+		// Fresh database. Record default so the tailnet this process serves
+		// has a mark, without a json_valid read.
+		return s.markProtocolBackfill(ctx, s.db, DefaultTailnetID, -1)
 	}
 	for _, tailnetID := range tailnets {
-		done, err := s.protocolBackfillDone(ctx, tailnetID)
-		if err != nil {
-			return err
-		}
-		if done {
-			continue
-		}
 		if err := s.backfillProtocolBytesTailnet(ctx, tailnetID); err != nil {
 			return err
 		}
 	}
-	return s.markProtocolBackfill(ctx, s.db, backfillPassTailnet)
+	return nil
 }
 
 func (s *SQLiteStore) backfillProtocolBytesTailnet(ctx context.Context, tailnetID string) error {
-	s.protocolBackfillScans++
-	s.protocolBackfillTailnets = append(s.protocolBackfillTailnets, tailnetID)
+	mark, hasMark, err := s.protocolBackfillMark(ctx, tailnetID)
+	if err != nil {
+		return err
+	}
+
+	var maxBucket sql.NullInt64
+	if hasMark {
+		err = s.db.QueryRowContext(ctx, protocolBackfillNewerMaxSQL, tailnetID, mark).Scan(&maxBucket)
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT MAX(bucket) FROM node_pairs WHERE tailnet_id = ?
+		`, tailnetID).Scan(&maxBucket)
+	}
+	if err != nil {
+		return err
+	}
+	if !maxBucket.Valid {
+		if !hasMark {
+			return s.markProtocolBackfill(ctx, s.db, tailnetID, -1)
+		}
+		return nil
+	}
 
 	// Key updates by the primary key rather than rowid. These tables are stored
 	// WITHOUT ROWID, and two tailnets can share the same pair key.
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT bucket, src_node_id, dst_node_id, traffic_type, protocols, tx_bytes + rx_bytes
-		FROM node_pairs
-		WHERE tailnet_id = ?
-		  AND (protocol_bytes IS NULL OR protocol_bytes = '' OR protocol_bytes = '{}'
-		       OR NOT json_valid(protocol_bytes))
-	`, tailnetID)
+	s.protocolBackfillScans++
+	s.protocolBackfillTailnets = append(s.protocolBackfillTailnets, tailnetID)
+
+	var rows *sql.Rows
+	if hasMark {
+		rows, err = s.db.QueryContext(ctx, protocolBackfillNewerRowsSQL, tailnetID, mark)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT bucket, src_node_id, dst_node_id, traffic_type, protocols, tx_bytes + rx_bytes
+			FROM node_pairs
+			WHERE tailnet_id = ?
+			  AND (protocol_bytes IS NULL OR protocol_bytes = '' OR protocol_bytes = '{}'
+			       OR NOT json_valid(protocol_bytes))
+		`, tailnetID)
+	}
 	if err != nil {
 		return err
 	}
@@ -348,7 +389,7 @@ func (s *SQLiteStore) backfillProtocolBytesTailnet(ctx context.Context, tailnetI
 			return err
 		}
 	}
-	if err := s.markProtocolBackfill(ctx, tx, tailnetID); err != nil {
+	if err := s.markProtocolBackfill(ctx, tx, tailnetID, maxBucket.Int64); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -360,46 +401,93 @@ func (s *SQLiteStore) backfillProtocolBytesTailnet(ctx context.Context, tailnetI
 	return nil
 }
 
-func (s *SQLiteStore) protocolBackfillDone(ctx context.Context, tailnetID string) (bool, error) {
-	var n int
+func (s *SQLiteStore) protocolBackfillMark(ctx context.Context, tailnetID string) (int64, bool, error) {
+	var bucket int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM backfill_state WHERE tailnet_id = ?)
-	`, tailnetID).Scan(&n)
-	return n != 0, err
+		SELECT protocol_bytes_bucket FROM backfill_state WHERE tailnet_id = ?
+	`, tailnetID).Scan(&bucket)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return bucket, true, nil
 }
 
-func (s *SQLiteStore) markProtocolBackfill(ctx context.Context, exec sqlExecer, tailnetID string) error {
+func (s *SQLiteStore) markProtocolBackfill(ctx context.Context, exec sqlExecer, tailnetID string, bucket int64) error {
 	_, err := exec.ExecContext(ctx, `
-		INSERT OR IGNORE INTO backfill_state (tailnet_id, completed_at)
-		VALUES (?, CURRENT_TIMESTAMP)
-	`, tailnetID)
+		INSERT INTO backfill_state (tailnet_id, protocol_bytes_bucket, completed_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(tailnet_id) DO UPDATE SET
+			protocol_bytes_bucket = excluded.protocol_bytes_bucket,
+			completed_at = CURRENT_TIMESTAMP
+		WHERE excluded.protocol_bytes_bucket > backfill_state.protocol_bytes_bucket
+	`, tailnetID, bucket)
 	if err != nil {
 		return fmt.Errorf("failed to record protocol byte backfill for %q: %w", tailnetID, err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) nodePairsHasRows(ctx context.Context) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM node_pairs)`).Scan(&n)
-	return n != 0, err
-}
-
-func (s *SQLiteStore) distinctNodePairTailnets(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT tailnet_id FROM node_pairs ORDER BY tailnet_id`)
+// protocolBackfillTailnetIDs returns every tailnet that already has a high-water
+// mark, plus any tailnet present in node_pairs. The node_pairs walk seeks the
+// next tailnet id on the primary key instead of reading every pair.
+func (s *SQLiteStore) protocolBackfillTailnetIDs(ctx context.Context) ([]string, error) {
+	seen := map[string]struct{}{}
+	var tailnets []string
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tailnet_id FROM backfill_state WHERE tailnet_id != '' ORDER BY tailnet_id
+	`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var tailnets []string
 	for rows.Next() {
 		var tailnetID string
 		if err := rows.Scan(&tailnetID); err != nil {
+			rows.Close()
 			return nil, err
 		}
+		if _, ok := seen[tailnetID]; ok {
+			continue
+		}
+		seen[tailnetID] = struct{}{}
 		tailnets = append(tailnets, tailnetID)
 	}
-	return tailnets, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	var after string
+	for {
+		var next string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT tailnet_id FROM node_pairs
+			WHERE tailnet_id > ?
+			ORDER BY tailnet_id
+			LIMIT 1
+		`, after).Scan(&next)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if next <= after {
+			return nil, fmt.Errorf("protocol backfill tailnet walk did not advance past %q", after)
+		}
+		if _, ok := seen[next]; !ok {
+			seen[next] = struct{}{}
+			tailnets = append(tailnets, next)
+		}
+		after = next
+	}
+	sort.Strings(tailnets)
+	return tailnets, nil
 }
 
 func (s *SQLiteStore) tableExists(ctx context.Context, table string) (bool, error) {
