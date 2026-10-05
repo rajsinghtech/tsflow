@@ -1,5 +1,5 @@
 import type { Device, NetworkLog, NetworkNode, NetworkLink, TrafficType } from '#lib/types';
-import { extractIP, extractPort, categorizeIP, ipMatches } from './ip-utils';
+import { extractIP, extractPort, categorizeIP, ipMatches, normalizeIPv6 } from './ip-utils';
 import { getProtocolName } from './protocol';
 
 interface VIPServiceInfo {
@@ -46,16 +46,59 @@ function displayAddress(value: string): string {
 	return isIPAddress(value) ? value : '';
 }
 
+// DeviceLookup resolves a device id or address. byIP must agree with ipMatches,
+// and the first device in the input list wins when ids or addresses collide.
+export interface DeviceLookup {
+	byId(id: string): Device | undefined;
+	byIP(ip: string): Device | undefined;
+}
+
+function addressKey(addr: string): string {
+	if (addr.includes(':')) return normalizeIPv6(addr);
+	return addr;
+}
+
+export function linearDeviceLookup(devices: Device[]): DeviceLookup {
+	return {
+		byId(id) {
+			return devices.find((device) => device.id === id);
+		},
+		byIP(ip) {
+			return devices.find((device) => device.addresses.some((addr) => ipMatches(ip, addr)));
+		}
+	};
+}
+
+export function indexedDeviceLookup(devices: Device[]): DeviceLookup {
+	const byId = new Map<string, Device>();
+	const byIP = new Map<string, Device>();
+	for (const device of devices) {
+		if (!byId.has(device.id)) byId.set(device.id, device);
+		for (const addr of device.addresses) {
+			const key = addressKey(addr);
+			if (!byIP.has(key)) byIP.set(key, device);
+		}
+	}
+	return {
+		byId(id) {
+			return byId.get(id);
+		},
+		byIP(ip) {
+			return byIP.get(addressKey(ip));
+		}
+	};
+}
+
 // Get device name from IP or device ID
 function getDeviceName(
 	ipOrId: string,
-	devices: Device[] = [],
+	devices: DeviceLookup,
 	services: Record<string, VIPServiceInfo> = {},
 	records: Record<string, StaticRecordInfo> = {}
 ): string {
 	// If it's a device ID, look up directly
 	if (!isIPAddress(ipOrId)) {
-		const device = devices.find((d) => d.id === ipOrId);
+		const device = devices.byId(ipOrId);
 		if (device) {
 			const shortName = device.name.split('.')[0];
 			const name = shortName || device.name;
@@ -68,7 +111,7 @@ function getDeviceName(
 	const ip = extractIP(ipOrId);
 
 	// Check regular devices by IP
-	const device = devices.find((d) => d.addresses.some((addr) => ipMatches(ip, addr)));
+	const device = devices.byIP(ip);
 	if (device) {
 		const shortName = device.name.split('.')[0];
 		return shortName || device.name;
@@ -93,14 +136,14 @@ function getDeviceName(
 }
 
 // Get device data from IP or device ID
-function getDeviceData(ipOrId: string, devices: Device[] = []): Device | null {
+function getDeviceData(ipOrId: string, devices: DeviceLookup): Device | null {
 	// If it's a device ID, look up directly
 	if (!isIPAddress(ipOrId)) {
-		return devices.find((d) => d.id === ipOrId) || null;
+		return devices.byId(ipOrId) || null;
 	}
 	// Otherwise look up by IP
 	const ip = extractIP(ipOrId);
-	return devices.find((d) => d.addresses.some((addr) => ipMatches(ip, addr))) || null;
+	return devices.byIP(ip) || null;
 }
 
 // Get service data from IP
@@ -118,13 +161,13 @@ function getServiceData(
 }
 
 // Get the IP from either IP:port format or device ID
-function resolveToIP(ipOrId: string, devices: Device[] = []): string {
+function resolveToIP(ipOrId: string, devices: DeviceLookup): string {
 	// If it's already an IP, extract it
 	if (isIPAddress(ipOrId)) {
 		return extractIP(ipOrId);
 	}
 	// If it's a device ID, get the first IP from the device
-	const device = devices.find((d) => d.id === ipOrId);
+	const device = devices.byId(ipOrId);
 	if (device && device.addresses.length > 0) {
 		return device.addresses[0];
 	}
@@ -137,16 +180,16 @@ function resolveToIP(ipOrId: string, devices: Device[] = []): string {
 // so they must never be used as node IDs.
 function resolveToNodeID(
 	ipOrId: string,
-	devices: Device[] = [],
+	devices: DeviceLookup,
 	services: Record<string, VIPServiceInfo> = {},
 	records: Record<string, StaticRecordInfo> = {}
 ): string {
 	if (!isIPAddress(ipOrId)) {
-		return devices.find((device) => device.id === ipOrId)?.id || ipOrId;
+		return devices.byId(ipOrId)?.id || ipOrId;
 	}
 
 	const ip = extractIP(ipOrId);
-	const device = devices.find((candidate) => candidate.addresses.some((addr) => ipMatches(ip, addr)));
+	const device = devices.byIP(ip);
 	if (device) return device.id;
 
 	for (const [serviceName, serviceInfo] of Object.entries(services)) {
@@ -208,6 +251,15 @@ function addDirectionalTraffic(link: NetworkLink, traffic: NetworkLog['virtualTr
 export function processNetworkLogs(
 	logs: NetworkLog[],
 	devices: Device[],
+	services: Record<string, VIPServiceInfo> = {},
+	records: Record<string, StaticRecordInfo> = {}
+): ProcessedNetwork {
+	return processNetworkLogsWithLookup(logs, indexedDeviceLookup(devices), services, records);
+}
+
+export function processNetworkLogsWithLookup(
+	logs: NetworkLog[],
+	devices: DeviceLookup,
 	services: Record<string, VIPServiceInfo> = {},
 	records: Record<string, StaticRecordInfo> = {}
 ): ProcessedNetwork {

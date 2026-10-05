@@ -2,6 +2,8 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -149,5 +151,135 @@ func TestRollingCacheCountsDelimiterContainingPairsSeparately(t *testing.T) {
 	stats := cache.GetTrafficStats(now, now.Add(time.Minute))
 	if len(stats) != 1 || stats[0].UniquePairs != 2 {
 		t.Fatalf("traffic stats = %+v, want two delimiter-containing pairs", stats)
+	}
+}
+
+func TestRollingCacheIndexedMatchesLinear(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	bucket := now.Unix()
+	older := now.Add(-2 * time.Hour).Unix()
+
+	batches := []cacheBatch{
+		{
+			pairs: []database.NodePairAggregate{
+				pair(bucket, "a", "b", "virtual", 100, 0, true),
+				pair(bucket, "a", "b", "subnet", 5, 0, true),
+				pair(bucket, "a|b", "c", "virtual", 7, 1, true),
+				pair(bucket, "a", "b|c", "virtual", 8, 0, true),
+				pair(bucket, "self", "self", "virtual", 3, 0, true),
+				pair(bucket, "z", "a", "virtual", 9, 4, false),
+				pair(bucket, "a", "b", "virtual", 20, 6, true),
+			},
+			bandwidth: []database.BandwidthBucket{{Time: now, TxBytes: 10, RxBytes: 1}},
+			nodes: []database.NodeBandwidth{
+				{Bucket: bucket, NodeID: "a", TxBytes: 10, RxBytes: 1},
+				{Bucket: bucket, NodeID: "a", TxBytes: 4, RxBytes: 2},
+			},
+			stats: []database.TrafficStats{{Bucket: bucket, VirtualBytes: 10, UniquePairs: 1, TopPorts: `[{"port":443,"proto":6,"bytes":10}]`}},
+		},
+		{
+			pairs: []database.NodePairAggregate{
+				pair(bucket, "z", "a", "virtual", 1, 0, true),
+				pair(bucket, "m", "n", "physical", 50, 0, true),
+				pair(bucket, "a", "b", "virtual", 15, 0, false),
+				pair(older, "old", "gone", "virtual", 1, 0, true),
+			},
+			bandwidth: []database.BandwidthBucket{{Time: now, TxBytes: 3, RxBytes: 0}},
+			nodes:     []database.NodeBandwidth{{Bucket: bucket, NodeID: "m", TxBytes: 50}},
+			stats:     []database.TrafficStats{{Bucket: bucket, PhysicalBytes: 50, UniquePairs: 1, TopPorts: `[{"port":22,"proto":6,"bytes":50}]`}},
+		},
+	}
+
+	indexed := NewRollingWindowCache(time.Hour)
+	linear := NewRollingWindowCache(time.Hour)
+	for i, batch := range batches {
+		indexed.Update(batch.pairs, batch.bandwidth, batch.nodes, batch.stats)
+		linear.updateLinear(batch.pairs, batch.bandwidth, batch.nodes, batch.stats)
+		assertCachesEqual(t, fmt.Sprintf("batch %d", i), indexed, linear, now.Add(-time.Minute), now.Add(time.Minute))
+	}
+
+	// A pruned bucket must not leave an index entry that the next update merges into.
+	again := []database.NodePairAggregate{pair(older, "old", "gone", "virtual", 4, 0, true)}
+	indexed.Update(again, nil, nil, nil)
+	linear.updateLinear(again, nil, nil, nil)
+	assertCachesEqual(t, "pruned", indexed, linear, now.Add(-time.Minute), now.Add(time.Minute))
+	if _, ok := indexed.nodePairIndex[older]; ok {
+		t.Fatal("pruned bucket kept an index entry")
+	}
+	if got := indexed.GetNodePairs(time.Unix(older, 0), time.Unix(older+60, 0)); len(got) != 0 {
+		t.Fatalf("pruned pairs still visible: %+v", got)
+	}
+}
+
+func TestRollingCacheIndexedPreservesPairOrder(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	bucket := now.Unix()
+	pairs := []database.NodePairAggregate{
+		pair(bucket, "c", "d", "virtual", 1, 0, true),
+		pair(bucket, "a", "b", "subnet", 1, 0, true),
+		pair(bucket, "a", "b", "virtual", 1, 0, true),
+		pair(bucket, "a", "b", "virtual", 2, 0, true),
+		pair(bucket, "b", "a", "virtual", 1, 0, true),
+	}
+	indexed := NewRollingWindowCache(time.Hour)
+	linear := NewRollingWindowCache(time.Hour)
+	indexed.Update(pairs, nil, nil, nil)
+	linear.updateLinear(pairs, nil, nil, nil)
+
+	if !reflect.DeepEqual(indexed.nodePairs[bucket], linear.nodePairs[bucket]) {
+		t.Fatalf("stored order differs\nindexed: %+v\nlinear:  %+v", indexed.nodePairs[bucket], linear.nodePairs[bucket])
+	}
+	if len(indexed.nodePairs[bucket]) != 4 {
+		t.Fatalf("pair count = %d, want 4 distinct keys", len(indexed.nodePairs[bucket]))
+	}
+	if indexed.nodePairs[bucket][2].TxBytes != 3 {
+		t.Fatalf("merged virtual a->b bytes = %d, want 3", indexed.nodePairs[bucket][2].TxBytes)
+	}
+}
+
+type cacheBatch struct {
+	pairs     []database.NodePairAggregate
+	bandwidth []database.BandwidthBucket
+	nodes     []database.NodeBandwidth
+	stats     []database.TrafficStats
+}
+
+func pair(bucket int64, src, dst, trafficType string, tx, rx int64, directional bool) database.NodePairAggregate {
+	proto := 6
+	if trafficType == "physical" {
+		proto = 17
+	}
+	row := database.NodePairAggregate{
+		Bucket: bucket, SrcNodeID: src, DstNodeID: dst, TrafficType: trafficType,
+		TxBytes: tx, RxBytes: rx, TxPkts: tx, RxPkts: rx, FlowCount: 1,
+		Protocols: fmt.Sprintf("[%d]", proto), ProtocolBytes: fmt.Sprintf(`{"%d":%d}`, proto, tx+rx),
+		Ports: fmt.Sprintf(`[{"port":443,"proto":%d,"bytes":%d}]`, proto, tx+rx),
+	}
+	if directional {
+		row.DirectionalPorts = true
+		row.TxProtocolBytes = fmt.Sprintf(`{"%d":%d}`, proto, tx)
+		row.RxProtocolBytes = fmt.Sprintf(`{"%d":%d}`, proto, rx)
+		row.TxPorts = fmt.Sprintf(`[{"port":443,"proto":%d,"bytes":%d}]`, proto, tx)
+		row.RxPorts = fmt.Sprintf(`[{"port":53,"proto":%d,"bytes":%d}]`, proto, rx)
+	}
+	return row
+}
+
+func assertCachesEqual(t *testing.T, label string, indexed, linear *RollingWindowCache, start, end time.Time) {
+	t.Helper()
+	if !reflect.DeepEqual(indexed.nodePairs, linear.nodePairs) {
+		t.Fatalf("%s stored pairs differ\nindexed: %#v\nlinear:  %#v", label, indexed.nodePairs, linear.nodePairs)
+	}
+	if !reflect.DeepEqual(indexed.GetNodePairs(start, end), linear.GetNodePairs(start, end)) {
+		t.Fatalf("%s GetNodePairs differ", label)
+	}
+	if !reflect.DeepEqual(indexed.GetBandwidth(start, end), linear.GetBandwidth(start, end)) {
+		t.Fatalf("%s bandwidth differ", label)
+	}
+	if !reflect.DeepEqual(indexed.GetNodeBandwidth(start, end, "a"), linear.GetNodeBandwidth(start, end, "a")) {
+		t.Fatalf("%s node bandwidth differ", label)
+	}
+	if !reflect.DeepEqual(indexed.GetTrafficStats(start, end), linear.GetTrafficStats(start, end)) {
+		t.Fatalf("%s traffic stats differ", label)
 	}
 }
