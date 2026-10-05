@@ -8,5 +8,5 @@
 		}
 	},
 	"include": ["src", "vite.config.ts"],
-	"exclude": ["src/service-worker", "src/lib/graph/graph-layout.worker.ts"]
+	"exclude": ["src/service-worker"]
 }
