@@ -1,16 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Loader2, AlertCircle, RefreshCw, X, Keyboard } from 'lucide-svelte';
-	import NetworkGraph from '$lib/components/graph/NetworkGraph.svelte';
-	import FilterPanel from '$lib/components/filters/FilterPanel.svelte';
-	import LogViewer from '$lib/components/logs/LogViewer.svelte';
-	import PortDetails from '$lib/components/logs/PortDetails.svelte';
-	import BandwidthChart from '$lib/components/charts/BandwidthChart.svelte';
-	import EdgePolicyInfo from '$lib/components/logs/EdgePolicyInfo.svelte';
-	import Header from '$lib/components/layout/Header.svelte';
-	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '$lib/stores/network-store';
-	import { uiStore } from '$lib/stores/ui-store';
-	import { dataSourceStore } from '$lib/stores/data-source-store';
+	import NetworkGraph from '#lib/components/graph/NetworkGraph.svelte';
+	import FilterPanel from '#lib/components/filters/FilterPanel.svelte';
+	import LogViewer from '#lib/components/logs/LogViewer.svelte';
+	import PortDetails from '#lib/components/logs/PortDetails.svelte';
+	import BandwidthChart from '#lib/components/charts/BandwidthChart.svelte';
+	import EdgePolicyInfo from '#lib/components/logs/EdgePolicyInfo.svelte';
+	import Header from '#lib/components/layout/Header.svelte';
+	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
+	import { uiStore } from '#lib/stores/ui-store';
+	import { dataSourceStore } from '#lib/stores/data-source-store';
 
 	let isBootstrapping = $state(true);
 

@@ -13,7 +13,7 @@ func TestAggregateQueriesUseHalfOpenRangesAndMergeMetadata(t *testing.T) {
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
 
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{
 			Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
 			TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`,
@@ -33,7 +33,7 @@ func TestAggregateQueriesUseHalfOpenRangesAndMergeMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	aggregates, err := store.GetNodePairAggregates(ctx, time.Unix(base, 0), time.Unix(base+120, 0))
+	aggregates, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+120, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestAggregateQueriesUseHalfOpenRangesAndMergeMetadata(t *testing.T) {
 		t.Fatalf("ports = %+v", ports)
 	}
 
-	boundary, err := store.GetNodePairAggregates(ctx, time.Unix(base+120, 0), time.Unix(base+180, 0))
+	boundary, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(base+120, 0), time.Unix(base+180, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,13 +70,13 @@ func TestGetDataRangeSingleBucketReturnsBucketEnd(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 1, Protocols: "[6]",
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	dataRange, err := store.GetDataRange(ctx)
+	dataRange, err := store.GetDataRange(ctx, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,18 +89,18 @@ func TestTrafficStatsUpsertMergesTopPorts(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertTrafficStats(ctx, []TrafficStats{
+	if err := store.UpsertTrafficStats(ctx, DefaultTailnetID, []TrafficStats{
 		{Bucket: base, TCPBytes: 100, TotalFlows: 1, TopPorts: `[{"port":443,"proto":6,"bytes":100}]`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertTrafficStats(ctx, []TrafficStats{
+	if err := store.UpsertTrafficStats(ctx, DefaultTailnetID, []TrafficStats{
 		{Bucket: base, UDPBytes: 300, TotalFlows: 2, TopPorts: `[{"port":53,"proto":17,"bytes":300}]`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStats(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStats(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,14 +120,14 @@ func TestDerivedTrafficStatsUnionPairsAcrossTrafficTypes(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, FlowCount: 2, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
 		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "subnet", TxBytes: 200, FlowCount: 3, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestDerivedTrafficStatsUnionPairsAcrossTrafficTypes(t *testing.T) {
 		t.Fatalf("stats = %+v", stats[0])
 	}
 
-	filtered, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"})
+	filtered, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +151,14 @@ func TestDerivedTrafficStatsDistinguishesDelimiterContainingPairs(t *testing.T) 
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a|b", DstNodeID: "c", TrafficType: "virtual", TxBytes: 100, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b|c", TrafficType: "virtual", TxBytes: 200, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +176,13 @@ func TestDerivedTrafficStatsFallsBackForMalformedProtocolBytes(t *testing.T) {
 	base := (time.Now().UTC().Unix() / 60) * 60
 	if _, err := store.db.ExecContext(ctx, `
 		INSERT INTO node_pairs
-			(bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, protocols, protocol_bytes)
-		VALUES (?, 'a', 'b', 'virtual', 100, '[6,17]', 'not-json')
-	`, base); err != nil {
+			(tailnet_id, bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, protocols, protocol_bytes)
+		VALUES (?, ?, 'a', 'b', 'virtual', 100, '[6,17]', 'not-json')
+	`, DefaultTailnetID, base); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,14 +198,14 @@ func TestDerivedTrafficStatsIncludesPhysicalProtocolBytes(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 125, Protocols: "[6]", ProtocolBytes: `{"6":125}`},
 		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 50, Protocols: "[17]", ProtocolBytes: `{"17":50}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,14 +218,14 @@ func TestDerivedTrafficStatsKeepsExitBytesSeparateFromVirtual(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
 		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "exit", TxBytes: 40, Protocols: "[17]", ProtocolBytes: `{"17":40}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStatsFromNodePairs(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStatsFromNodePairs(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestDerivedTrafficStatsKeepsExitBytesSeparateFromVirtual(t *testing.T) {
 		t.Fatalf("traffic stats = %+v, want virtual 100 and exit 40", stats[0])
 	}
 
-	filtered, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"exit"})
+	filtered, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), []string{"exit"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,14 +246,14 @@ func TestGetBandwidthByTrafficTypesUsesPairTotalOnce(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
 		TxBytes: 100, RxBytes: 40, Protocols: "[6]", ProtocolBytes: `{"6":140}`,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	buckets, err := store.GetBandwidthByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"})
+	buckets, err := store.GetBandwidthByTrafficTypes(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,19 +266,19 @@ func TestTrafficStatsRecomputesUniquePairsFromNodePairs(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`},
 		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "subnet", TxBytes: 200, Protocols: "[17]", ProtocolBytes: `{"17":200}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertTrafficStats(ctx, []TrafficStats{{
+	if err := store.UpsertTrafficStats(ctx, DefaultTailnetID, []TrafficStats{{
 		Bucket: base, TCPBytes: 100, TotalFlows: 2, UniquePairs: 1,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetTrafficStats(ctx, time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetTrafficStats(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,13 +293,13 @@ func TestGetNodeStatsPropagatesMalformedPortJSON(t *testing.T) {
 	base := (time.Now().UTC().Unix() / 60) * 60
 	if _, err := store.db.ExecContext(ctx, `
 		INSERT INTO node_pairs
-			(bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, ports)
-		VALUES (?, 'a', 'b', 'virtual', 100, 'not-json')
-	`, base); err != nil {
+			(tailnet_id, bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, ports)
+		VALUES (?, ?, 'a', 'b', 'virtual', 100, 'not-json')
+	`, DefaultTailnetID, base); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := store.GetNodeStats(ctx, "a", time.Unix(base, 0), time.Unix(base+60, 0))
+	_, err := store.GetNodeStats(ctx, DefaultTailnetID, "a", time.Unix(base, 0), time.Unix(base+60, 0))
 	if err == nil || !strings.Contains(err.Error(), "failed to decode node ports") {
 		t.Fatalf("GetNodeStats error = %v, want malformed port error", err)
 	}
@@ -309,19 +309,19 @@ func TestGetNodeStatsDoesNotDoubleCountSelfTraffic(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual",
 		TxBytes: 100, RxBytes: 50, FlowCount: 1, Protocols: "[6]", Ports: "[]",
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertNodeBandwidth(ctx, []NodeBandwidth{{
+	if err := store.UpsertNodeBandwidth(ctx, DefaultTailnetID, []NodeBandwidth{{
 		Bucket: base, NodeID: "a", TxBytes: 100, RxBytes: 50,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := store.GetNodeStats(ctx, "a", time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetNodeStats(ctx, DefaultTailnetID, "a", time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,14 +336,14 @@ func TestGetTopTalkersByTrafficTypesDoesNotDoubleCountSelfTraffic(t *testing.T) 
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual",
 		TxBytes: 100, RxBytes: 50, FlowCount: 1, Protocols: "[6]", Ports: "[]",
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	talkers, err := store.GetTopTalkersByTrafficTypes(ctx, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"}, 10)
+	talkers, err := store.GetTopTalkersByTrafficTypes(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), []string{"virtual"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,19 +357,19 @@ func TestGetTopTalkersDoesNotDoubleCountSelfTraffic(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
 		Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual",
 		TxBytes: 100, RxBytes: 0, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":100}`, Ports: "[]",
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertNodeBandwidth(ctx, []NodeBandwidth{{
+	if err := store.UpsertNodeBandwidth(ctx, DefaultTailnetID, []NodeBandwidth{{
 		Bucket: base, NodeID: "a", TxBytes: 100, RxBytes: 50,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	talkers, err := store.GetTopTalkers(ctx, time.Unix(base, 0), time.Unix(base+60, 0), 10)
+	talkers, err := store.GetTopTalkers(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestNodeBandwidthAndStatsDeriveFromPairsInsteadOfLegacyNodeRows(t *testing.
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "a", TrafficType: "virtual", TxBytes: 100, RxBytes: 0, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":100}`, Ports: "[]"},
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 25, RxBytes: 5, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":30}`, Ports: "[]"},
 	}); err != nil {
@@ -391,13 +391,13 @@ func TestNodeBandwidthAndStatsDeriveFromPairsInsteadOfLegacyNodeRows(t *testing.
 	}
 	// Simulate a legacy row from the old self-flow accounting, where the same
 	// 100 bytes were stored once as TX and again as RX.
-	if err := store.UpsertNodeBandwidth(ctx, []NodeBandwidth{{
+	if err := store.UpsertNodeBandwidth(ctx, DefaultTailnetID, []NodeBandwidth{{
 		Bucket: base, NodeID: "a", TxBytes: 125, RxBytes: 105,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	buckets, err := store.GetNodeBandwidth(ctx, time.Unix(base, 0), time.Unix(base+60, 0), "a")
+	buckets, err := store.GetNodeBandwidth(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestNodeBandwidthAndStatsDeriveFromPairsInsteadOfLegacyNodeRows(t *testing.
 		t.Fatalf("node bandwidth = %+v, want TX 125 RX 5 from normalized pairs", buckets)
 	}
 
-	stats, err := store.GetNodeStats(ctx, "a", time.Unix(base, 0), time.Unix(base+60, 0))
+	stats, err := store.GetNodeStats(ctx, DefaultTailnetID, "a", time.Unix(base, 0), time.Unix(base+60, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,14 +418,14 @@ func TestNodeBandwidthAndStatsUseCoarseBucketTotals(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
-	if err := store.UpsertNodePairAggregates(ctx, []NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 10, RxBytes: 2, Protocols: "[6]", ProtocolBytes: `{"6":12}`, Ports: "[]"},
 		{Bucket: base + 60, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 20, RxBytes: 3, Protocols: "[6]", ProtocolBytes: `{"6":23}`, Ports: "[]"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	buckets, err := store.GetNodeBandwidth(ctx, time.Unix(base, 0), time.Unix(base+2*60, 0), "a")
+	buckets, err := store.GetNodeBandwidth(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+2*60, 0), "a")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-import type { AccessEdgeKind, AccessEdgeMeta, GraphEdge, GraphNode } from '$lib/policy-engine/types';
+import type { AccessEdgeKind, AccessEdgeMeta, GraphEdge, GraphNode } from '#lib/policy-engine/types';
 
 const SELF_ACCESS_TYPES = new Set<AccessEdgeKind>(['grant', 'acl', 'ssh']);
 const ALL_PORTS = 'all ports and protocols';

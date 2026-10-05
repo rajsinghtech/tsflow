@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Server, Globe, Network, Radio, Cloud } from 'lucide-svelte';
-	import { formatBytes } from '$lib/utils';
-	import { highlightedNodeIds, hasSelection } from '$lib/stores/ui-store';
-	import type { NetworkNode } from '$lib/types';
+	import { formatBytes } from '#lib/utils';
+	import { highlightedNodeIds, hasSelection } from '#lib/stores/ui-store';
+	import type { NetworkNode } from '#lib/types';
 
 	interface Props {
 		data: NetworkNode & { label?: string };

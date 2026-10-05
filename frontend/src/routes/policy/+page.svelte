@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { Loader2, AlertCircle, FileCode, SlidersHorizontal, PanelRightClose, PanelRightOpen } from 'lucide-svelte';
-	import Header from '$lib/components/layout/Header.svelte';
-	import PolicyGraph from '$lib/components/policy/PolicyGraph.svelte';
-	import PolicyEditor from '$lib/components/policy/PolicyEditor.svelte';
-	import AccessQuery from '$lib/components/policy/AccessQuery.svelte';
-	import PolicyFilters from '$lib/components/policy/PolicyFilters.svelte';
-	import PolicyLegend from '$lib/components/policy/PolicyLegend.svelte';
+	import Header from '#lib/components/layout/Header.svelte';
+	import PolicyGraph from '#lib/components/policy/PolicyGraph.svelte';
+	import PolicyEditor from '#lib/components/policy/PolicyEditor.svelte';
+	import AccessQuery from '#lib/components/policy/AccessQuery.svelte';
+	import PolicyFilters from '#lib/components/policy/PolicyFilters.svelte';
+	import PolicyLegend from '#lib/components/policy/PolicyLegend.svelte';
 	import {
 		policyGraph,
 		parseErrors,
@@ -17,14 +17,14 @@
 		fetchAndRenderPolicy,
 		runQuery,
 		clearQuery
-	} from '$lib/stores/policy-store';
-	import { buildPolicyFlow } from '$lib/utils/policy-layout';
+	} from '#lib/stores/policy-store';
+	import { buildPolicyFlow } from '#lib/utils/policy-layout';
 
 	onMount(async () => {
 		if (!$policyGraph) {
 			await fetchAndRenderPolicy();
 		}
-		const params = $page.url.searchParams;
+		const params = page.url.searchParams;
 		const q = params.get('query');
 		const d = params.get('direction') as 'inbound' | 'outbound' | null;
 		if (q && $policyGraph) {

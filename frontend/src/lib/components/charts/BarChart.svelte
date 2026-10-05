@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { formatBytes } from '$lib/utils';
+	import { formatBytes } from '#lib/utils';
 
 	interface Bar {
 		label: string;

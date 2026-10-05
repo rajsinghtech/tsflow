@@ -127,7 +127,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	// the same timestamp and the first page has already been seen.
 	selected := make([]flowObject, 0, minInt(len(objects), s.cfg.MaxObjects))
 	for _, obj := range objects {
-		seen, err := p.store.IsObjectIngested(ctx, obj.key)
+		seen, err := p.store.IsObjectIngested(ctx, p.tailnetIDOrDefault(), obj.key)
 		if err != nil {
 			return processedObjects, processedFlows, lastProcessed, err
 		}
@@ -163,7 +163,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		if pollEnd.IsZero() {
 			pollEnd = end
 		}
-		if err := p.store.CommitObjectIngest(ctx, database.ObjectIngestResult{
+		if err := p.store.CommitObjectIngest(ctx, p.tailnetIDOrDefault(), database.ObjectIngestResult{
 			Key:           obj.key,
 			LastModified:  obj.lastModified,
 			Size:          obj.size,
@@ -198,7 +198,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 // the flow cursor and S3 lookback. This matters after a partial metadata-table
 // loss or when a database created before metadata hydration is upgraded.
 func (s *ObjectStoreSource) hydrateMissingMetadata(ctx context.Context, p *Poller) error {
-	keys, err := p.store.GetObjectsNeedingMetadata(ctx, s.cfg.MaxObjects)
+	keys, err := p.store.GetObjectsNeedingMetadata(ctx, p.tailnetIDOrDefault(), s.cfg.MaxObjects)
 	if err != nil {
 		return err
 	}
@@ -213,14 +213,14 @@ func (s *ObjectStoreSource) hydrateMissingMetadata(ctx context.Context, p *Polle
 		}
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
-			if err := p.store.UpsertNodeMetadata(ctx, nodeMetadata); err != nil {
+			if err := p.store.UpsertNodeMetadata(ctx, p.tailnetIDOrDefault(), nodeMetadata); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("failed to persist metadata from %s: %w", key, err)
 				}
 				continue
 			}
 		}
-		if err := p.store.MarkObjectMetadataHydrated(ctx, key, objectMetadataIDs(nodeMetadata)); err != nil {
+		if err := p.store.MarkObjectMetadataHydrated(ctx, p.tailnetIDOrDefault(), key, objectMetadataIDs(nodeMetadata)); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("failed to mark metadata hydrated for %s: %w", key, err)
 			}

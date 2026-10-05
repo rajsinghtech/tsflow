@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { BaseEdge, getBezierPath } from '@xyflow/svelte';
-	import type { NetworkLink } from '$lib/types';
-	import { highlightedNodeIds, hasSelection } from '$lib/stores/ui-store';
+	import type { NetworkLink } from '#lib/types';
+	import { highlightedNodeIds, hasSelection } from '#lib/stores/ui-store';
 
 	interface Props {
 		id: string;

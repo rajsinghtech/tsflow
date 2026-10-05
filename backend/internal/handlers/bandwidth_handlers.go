@@ -79,11 +79,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		defer cancel()
 
 		if nodeID != "" {
-			buckets, err = h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
+			buckets, err = h.store.GetNodeBandwidth(ctx, h.tailnetID(), startTime, endTime, nodeID)
 		} else if len(trafficTypes) > 0 && len(trafficTypes) < 4 {
-			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, startTime, endTime, trafficTypes)
+			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes)
 		} else {
-			buckets, err = h.store.GetBandwidth(ctx, startTime, endTime)
+			buckets, err = h.store.GetBandwidth(ctx, h.tailnetID(), startTime, endTime)
 		}
 
 		if err != nil {
@@ -231,7 +231,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	bucketMap := make(map[int64]*database.BandwidthBucket)
 
 	for nodeID := range nodeIDs {
-		buckets, err := h.store.GetNodeBandwidth(ctx, startTime, endTime, nodeID)
+		buckets, err := h.store.GetNodeBandwidth(ctx, h.tailnetID(), startTime, endTime, nodeID)
 		if err != nil {
 			if writeContextError(c, err) {
 				return

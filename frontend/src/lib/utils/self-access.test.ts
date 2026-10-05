@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AccessEdgeMeta, GraphEdge, GraphNode } from '$lib/policy-engine/types';
-import { parsePolicyText } from '$lib/policy-engine/parser';
+import type { AccessEdgeMeta, GraphEdge, GraphNode } from '#lib/policy-engine/types';
+import { parsePolicyText } from '#lib/policy-engine/parser';
 import {
 	buildPolicyFlow,
 	estimatePolicyNodeSize,

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
-	import { highlightedPolicyNodeIds, hasQuery } from '$lib/stores/policy-store';
-	import type { NodeType } from '$lib/policy-engine/types';
-	import type { SelfAccessSummary } from '$lib/utils/self-access';
+	import { highlightedPolicyNodeIds, hasQuery } from '#lib/stores/policy-store';
+	import type { NodeType } from '#lib/policy-engine/types';
+	import type { SelfAccessSummary } from '#lib/utils/self-access';
 	import SelfAccessBadge from './SelfAccessBadge.svelte';
 
 	interface Props {

@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
-	import Header from '$lib/components/layout/Header.svelte';
-	import DonutChart from '$lib/components/charts/DonutChart.svelte';
-	import BarChart from '$lib/components/charts/BarChart.svelte';
-	import StatCard from '$lib/components/charts/StatCard.svelte';
-	import TimelineSlider from '$lib/components/timeline/TimelineSlider.svelte';
+	import Header from '#lib/components/layout/Header.svelte';
+	import DonutChart from '#lib/components/charts/DonutChart.svelte';
+	import BarChart from '#lib/components/charts/BarChart.svelte';
+	import StatCard from '#lib/components/charts/StatCard.svelte';
+	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 	import {
 		startStatsRefresh,
 		stopStatsRefresh,
@@ -21,10 +21,10 @@
 		hasStoredData,
 		dataSourceStore,
 		filterStore
-	} from '$lib/stores';
-	import { formatBytes } from '$lib/utils';
-	import { getPortLabel } from '$lib/utils/protocol';
-	import type { TrafficType } from '$lib/types';
+	} from '#lib/stores';
+	import { formatBytes } from '#lib/utils';
+	import { getPortLabel } from '#lib/utils/protocol';
+	import type { TrafficType } from '#lib/types';
 
 	onMount(() => {
 		let cancelled = false;

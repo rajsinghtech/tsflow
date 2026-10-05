@@ -1,4 +1,4 @@
-import type { Protocol } from '$lib/types';
+import type { Protocol } from '#lib/types';
 
 // Protocol number to name mapping
 export function getProtocolName(proto: number): Protocol {

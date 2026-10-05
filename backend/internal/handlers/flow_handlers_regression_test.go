@@ -44,7 +44,7 @@ func TestDeprecatedFlowEndpointsReturnGone(t *testing.T) {
 func TestAggregatedFlowMergesPortsAcrossBuckets(t *testing.T) {
 	store := setupHandlerTestDB(t)
 	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Minute)
-	if err := store.UpsertNodePairAggregates(context.Background(), []database.NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
 		{Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`, Ports: `[{"port":443,"proto":6,"bytes":100}]`},
 		{Bucket: base.Add(time.Minute).Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 300, Protocols: "[17]", ProtocolBytes: `{"17":300}`, Ports: `[{"port":53,"proto":17,"bytes":300}]`},
 	}); err != nil {
@@ -83,7 +83,7 @@ func TestAggregatedFlowMergesPortsAcrossBuckets(t *testing.T) {
 func TestAggregatedFlowExposesDirectionalMetadata(t *testing.T) {
 	store := setupHandlerTestDB(t)
 	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Minute)
-	if err := store.UpsertNodePairAggregates(context.Background(), []database.NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
 		{
 			Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
 			TxBytes: 100, RxBytes: 200, Protocols: "[17,6]", ProtocolBytes: `{"6":100,"17":200}`,
@@ -155,7 +155,7 @@ func TestAggregatedFlowExposesDirectionalMetadata(t *testing.T) {
 func TestAggregatedFlowClearsDirectionalMetadataWhenLegacyBucketIsMerged(t *testing.T) {
 	store := setupHandlerTestDB(t)
 	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Minute)
-	if err := store.UpsertNodePairAggregates(context.Background(), []database.NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
 		{
 			Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
 			TxBytes: 100, Protocols: "[6]", ProtocolBytes: `{"6":100}`,
@@ -237,12 +237,12 @@ func TestStatsOverviewMergesMissingDerivedBucketsAndKeepsPrimaryOverlap(t *testi
 	store := setupHandlerTestDB(t)
 	base := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
 	ctx := context.Background()
-	if err := store.UpsertTrafficStats(ctx, []database.TrafficStats{
+	if err := store.UpsertTrafficStats(ctx, database.DefaultTailnetID, []database.TrafficStats{
 		{Bucket: base.Unix(), TCPBytes: 100, VirtualBytes: 100, TotalFlows: 1, UniquePairs: 1},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertNodePairAggregates(ctx, []database.NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, []database.NodePairAggregate{
 		// This overlaps the authoritative traffic_stats bucket and must not be added to it.
 		{Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 900, FlowCount: 9, Protocols: "[17]", ProtocolBytes: `{"17":900}`},
 		// This bucket exists only in node_pairs and must be included.
@@ -275,7 +275,7 @@ func TestStatsOverviewMergesMissingDerivedBucketsAndKeepsPrimaryOverlap(t *testi
 func TestStatsOverviewFallsBackToDerivedBucketsWhenTrafficStatsIsEmpty(t *testing.T) {
 	store := setupHandlerTestDB(t)
 	base := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
-	if err := store.UpsertNodePairAggregates(context.Background(), []database.NodePairAggregate{
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
 		{Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "exit", TxBytes: 75, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":75}`},
 	}); err != nil {
 		t.Fatal(err)

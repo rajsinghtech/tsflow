@@ -12,10 +12,10 @@
 		type ColorMode
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { uiStore, themeStore } from '$lib/stores';
-	import { highlightedEdgeIds, hasSelection } from '$lib/stores/ui-store';
-	import { applyElkLayout } from '$lib/utils/elk-layout';
-	import type { NetworkNode as NetworkNodeType, NetworkLink } from '$lib/types';
+	import { uiStore, themeStore } from '#lib/stores';
+	import { highlightedEdgeIds, hasSelection } from '#lib/stores/ui-store';
+	import { applyElkLayout } from '#lib/utils/elk-layout';
+	import type { NetworkNode as NetworkNodeType, NetworkLink } from '#lib/types';
 	import NetworkNode from './NetworkNode.svelte';
 
 

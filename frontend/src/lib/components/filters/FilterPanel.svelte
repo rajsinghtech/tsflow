@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { X } from 'lucide-svelte';
-	import { filterStore, uiStore } from '$lib/stores';
-	import type { TrafficType } from '$lib/types';
-	import TimelineSlider from '$lib/components/timeline/TimelineSlider.svelte';
+	import { filterStore, uiStore } from '#lib/stores';
+	import type { TrafficType } from '#lib/types';
+	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 
 	// Traffic type options including exit node traffic
 	const trafficTypes: { value: TrafficType; label: string; defaultOn: boolean }[] = [

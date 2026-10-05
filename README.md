@@ -152,6 +152,7 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TSFLOW_DB_PATH` | SQLite database path | `./data/tsflow.db` |
+| `TSFLOW_SKIP_DB_BACKUP` | Skip the pre-migration database copy. Set `1` only when disk space is tight. | unset |
 | `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
@@ -172,6 +173,19 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`
+
+### Rolling back to the previous release
+
+This release changes the SQLite schema. Before it does, startup writes a full copy of the database beside the live file. For `/app/data/tsflow.db` the copy is `/app/data/tsflow.db.pre-tailnet`. The log names that path. The copy needs about as much free disk as the database file, on top of the temporary space the migration uses while it rewrites tables.
+
+The previous release cannot write the migrated file. Its inserts target the old primary keys, and it reads the poll cursor from `poll_state.id = 1`, which the new schema does not have. To run that release again:
+
+1. Stop tsflow.
+2. Replace the live database with the backup. For the path above, move `tsflow.db.pre-tailnet` to `tsflow.db`.
+3. Delete `tsflow.db-wal` and `tsflow.db-shm` if they exist, so the restored file is not opened with a write-ahead log from the new process.
+4. Start the previous release.
+
+Rows saved after the upgrade are not in the backup. If startup cannot write the copy, it stops before changing the schema. Set `TSFLOW_SKIP_DB_BACKUP=1` to migrate without a rollback copy. The log says when that happens. Keep a backup of your own if you still want a way back.
 
 ## Development
 

@@ -48,9 +48,9 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		defer cancel()
 
 		if len(trafficTypes) > 0 {
-			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, startTime, endTime, trafficTypes)
+			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes)
 		} else {
-			buckets, err = h.store.GetTrafficStats(ctx, startTime, endTime)
+			buckets, err = h.store.GetTrafficStats(ctx, h.tailnetID(), startTime, endTime)
 		}
 		if err != nil {
 			if writeContextError(c, err) {
@@ -68,7 +68,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		// gaps in traffic_stats without replacing its authoritative values.
 		if len(trafficTypes) == 0 {
 			var derivedBuckets []database.TrafficStats
-			derivedBuckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, startTime, endTime)
+			derivedBuckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, h.tailnetID(), startTime, endTime)
 			if err != nil {
 				if writeContextError(c, err) {
 					return
@@ -180,9 +180,9 @@ func (h *Handlers) GetTopTalkers(c *gin.Context) {
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
 	var talkers []database.TopTalker
 	if len(trafficTypes) > 0 {
-		talkers, err = h.store.GetTopTalkersByTrafficTypes(ctx, startTime, endTime, trafficTypes, limit*10)
+		talkers, err = h.store.GetTopTalkersByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes, limit*10)
 	} else {
-		talkers, err = h.store.GetTopTalkers(ctx, startTime, endTime, limit*10)
+		talkers, err = h.store.GetTopTalkers(ctx, h.tailnetID(), startTime, endTime, limit*10)
 	}
 	if err != nil {
 		if writeContextError(c, err) {
@@ -288,9 +288,9 @@ func (h *Handlers) GetTopPairs(c *gin.Context) {
 	// Fetch more rows than requested to have enough after filtering unresolvable entries
 	var pairs []database.TopPair
 	if len(trafficTypes) > 0 {
-		pairs, err = h.store.GetTopPairsByTrafficTypes(ctx, startTime, endTime, trafficTypes, limit*10)
+		pairs, err = h.store.GetTopPairsByTrafficTypes(ctx, h.tailnetID(), startTime, endTime, trafficTypes, limit*10)
 	} else {
-		pairs, err = h.store.GetTopPairs(ctx, startTime, endTime, limit*10)
+		pairs, err = h.store.GetTopPairs(ctx, h.tailnetID(), startTime, endTime, limit*10)
 	}
 	if err != nil {
 		if writeContextError(c, err) {
@@ -413,7 +413,7 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 
-	stats, err := h.store.GetNodeStats(ctx, nodeID, startTime, endTime)
+	stats, err := h.store.GetNodeStats(ctx, h.tailnetID(), nodeID, startTime, endTime)
 	if err != nil {
 		if writeContextError(c, err) {
 			return

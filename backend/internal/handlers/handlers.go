@@ -62,6 +62,12 @@ type Handlers struct {
 	version          string
 }
 
+// tailnetID is the only tailnet this process serves. Later phases can select
+// a different id here without changing each store call.
+func (h *Handlers) tailnetID() string {
+	return database.DefaultTailnetID
+}
+
 func NewHandlers(tailscaleService *services.TailscaleService, store database.Store, poller *services.Poller, version string) *Handlers {
 	return &Handlers{
 		tailscaleService: tailscaleService,

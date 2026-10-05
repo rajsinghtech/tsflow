@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { rawLogs, uiStore, filteredNodes, filteredEdges, processedNetwork, filterStore, debouncedFilterStore, devices, services, primaryMatchedNodes } from '$lib/stores';
-	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName, isValidIPv4, isIPv6 } from '$lib/utils';
+	import { rawLogs, uiStore, filteredNodes, filteredEdges, processedNetwork, filterStore, debouncedFilterStore, devices, services, primaryMatchedNodes } from '#lib/stores';
+	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName, isValidIPv4, isIPv6 } from '#lib/utils';
 	import { ArrowRight, ArrowUpDown } from 'lucide-svelte';
-	import type { NetworkLog, TrafficType } from '$lib/types';
+	import type { NetworkLog, TrafficType } from '#lib/types';
 
 	type SortField = 'logged' | 'txBytes' | 'rxBytes' | 'trafficType' | 'protocol';
 	let sortField: SortField = $state('logged');

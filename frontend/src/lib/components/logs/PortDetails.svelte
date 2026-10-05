@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { uiStore, filteredNodes, rawLogs, devices } from '$lib/stores';
-	import { formatBytes, extractIP, extractPort, getProtocolName } from '$lib/utils';
-	import type { NetworkLog } from '$lib/types';
+	import { uiStore, filteredNodes, rawLogs, devices } from '#lib/stores';
+	import { formatBytes, extractIP, extractPort, getProtocolName } from '#lib/utils';
+	import type { NetworkLog } from '#lib/types';
 
 	const PORT_NAMES: Record<number, string> = {
 		20: 'FTP-DATA', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP',
