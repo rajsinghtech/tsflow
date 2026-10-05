@@ -18,7 +18,7 @@
 		runQuery,
 		clearQuery
 	} from '$lib/stores/policy-store';
-	import { policyNodesToXYFlow, policyEdgesToXYFlow } from '$lib/utils/policy-layout';
+	import { buildPolicyFlow } from '$lib/utils/policy-layout';
 
 	onMount(async () => {
 		if (!$policyGraph) {
@@ -32,8 +32,7 @@
 		}
 	});
 
-	const xyNodes = $derived(policyNodesToXYFlow($filteredGraph.nodes));
-	const xyEdges = $derived(policyEdgesToXYFlow($filteredGraph.edges));
+	const policyFlow = $derived(buildPolicyFlow($filteredGraph.nodes, $filteredGraph.edges));
 
 	// Split pane state
 	let splitPercent = $state(35);
@@ -105,7 +104,7 @@
 					<p class="text-sm text-muted-foreground">No visible nodes</p>
 				</div>
 			{:else}
-				<PolicyGraph nodes={xyNodes} edges={xyEdges} />
+				<PolicyGraph nodes={policyFlow.nodes} edges={policyFlow.edges} />
 			{/if}
 
 			<!-- Floating controls panel — left side, vertically centered -->
