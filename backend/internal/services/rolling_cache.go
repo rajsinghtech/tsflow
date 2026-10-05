@@ -18,6 +18,10 @@ type RollingWindowCache struct {
 	// Node pair aggregates by minute bucket
 	nodePairs map[int64][]database.NodePairAggregate
 
+	// Index of nodePairs[bucket] by (src, dst, traffic type). Positions stay
+	// valid because pairs are only appended or updated in place.
+	nodePairIndex map[int64]map[nodePairCacheKey]int
+
 	// Unique node pairs contributing to network-wide traffic stats by bucket.
 	// Keeping the set avoids undercounting when separate polls or traffic types
 	// contain disjoint pairs. The pair value is kept as two fields so endpoint
@@ -40,12 +44,22 @@ type RollingWindowCache struct {
 func NewRollingWindowCache(maxAge time.Duration) *RollingWindowCache {
 	return &RollingWindowCache{
 		nodePairs:        make(map[int64][]database.NodePairAggregate),
+		nodePairIndex:    make(map[int64]map[nodePairCacheKey]int),
 		trafficStatPairs: make(map[int64]map[trafficPairKey]struct{}),
 		bandwidth:        make(map[int64]*database.BandwidthBucket),
 		nodeBandwidth:    make(map[int64]map[string]*database.NodeBandwidth),
 		trafficStats:     make(map[int64]*database.TrafficStats),
 		maxAge:           maxAge,
 	}
+}
+
+// nodePairCacheKey identifies one aggregate row inside a minute bucket.
+// Traffic type is part of the key: the same endpoints can carry virtual and
+// subnet rows side by side.
+type nodePairCacheKey struct {
+	src         string
+	dst         string
+	trafficType string
 }
 
 // Update adds new aggregates to the cache and prunes old data
@@ -57,7 +71,29 @@ func (c *RollingWindowCache) Update(
 ) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.applyUpdate(nodePairs, bandwidth, nodeBandwidth, trafficStats, true)
+}
 
+// updateLinear applies the same merge with a scan of the bucket. Tests and
+// benchmarks use it to check the indexed path against the previous one.
+func (c *RollingWindowCache) updateLinear(
+	nodePairs []database.NodePairAggregate,
+	bandwidth []database.BandwidthBucket,
+	nodeBandwidth []database.NodeBandwidth,
+	trafficStats []database.TrafficStats,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.applyUpdate(nodePairs, bandwidth, nodeBandwidth, trafficStats, false)
+}
+
+func (c *RollingWindowCache) applyUpdate(
+	nodePairs []database.NodePairAggregate,
+	bandwidth []database.BandwidthBucket,
+	nodeBandwidth []database.NodeBandwidth,
+	trafficStats []database.TrafficStats,
+	indexed bool,
+) {
 	// Add node pairs by bucket, deduplicating by (src, dst, trafficType)
 	for _, np := range nodePairs {
 		if c.trafficStatPairs[np.Bucket] == nil {
@@ -68,45 +104,10 @@ func (c *RollingWindowCache) Update(
 			dstNodeID: np.DstNodeID,
 		}] = struct{}{}
 
-		existing := c.nodePairs[np.Bucket]
-		found := false
-		for i := range existing {
-			if existing[i].SrcNodeID == np.SrcNodeID && existing[i].DstNodeID == np.DstNodeID && existing[i].TrafficType == np.TrafficType {
-				existingDirectional := existing[i].DirectionalPorts
-				incomingDirectional := np.DirectionalPorts
-				existing[i].TxBytes += np.TxBytes
-				existing[i].RxBytes += np.RxBytes
-				existing[i].TxPkts += np.TxPkts
-				existing[i].RxPkts += np.RxPkts
-				existing[i].FlowCount += np.FlowCount
-				existing[i].ProtocolBytes = mergeProtocolByteJSON(
-					existing[i].ProtocolBytes, np.ProtocolBytes,
-					existing[i].Protocols, np.Protocols,
-					existing[i].TxBytes+existing[i].RxBytes-np.TxBytes-np.RxBytes,
-					np.TxBytes+np.RxBytes,
-				)
-				existing[i].Protocols = protocolJSONFromBytes(existing[i].ProtocolBytes, existing[i].Protocols, np.Protocols)
-				existing[i].Ports = mergePortJSON(existing[i].Ports, np.Ports)
-				if existingDirectional && incomingDirectional {
-					existing[i].TxProtocolBytes = mergeDirectionalProtocolByteJSON(existing[i].TxProtocolBytes, np.TxProtocolBytes)
-					existing[i].RxProtocolBytes = mergeDirectionalProtocolByteJSON(existing[i].RxProtocolBytes, np.RxProtocolBytes)
-					existing[i].TxPorts = mergePortJSON(existing[i].TxPorts, np.TxPorts)
-					existing[i].RxPorts = mergePortJSON(existing[i].RxPorts, np.RxPorts)
-				} else {
-					// A legacy contribution has no reliable direction metadata. Keep
-					// the cache response on the legacy path for the whole pair.
-					existing[i].DirectionalPorts = false
-					existing[i].TxProtocolBytes = "{}"
-					existing[i].RxProtocolBytes = "{}"
-					existing[i].TxPorts = "[]"
-					existing[i].RxPorts = "[]"
-				}
-				found = true
-				break
-			}
-		}
-		if !found {
-			c.nodePairs[np.Bucket] = append(c.nodePairs[np.Bucket], np)
+		if indexed {
+			c.upsertNodePairIndexed(np)
+		} else {
+			c.upsertNodePairLinear(np)
 		}
 	}
 
@@ -179,6 +180,64 @@ func (c *RollingWindowCache) Update(
 	c.prune()
 }
 
+func (c *RollingWindowCache) upsertNodePairLinear(np database.NodePairAggregate) {
+	existing := c.nodePairs[np.Bucket]
+	for i := range existing {
+		if existing[i].SrcNodeID == np.SrcNodeID && existing[i].DstNodeID == np.DstNodeID && existing[i].TrafficType == np.TrafficType {
+			mergeCachedNodePair(&existing[i], np)
+			return
+		}
+	}
+	c.nodePairs[np.Bucket] = append(c.nodePairs[np.Bucket], np)
+}
+
+func (c *RollingWindowCache) upsertNodePairIndexed(np database.NodePairAggregate) {
+	index := c.nodePairIndex[np.Bucket]
+	if index == nil {
+		index = make(map[nodePairCacheKey]int)
+		c.nodePairIndex[np.Bucket] = index
+	}
+	key := nodePairCacheKey{src: np.SrcNodeID, dst: np.DstNodeID, trafficType: np.TrafficType}
+	if i, ok := index[key]; ok {
+		mergeCachedNodePair(&c.nodePairs[np.Bucket][i], np)
+		return
+	}
+	index[key] = len(c.nodePairs[np.Bucket])
+	c.nodePairs[np.Bucket] = append(c.nodePairs[np.Bucket], np)
+}
+
+func mergeCachedNodePair(existing *database.NodePairAggregate, np database.NodePairAggregate) {
+	existingDirectional := existing.DirectionalPorts
+	incomingDirectional := np.DirectionalPorts
+	existing.TxBytes += np.TxBytes
+	existing.RxBytes += np.RxBytes
+	existing.TxPkts += np.TxPkts
+	existing.RxPkts += np.RxPkts
+	existing.FlowCount += np.FlowCount
+	existing.ProtocolBytes = mergeProtocolByteJSON(
+		existing.ProtocolBytes, np.ProtocolBytes,
+		existing.Protocols, np.Protocols,
+		existing.TxBytes+existing.RxBytes-np.TxBytes-np.RxBytes,
+		np.TxBytes+np.RxBytes,
+	)
+	existing.Protocols = protocolJSONFromBytes(existing.ProtocolBytes, existing.Protocols, np.Protocols)
+	existing.Ports = mergePortJSON(existing.Ports, np.Ports)
+	if existingDirectional && incomingDirectional {
+		existing.TxProtocolBytes = mergeDirectionalProtocolByteJSON(existing.TxProtocolBytes, np.TxProtocolBytes)
+		existing.RxProtocolBytes = mergeDirectionalProtocolByteJSON(existing.RxProtocolBytes, np.RxProtocolBytes)
+		existing.TxPorts = mergePortJSON(existing.TxPorts, np.TxPorts)
+		existing.RxPorts = mergePortJSON(existing.RxPorts, np.RxPorts)
+		return
+	}
+	// A legacy contribution has no reliable direction metadata. Keep
+	// the cache response on the legacy path for the whole pair.
+	existing.DirectionalPorts = false
+	existing.TxProtocolBytes = "{}"
+	existing.RxProtocolBytes = "{}"
+	existing.TxPorts = "[]"
+	existing.RxPorts = "[]"
+}
+
 // prune removes data older than maxAge
 func (c *RollingWindowCache) prune() {
 	cutoff := time.Now().Add(-c.maxAge).Unix()
@@ -186,6 +245,12 @@ func (c *RollingWindowCache) prune() {
 	for bucket := range c.nodePairs {
 		if bucket < cutoff {
 			delete(c.nodePairs, bucket)
+			delete(c.nodePairIndex, bucket)
+		}
+	}
+	for bucket := range c.nodePairIndex {
+		if bucket < cutoff {
+			delete(c.nodePairIndex, bucket)
 		}
 	}
 
