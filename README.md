@@ -179,7 +179,7 @@ TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `ht
 
 Access control is off unless you set it. With the variables below unset, every request behaves as it does today, including `GET /api/tailnets` and the data routes. Health checks stay open either way: `GET /health` and `GET /api/health`.
 
-When it is on, a viewer needs a Tailscale application capability, or membership in a mapped group. The capability name is `TSFLOW_ACCESS_CAPABILITY`. The example below uses `example.com/cap/tsflow`. Each grant is a JSON object. The only field is optional:
+When it is on, a viewer needs a Tailscale application capability, or membership in a mapped group, unless you set `TSFLOW_ACCESS_GRANTS=identity`. That setting is explicit: any resolved WhoIs identity, or a `Tailscale-User-Login` header from a trusted proxy, can see every configured tailnet, and no identity is 403. whoami and autoscope still work. Unset, or `required`, still requires a capability or a group grant, including when `TSFLOW_ACCESS_MODE` is set. The capability name is `TSFLOW_ACCESS_CAPABILITY`. The example below uses `example.com/cap/tsflow`. Each grant is a JSON object. The only field is optional:
 
 ```json
 {"tailnets": ["default", "lab"]}

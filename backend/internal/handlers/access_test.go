@@ -161,6 +161,87 @@ func TestAccessFiltersTailnetsAndKeepsHealthOpen(t *testing.T) {
 	}
 }
 
+func TestIdentityOnlyHeaderAllowsLoginAndRejectsSpoofedHeaders(t *testing.T) {
+	server := httptest.NewServer(tailnetHTTP(t, map[string]string{
+		"lab.example": "lab-device",
+	}))
+	defer server.Close()
+	h := registryHandlers(t, newAPIStore(t), []config.TailnetSpec{{
+		ID: "lab", Name: "lab.example", APIURL: server.URL, APIKey: "lab-secret",
+	}})
+	cfg := config.Access{
+		Enabled:         true,
+		Mode:            config.AccessModeHeader,
+		Grants:          config.AccessGrantsIdentity,
+		TrustedPrefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		Autoscope:       config.AccessAutoscopeUser,
+	}
+	router := gin.New()
+	router.GET("/health", h.HealthCheck)
+	api := router.Group("/api")
+	api.GET("/health", h.HealthCheck)
+	api.Use(access.Middleware(cfg, nil))
+	api.GET("/whoami", h.WhoAmI)
+	api.GET("/tailnets", h.ListTailnets)
+	api.GET("/devices", h.GetDevices)
+
+	spoof := map[string]string{
+		"Tailscale-User-Login": "ada@example.com",
+		"Tailscale-User-Name":  "Ada",
+	}
+	code, body := serveFrom(router, http.MethodGet, "/api/devices", "203.0.113.10:9", spoof)
+	if code != http.StatusForbidden || bytes.Contains(body, []byte("lab-device")) || bytes.Contains(body, []byte("ada@example.com")) {
+		t.Fatalf("spoofed login = %d %s", code, body)
+	}
+	code, body = serveFrom(router, http.MethodGet, "/api/whoami", "203.0.113.10:9", spoof)
+	if code != http.StatusForbidden {
+		t.Fatalf("spoofed whoami = %d %s", code, body)
+	}
+
+	code, body = serveFrom(router, http.MethodGet, "/api/whoami", "10.1.2.3:9", map[string]string{
+		"Tailscale-User-Name": "Ada",
+	})
+	if code != http.StatusForbidden || !bytes.Contains(body, []byte("missing tailscale identity")) {
+		t.Fatalf("name without login = %d %s", code, body)
+	}
+	code, body = serveFrom(router, http.MethodGet, "/health", "203.0.113.10:9", spoof)
+	if code != http.StatusOK {
+		t.Fatalf("health = %d %s", code, body)
+	}
+
+	login := map[string]string{
+		"Tailscale-User-Login": "ada@example.com",
+		"Tailscale-User-Name":  "Ada Lovelace",
+	}
+	code, body = serveFrom(router, http.MethodGet, "/api/devices", "10.1.2.3:9", login)
+	if code != http.StatusOK || !bytes.Contains(body, []byte("lab-device")) {
+		t.Fatalf("allowed devices = %d %s", code, body)
+	}
+	code, body = serveFrom(router, http.MethodGet, "/api/tailnets", "10.1.2.3:9", login)
+	if code != http.StatusOK || !bytes.Contains(body, []byte(`"id":"lab"`)) {
+		t.Fatalf("tailnets = %d %s", code, body)
+	}
+	code, body = serveFrom(router, http.MethodGet, "/api/whoami", "10.1.2.3:9", login)
+	if code != http.StatusOK {
+		t.Fatalf("whoami = %d %s", code, body)
+	}
+	var who struct {
+		Login       string   `json:"login"`
+		Name        string   `json:"name"`
+		Autoscope   string   `json:"autoscope"`
+		Tailnets    []string `json:"tailnets"`
+		DeviceScope struct {
+			Owners []string `json:"owners"`
+		} `json:"deviceScope"`
+	}
+	if err := json.Unmarshal(body, &who); err != nil {
+		t.Fatal(err)
+	}
+	if who.Login != "ada@example.com" || who.Name != "Ada Lovelace" || who.Autoscope != "user" || len(who.Tailnets) != 1 || who.Tailnets[0] != "*" || len(who.DeviceScope.Owners) != 1 || who.DeviceScope.Owners[0] != "ada@example.com" {
+		t.Fatalf("whoami payload = %+v", who)
+	}
+}
+
 func TestHeaderGroupGrantIgnoresUntrustedSource(t *testing.T) {
 	server := httptest.NewServer(tailnetHTTP(t, map[string]string{
 		"lab.example": "lab-device",

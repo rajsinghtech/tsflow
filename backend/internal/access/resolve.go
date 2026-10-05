@@ -28,6 +28,7 @@ var (
 	errMissingGrant        = errors.New("missing access grant")
 	errInvalidGrant        = errors.New("invalid access grant")
 	errIdentityUnavailable = errors.New("tailscale identity unavailable")
+	errMissingIdentity     = errors.New("missing tailscale identity")
 )
 
 // WhoIsClient is the subset of tailscale.com/client/local.Client used
@@ -100,6 +101,14 @@ func resolveWhoIs(ctx context.Context, who WhoIsClient, addr string, cfg config.
 		return Identity{}, errIdentityUnavailable
 	}
 	ident := identityFromWhoIs(resp)
+	if cfg.Grants == config.AccessGrantsIdentity {
+		if !whoIsIdentified(ident) {
+			return Identity{}, errMissingIdentity
+		}
+		ident.Groups = unionNames(ident.Groups, headerGroups)
+		ident.Allow = Allow{All: true}
+		return ident, nil
+	}
 	matched, allow, err := allowFromWhoIs(resp, cfg, ident.Groups, headerGroups)
 	if err != nil {
 		return Identity{}, err
@@ -116,6 +125,17 @@ func resolveHeaders(r *http.Request, cfg config.Access) (Identity, error) {
 	login := decodeHeader(r.Header.Get(headerUserLogin))
 	name := decodeHeader(r.Header.Get(headerUserName))
 	groups := groupHeader(r, cfg)
+	if cfg.Grants == config.AccessGrantsIdentity {
+		if login == "" {
+			return Identity{}, errMissingIdentity
+		}
+		return Identity{
+			Login:  login,
+			Name:   name,
+			Groups: groups,
+			Allow:  Allow{All: true},
+		}, nil
+	}
 	matched := false
 	var allow Allow
 
@@ -155,6 +175,10 @@ func identityFromWhoIs(resp *apitype.WhoIsResponse) Identity {
 		ident.Node = strings.TrimSpace(resp.Node.Name)
 	}
 	return ident
+}
+
+func whoIsIdentified(ident Identity) bool {
+	return ident.Login != "" || ident.Name != "" || ident.Node != ""
 }
 
 func allowFromWhoIs(resp *apitype.WhoIsResponse, cfg config.Access, profileGroups, headerGroups []string) (bool, Allow, error) {
@@ -383,6 +407,8 @@ func publicError(err error) string {
 		return errInvalidGrant.Error()
 	case errors.Is(err, errIdentityUnavailable):
 		return errIdentityUnavailable.Error()
+	case errors.Is(err, errMissingIdentity):
+		return errMissingIdentity.Error()
 	default:
 		return errMissingGrant.Error()
 	}

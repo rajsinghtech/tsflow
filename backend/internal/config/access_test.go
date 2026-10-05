@@ -109,6 +109,51 @@ func TestAccessValidation(t *testing.T) {
 			want: "TSFLOW_ACCESS_GROUPS_HEADER is only valid",
 		},
 		{
+			name: "header mode is not identity by default",
+			mutate: func(c *Config) {
+				c.Access.Mode = "header"
+				c.Access.TrustedProxies = "127.0.0.1/32"
+			},
+			want: "TSFLOW_ACCESS_CAPABILITY or TSFLOW_ACCESS_GROUPS_HEADER",
+		},
+		{
+			name: "identity only header",
+			mutate: func(c *Config) {
+				c.Access.Mode = "header"
+				c.Access.TrustedProxies = "127.0.0.1/32"
+				c.Access.Grants = "identity"
+				c.Access.Autoscope = "user"
+			},
+			wantOK: true,
+			check: func(t *testing.T, c *Config) {
+				if !c.Access.Enabled || c.Access.Grants != AccessGrantsIdentity || c.Access.Capability != "" {
+					t.Fatalf("access = %+v", c.Access)
+				}
+			},
+		},
+		{
+			name: "identity only tsnet",
+			mutate: func(c *Config) {
+				c.TsnetServe = true
+				c.TailscaleOAuthClientID = "id"
+				c.TailscaleOAuthClientSecret = "secret"
+				c.Access.Grants = "Identity"
+			},
+			wantOK: true,
+			check: func(t *testing.T, c *Config) {
+				if c.Access.Mode != AccessModeTsnet || c.Access.Grants != AccessGrantsIdentity || c.Access.Capability != "" {
+					t.Fatalf("access = %+v", c.Access)
+				}
+			},
+		},
+		{
+			name: "bad grants value",
+			mutate: func(c *Config) {
+				c.Access.Grants = "open"
+			},
+			want: "TSFLOW_ACCESS_GRANTS must be required or identity",
+		},
+		{
 			name: "header with capability and cidr",
 			mutate: func(c *Config) {
 				c.Access.Mode = "proxy"
@@ -212,7 +257,7 @@ func TestLoadAccessFromEnv(t *testing.T) {
 	for _, key := range []string{
 		"TAILSCALE_API_KEY", "TSFLOW_ACCESS_CAPABILITY", "TSFLOW_ACCESS_MODE",
 		"TSFLOW_ACCESS_TRUSTED_PROXIES", "TSFLOW_ACCESS_GROUPS_HEADER",
-		"TSFLOW_ACCESS_GROUP_GRANTS", "TSFLOW_ACCESS_AUTOSCOPE", "TSFLOW_LOG_LEVEL",
+		"TSFLOW_ACCESS_GROUP_GRANTS", "TSFLOW_ACCESS_AUTOSCOPE", "TSFLOW_ACCESS_GRANTS", "TSFLOW_LOG_LEVEL",
 		"TSFLOW_SERVE", "TSFLOW_FLOW_BACKEND",
 	} {
 		t.Setenv(key, "")

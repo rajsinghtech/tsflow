@@ -282,6 +282,9 @@ func main() {
 
 	if cfg.Access.Enabled {
 		log.Printf("Access control: mode=%s", cfg.Access.Mode)
+		if cfg.Access.Grants == config.AccessGrantsIdentity {
+			log.Printf("Access control: grants=identity")
+		}
 		if cfg.Access.Capability != "" {
 			log.Printf("Access control: capability=%s", cfg.Access.Capability)
 		}

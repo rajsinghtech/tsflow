@@ -303,6 +303,42 @@ func TestDebugLogOmitsIdentityUnlessEnabled(t *testing.T) {
 	}
 }
 
+func TestWhoIsIdentityOnlyAllowsWithoutCapability(t *testing.T) {
+	whois := &stubWhoIs{fn: func(addr string) (*apitype.WhoIsResponse, error) {
+		if addr != "100.64.0.8:9" {
+			t.Errorf("WhoIs addr = %q", addr)
+		}
+		return who("ada@example.com", "Ada", "ada.example.ts.net.", nil, nil), nil
+	}}
+	cfg := config.Access{
+		Enabled:   true,
+		Mode:      config.AccessModeTsnet,
+		Grants:    config.AccessGrantsIdentity,
+		Autoscope: config.AccessAutoscopeUser,
+	}
+	router := gin.New()
+	router.Use(Middleware(cfg, whois))
+	router.GET("/data", func(c *gin.Context) {
+		ident, ok := FromGin(c)
+		if !ok || ident.DeviceScope == nil || len(ident.DeviceScope.Owners) != 1 {
+			t.Fatalf("identity = %+v", ident)
+		}
+		c.JSON(http.StatusOK, gin.H{"tailnets": ident.Allow.TailnetIDs(), "login": ident.Login})
+	})
+	code, body := do(router, "100.64.0.8:9", "/data", nil)
+	if code != http.StatusOK || !bytes.Contains(body, []byte(`"*"`)) || !bytes.Contains(body, []byte("ada@example.com")) {
+		t.Fatalf("identity only = %d %s", code, body)
+	}
+
+	whois.fn = func(string) (*apitype.WhoIsResponse, error) {
+		return &apitype.WhoIsResponse{}, nil
+	}
+	code, body = do(router, "100.64.0.8:9", "/data", nil)
+	if code != http.StatusForbidden || !bytes.Contains(body, []byte("missing tailscale identity")) {
+		t.Fatalf("empty whois = %d %s", code, body)
+	}
+}
+
 func TestCapabilityPresenceAllowsAllTailnets(t *testing.T) {
 	allow, err := grantsFromValues(nil)
 	if err != nil || !allow.All {

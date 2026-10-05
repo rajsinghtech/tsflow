@@ -27,6 +27,11 @@ const (
 	AccessAutoscopeUser   = "user"
 	AccessAutoscopeGroups = "groups"
 
+	// AccessGrantsRequired demands a capability or a mapped group.
+	// AccessGrantsIdentity allows every tailnet for any resolved identity.
+	AccessGrantsRequired = "required"
+	AccessGrantsIdentity = "identity"
+
 	localWhoIsAuto    = "auto"
 	localWhoIsOff     = "off"
 	localWhoIsRequire = "require"
@@ -57,6 +62,7 @@ type Access struct {
 	TailscaledSocket string
 	LocalWhoIs       string
 	Autoscope        string
+	Grants           string
 	Debug            bool
 }
 
@@ -72,6 +78,7 @@ func (c *Config) loadAccess() Access {
 		TailscaledSocket: strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_TAILSCALED_SOCKET")),
 		LocalWhoIs:       strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_LOCAL_WHOIS")),
 		Autoscope:        strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_AUTOSCOPE")),
+		Grants:           strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_GRANTS")),
 		Debug:            strings.EqualFold(strings.TrimSpace(os.Getenv("TSFLOW_LOG_LEVEL")), "debug"),
 	}
 }
@@ -88,9 +95,19 @@ func (c *Config) prepareAccess() error {
 		return err
 	}
 	access.LocalWhoIs = localWhoIs
+	grants, err := parseGrantsMode(access.Grants)
+	if err != nil {
+		return err
+	}
+	access.Grants = grants
 
 	if !accessRequested(access) {
-		c.Access = Access{Autoscope: AccessAutoscopeOff, LocalWhoIs: localWhoIsAuto, Debug: access.Debug}
+		c.Access = Access{
+			Autoscope:  AccessAutoscopeOff,
+			LocalWhoIs: localWhoIsAuto,
+			Grants:     AccessGrantsRequired,
+			Debug:      access.Debug,
+		}
 		return nil
 	}
 
@@ -108,11 +125,11 @@ func (c *Config) prepareAccess() error {
 		access.CapabilityHeader = DefaultCapabilityHeader
 	}
 
-	grants, err := loadGroupGrants(access.GroupGrantsRaw, access.GroupGrantsFile)
+	groupGrants, err := loadGroupGrants(access.GroupGrantsRaw, access.GroupGrantsFile)
 	if err != nil {
 		return err
 	}
-	access.GroupGrants = grants
+	access.GroupGrants = groupGrants
 
 	if err := validateAccessMode(access, c.TsnetServe); err != nil {
 		return err
@@ -139,7 +156,7 @@ func accessRequested(a Access) bool {
 	if a.Autoscope != "" && !strings.EqualFold(a.Autoscope, AccessAutoscopeOff) && a.Autoscope != "false" && a.Autoscope != "0" {
 		return true
 	}
-	if a.TailscaledSocket != "" || a.CapabilityHeader != "" {
+	if a.TailscaledSocket != "" || a.CapabilityHeader != "" || a.Grants == AccessGrantsIdentity {
 		return true
 	}
 	switch strings.ToLower(a.LocalWhoIs) {
@@ -182,7 +199,7 @@ func validateAccessMode(a Access, tsnetServe bool) error {
 			return errors.New("TSFLOW_ACCESS_LOCAL_WHOIS=require is only valid with TSFLOW_ACCESS_MODE=header")
 		case a.CapabilityHeader != DefaultCapabilityHeader:
 			return errors.New("TSFLOW_ACCESS_CAPABILITY_HEADER is only valid with TSFLOW_ACCESS_MODE=header")
-		case a.Capability == "" && len(a.GroupGrants) == 0:
+		case a.Grants != AccessGrantsIdentity && a.Capability == "" && len(a.GroupGrants) == 0:
 			return errors.New("tsnet access control requires TSFLOW_ACCESS_CAPABILITY or a group grant map")
 		}
 	}
@@ -192,7 +209,7 @@ func validateAccessMode(a Access, tsnetServe bool) error {
 			return errors.New("TSFLOW_ACCESS_MODE=header requires TSFLOW_ACCESS_TRUSTED_PROXIES")
 		}
 		whoIsGroups := a.LocalWhoIs == localWhoIsRequire && len(a.GroupGrants) > 0
-		if a.Capability == "" && a.GroupsHeader == "" && !whoIsGroups {
+		if a.Grants != AccessGrantsIdentity && a.Capability == "" && a.GroupsHeader == "" && !whoIsGroups {
 			return errors.New("header mode requires TSFLOW_ACCESS_CAPABILITY or TSFLOW_ACCESS_GROUPS_HEADER")
 		}
 	}
@@ -220,6 +237,17 @@ func groupSourceAvailable(a Access, tsnetServe bool) bool {
 		return true
 	}
 	return a.Mode == AccessModeHeader && a.LocalWhoIs == localWhoIsRequire
+}
+
+func parseGrantsMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", AccessGrantsRequired:
+		return AccessGrantsRequired, nil
+	case AccessGrantsIdentity:
+		return AccessGrantsIdentity, nil
+	default:
+		return "", errors.New("TSFLOW_ACCESS_GRANTS must be required or identity")
+	}
 }
 
 func parseAutoscope(value string) (string, error) {
