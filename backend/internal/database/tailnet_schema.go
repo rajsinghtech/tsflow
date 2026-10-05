@@ -200,6 +200,11 @@ func (s *SQLiteStore) migrateTailnetSchema(ctx context.Context) error {
 	if !needed {
 		return nil
 	}
+	// The previous release cannot write the migrated tables. Copy the database
+	// before changing it so a rollback can restore that file.
+	if err := s.backupBeforeTailnetMigration(ctx); err != nil {
+		return err
+	}
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {

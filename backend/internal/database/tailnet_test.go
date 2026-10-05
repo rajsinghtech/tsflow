@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,9 @@ func TestFreshSchemaIsTailnetScoped(t *testing.T) {
 	}
 	if !strings.Contains(pairSQL, "WITHOUT ROWID") || !strings.Contains(pairSQL, "tailnet_id") {
 		t.Fatalf("fresh node_pairs schema = %s", pairSQL)
+	}
+	if _, err := os.Stat(migrationBackupPath(store.dbPath)); !os.IsNotExist(err) {
+		t.Fatalf("fresh database wrote a migration backup: %v", err)
 	}
 }
 
