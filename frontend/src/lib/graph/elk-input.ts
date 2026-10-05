@@ -44,11 +44,7 @@ export function calculateNodeDimensions(node: Node): { width: number; height: nu
 	};
 }
 
-export function buildElkLayoutInput(
-	nodes: Node[],
-	edges: Edge[],
-	options: ElkLayoutOptions = {}
-): ElkNode {
+export function layeredLayoutOptions(options: ElkLayoutOptions = {}): LayoutOptions {
 	const layoutOptions: LayoutOptions = {
 		'elk.algorithm': options.algorithm || 'layered',
 		'elk.spacing.nodeNode': (options.nodeSpacing || 150).toString(),
@@ -64,6 +60,16 @@ export function buildElkLayoutInput(
 		layoutOptions['elk.layered.crossingMinimization.strategy'] = 'LAYER_SWEEP';
 		layoutOptions['elk.layered.nodePlacement.strategy'] = 'NETWORK_SIMPLEX';
 	}
+
+	return layoutOptions;
+}
+
+export function buildElkLayoutInput(
+	nodes: Node[],
+	edges: Edge[],
+	options: ElkLayoutOptions = {}
+): ElkNode {
+	const layoutOptions = layeredLayoutOptions(options);
 
 	return {
 		id: 'root',

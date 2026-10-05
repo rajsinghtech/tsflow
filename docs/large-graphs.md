@@ -24,7 +24,7 @@ ELK can do this as hierarchy. `SEPARATE_CHILDREN` lays out one compound node's c
 
 Aggregation is the bundling. Devices collapse by tag, then user, then subnet, and the edges between those groups are the summed traffic. The group graph is the same ELK input the homelab graph uses: layered, top to bottom, splines, network simplex, spacing 150. It runs in the existing ELK worker.
 
-Opening a group is a second ELK run, only for that group's members and the edges that touch them. Neighboring cards are anchors in that run so the members are placed relative to real edges. After ELK returns, those neighbors are put back on their old coordinates and the members shift with them. Nothing else moves. The camera eases the way a selection already does (300ms on first fit, 600ms when a group opens), and the new cards slide out from the group for 300ms.
+Opening a group is one more ELK run over the whole grouped graph, with that group as a compound node (`elk.hierarchyHandling: INCLUDE_CHILDREN`). Members are laid out inside it. Edges that leave the group attach to the compound node, so they meet the group boundary and then the collapsed neighbor. ELK moves the other cards just enough to open a gap. The result is then shifted so the opened group stays centered where it was. Pinning those neighbors at their old coordinates overlaps the cluster, which is why they are not pinned. The camera eases the way a selection already does (300ms on first fit, 600ms when a group opens).
 
 Svelte Flow still draws the cards and the bezier edges, same as a small graph. A group card uses the same frame as a device card. Only cards whose laid-out box meets the viewport are mounted. That cull does not assign positions.
 

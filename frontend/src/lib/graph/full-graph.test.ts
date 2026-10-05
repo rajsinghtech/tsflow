@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Edge, Node } from '@xyflow/svelte';
+import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
 import type { NetworkLink, NetworkNode, TrafficType } from '#lib/types';
 import { buildElkLayoutInput, calculateNodeDimensions } from './elk-input';
 import { edgeStyle, toFlowElements } from './full-graph';
-import { syntheticTailnet } from './synthetic-tailnet';
+import { realisticTailnet, syntheticTailnet } from './synthetic-tailnet';
 import { FULL_GRAPH_NODE_THRESHOLD, usesFullGraph } from './threshold';
 
 function device(partial: Partial<NetworkNode> & Pick<NetworkNode, 'id'>): NetworkNode {
@@ -193,4 +195,22 @@ describe('full graph layout input', () => {
 			legacyElkInput(legacy.nodes, legacy.edges)
 		);
 	});
+
+	it('gives ELK the same input and the same positions for a realistic 1000 node tailnet', async () => {
+		const graph = realisticTailnet(1000);
+		expect(usesFullGraph(graph.nodes.length)).toBe(true);
+		const flow = toFlowElements(graph.nodes, graph.edges);
+		const legacy = legacyFlowElements(graph.nodes, graph.edges);
+		expect(flow).toEqual(legacy);
+		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
+		const previous = legacyElkInput(legacy.nodes, legacy.edges);
+		expect(current).toEqual(previous);
+
+		const elk = new ELK();
+		const laid = await elk.layout(current);
+		const again = await elk.layout(previous as ElkNode);
+		const position = (graphNode: { children?: Array<{ id?: string; x?: number; y?: number }> } | undefined) =>
+			new Map((graphNode?.children ?? []).map((child) => [child.id, { x: child.x, y: child.y }]));
+		expect(position(again)).toEqual(position(laid));
+	}, 30000);
 });

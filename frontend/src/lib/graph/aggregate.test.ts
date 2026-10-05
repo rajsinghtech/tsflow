@@ -8,9 +8,11 @@ import {
 	subnetLabel,
 	tagKey
 } from './aggregate';
-import { GROUP_LAYOUT_OPTIONS, expansionSubgraph, modelToFlow, placeExpandedLayout } from './elk-place';
+import { GROUP_LAYOUT_OPTIONS, boundaryEdges, boxesOverlap, buildCompoundGraph, modelToFlow } from './elk-place';
+import { layeredLayoutOptions } from './elk-input';
 import { toFlowElements } from './full-graph';
-import { syntheticTailnet } from './synthetic-tailnet';
+import { realisticTailnet, syntheticTailnet } from './synthetic-tailnet';
+import ELK from 'elkjs/lib/elk.bundled.js';
 
 function device(partial: Partial<NetworkNode> & Pick<NetworkNode, 'id'>): NetworkNode {
 	return {
@@ -107,14 +109,47 @@ describe('graph grouping', () => {
 	});
 });
 
+describe('realistic tailnet', () => {
+	it('builds hubs, skewed traffic, and a mesh instead of a ring', () => {
+		const graph = realisticTailnet(20_000);
+		expect(graph.nodes).toHaveLength(20_000);
+		const tags = new Set(graph.nodes.flatMap((node) => node.tags.filter((tag) => tag.startsWith('tag:'))));
+		const users = new Set(graph.nodes.map((node) => node.user).filter(Boolean));
+		expect(tags.size).toBeGreaterThan(80);
+		expect(users.size).toBeGreaterThan(100);
+		expect(graph.nodes.some((node) => node.tags.includes('tag:k8s'))).toBe(true);
+		expect(graph.nodes.some((node) => node.tags.includes('tag:dns'))).toBe(true);
+		expect(graph.nodes.some((node) => node.id.startsWith('router-'))).toBe(true);
+
+		const model = buildRenderModel(graph.nodes, graph.edges, new Set());
+		expect(model.groupCount).toBeGreaterThan(12);
+		expect(model.groupCount).toBeLessThan(40);
+		const degree = new Map<string, number>();
+		for (const edge of model.edges) {
+			degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+			degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+		}
+		expect(Math.max(...degree.values())).toBeGreaterThan(4);
+
+		const bytes = graph.edges.map((edge) => edge.totalBytes).sort((a, b) => a - b);
+		const mid = bytes[Math.floor(bytes.length / 2)];
+		expect(bytes[bytes.length - 1]).toBeGreaterThan(mid * 10);
+
+		const k8s = new Set(graph.nodes.filter((node) => node.tags.includes('tag:k8s')).map((node) => node.id));
+		const internal = graph.edges.filter((edge) => k8s.has(edge.source) && k8s.has(edge.target));
+		expect(internal.length).toBeGreaterThan(k8s.size);
+
+		const small = realisticTailnet(1000);
+		expect(small.nodes).toHaveLength(1000);
+		expect(small.edges.length).toBeLessThanOrEqual(2400);
+		expect(buildRenderModel(small.nodes, small.edges, new Set()).groupCount).toBeGreaterThan(10);
+	});
+});
+
 describe('grouped ELK input', () => {
 	it('asks ELK for the same layered layout the homelab graph uses, on groups', () => {
-		const graph = syntheticTailnet(20_000);
+		const graph = realisticTailnet(20_000);
 		const model = buildRenderModel(graph.nodes, graph.edges, new Set());
-		expect(model.deviceCount).toBe(20_000);
-		expect(model.groupCount).toBe(40);
-		expect(model.nodes).toHaveLength(40);
-
 		const devices = new Map(graph.nodes.map((node) => [node.id, node]));
 		const flow = modelToFlow(model, devices);
 		const input = buildElkLayoutInput(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
@@ -124,57 +159,69 @@ describe('grouped ELK input', () => {
 			GROUP_LAYOUT_OPTIONS
 		);
 		expect(input.layoutOptions).toEqual(homelab.layoutOptions);
-		expect(input.children).toHaveLength(40);
+		expect(input.children?.length).toBe(model.nodes.length);
 		expect(input.edges?.length).toBeGreaterThan(0);
-		expect(input.children?.every((child) => String(child.id).startsWith('group:'))).toBe(true);
 	});
 
-	it('keeps neighboring groups fixed when a group is opened', () => {
-		const graph = syntheticTailnet(80);
+	it('puts an opened hub inside a compound and routes outside edges to that boundary', async () => {
+		const graph = realisticTailnet(1000);
 		const devices = new Map(graph.nodes.map((node) => [node.id, node]));
 		const collapsed = buildRenderModel(graph.nodes, graph.edges, new Set());
-		const group = collapsed.nodes.find((node) => node.id === 'group:tag:pool-0');
+		const group = collapsed.nodes.find((node) => node.id === 'group:tag:k8s');
 		expect(group).toBeTruthy();
-		const opened = buildRenderModel(graph.nodes, graph.edges, new Set(['group:tag:pool-0']));
-		const memberIds = new Set(group!.memberIds);
-		const current = new Map(
-			collapsed.nodes.map((node, index) => [
-				node.id,
-				{
-					id: node.id,
-					type: node.kind === 'group' ? 'group' : 'network',
-					position: { x: index * 400, y: 20 },
-					width: 200,
-					height: 80,
-					data: {}
-				}
-			])
-		);
-		const subgraph = expansionSubgraph(opened, memberIds, devices, current);
-		expect(subgraph.anchorIds.length).toBeGreaterThan(0);
-		expect(subgraph.nodes.some((node) => memberIds.has(node.id))).toBe(true);
+		const opened = buildRenderModel(graph.nodes, graph.edges, new Set(['group:tag:k8s']));
+		const compound = buildCompoundGraph(opened, devices, 'group:tag:k8s', group!.memberIds);
+		const homelab = layeredLayoutOptions(GROUP_LAYOUT_OPTIONS);
+		for (const [key, value] of Object.entries(homelab)) {
+			expect(compound.layoutOptions?.[key]).toBe(value);
+		}
+		expect(compound.layoutOptions?.['elk.hierarchyHandling']).toBe('INCLUDE_CHILDREN');
+		const cluster = compound.children?.find((child) => child.id === 'group:tag:k8s');
+		expect(cluster?.children?.map((child) => child.id).sort()).toEqual([...group!.memberIds].sort());
+		expect(cluster?.edges?.length).toBeGreaterThan(0);
+		for (const edge of compound.edges ?? []) {
+			expect(group!.memberIds.includes(String(edge.sources[0]))).toBe(false);
+			expect(group!.memberIds.includes(String(edge.targets[0]))).toBe(false);
+		}
+		const outside = boundaryEdges(opened.edges, new Set(group!.memberIds), 'group:tag:k8s');
+		expect(outside.some((edge) => edge.source === 'group:tag:k8s' || edge.target === 'group:tag:k8s')).toBe(true);
 
-		const kept = new Map([...current.entries()].map(([id, node]) => [id, { x: node.position.x, y: node.position.y }]));
-		const laidOut = subgraph.nodes.map((node, index) => ({
-			id: node.id,
-			x: index * 10,
-			y: index * 5,
-			width: 200,
-			height: 80
+		const elk = new ELK();
+		const laid = await elk.layout(compound);
+		const parent = laid.children?.find((child) => child.id === 'group:tag:k8s');
+		expect(parent?.width).toBeGreaterThan(0);
+		const top = (laid.children ?? []).map((child) => ({
+			x: child.x ?? 0,
+			y: child.y ?? 0,
+			width: child.width ?? 0,
+			height: child.height ?? 0
 		}));
-		const placed = placeExpandedLayout(laidOut, kept, memberIds, {
-			x: kept.get('group:tag:pool-0')!.x,
-			y: kept.get('group:tag:pool-0')!.y,
-			width: 200,
-			height: 80
-		});
-		for (const anchorId of subgraph.anchorIds) {
-			expect(placed.get(anchorId)).toEqual(kept.get(anchorId));
+		for (let i = 0; i < top.length; i++) {
+			for (let j = i + 1; j < top.length; j++) {
+				expect(boxesOverlap(top[i], top[j])).toBe(false);
+			}
 		}
-		for (const memberId of memberIds) {
-			expect(placed.get(memberId)).toBeTruthy();
-			expect(placed.get(memberId)).not.toEqual(kept.get(memberId));
+		const memberBoxes = (parent?.children ?? []).map((member) => ({
+			x: member.x ?? 0,
+			y: member.y ?? 0,
+			width: member.width ?? 0,
+			height: member.height ?? 0
+		}));
+		for (const member of memberBoxes) {
+			expect(member.x).toBeGreaterThanOrEqual(-1);
+			expect(member.y).toBeGreaterThanOrEqual(-1);
+			expect(member.x + member.width).toBeLessThanOrEqual((parent?.width ?? 0) + 1);
+			expect(member.y + member.height).toBeLessThanOrEqual((parent?.height ?? 0) + 1);
 		}
+		for (let i = 0; i < memberBoxes.length; i++) {
+			for (let j = i + 1; j < memberBoxes.length; j++) {
+				expect(boxesOverlap(memberBoxes[i], memberBoxes[j])).toBe(false);
+			}
+		}
+		const xs = new Set(memberBoxes.map((box) => Math.round(box.x / 40)));
+		const ys = new Set(memberBoxes.map((box) => Math.round(box.y / 40)));
+		expect(xs.size).toBeGreaterThan(1);
+		expect(ys.size).toBeGreaterThan(1);
 	});
 
 	it('mounts only cards inside the viewport and does not move the others', () => {

@@ -15,17 +15,18 @@
 	import '@xyflow/svelte/dist/style.css';
 	import { uiStore, themeStore } from '#lib/stores';
 	import type { NetworkLink, NetworkNode as NetworkNodeType } from '#lib/types';
-	import { runElkLayout } from '#lib/utils/elk-layout';
+	import { runElkGraph, runElkLayout } from '#lib/utils/elk-layout';
 	import { boundsOf, buildRenderModel, cullToViewport } from '#lib/graph/aggregate';
 	import {
 		GROUP_LAYOUT_OPTIONS,
-		expansionSubgraph,
+		buildCompoundGraph,
 		modelToFlow,
-		placeExpandedLayout,
+		sceneFromCompound,
 		type LayoutBox
 	} from '#lib/graph/elk-place';
 	import NetworkNode from './NetworkNode.svelte';
 	import GroupNode from './GroupNode.svelte';
+	import ClusterNode from './ClusterNode.svelte';
 
 	interface Props {
 		nodes: NetworkNodeType[];
@@ -36,7 +37,8 @@
 
 	const nodeTypes = {
 		network: NetworkNode as unknown as typeof NetworkNode,
-		group: GroupNode as unknown as typeof GroupNode
+		group: GroupNode as unknown as typeof GroupNode,
+		cluster: ClusterNode as unknown as typeof ClusterNode
 	};
 
 	const flowNodesStore = writable<Node[]>([]);
@@ -60,6 +62,8 @@
 	let requestToken = 0;
 	let mountedKey = '';
 	const groupHome = new Map<string, { x: number; y: number; width?: number; height?: number }>();
+	let flatNodes: Node[] = [];
+	let flatEdges: Edge[] = [];
 	let fitTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let flowApi: {
@@ -84,23 +88,37 @@
 		height: (paneHeight || 800) / (viewZoom || 1)
 	}));
 
-	function nodeBox(node: Node): LayoutBox {
+	function nodeBox(node: Node, origin = { x: 0, y: 0 }): LayoutBox {
 		return {
 			id: node.id,
-			x: node.position.x,
-			y: node.position.y,
+			x: origin.x + node.position.x,
+			y: origin.y + node.position.y,
 			width: (node.width as number) || 220,
 			height: (node.height as number) || 120
 		};
 	}
 
+	function absoluteBoxes(list: Node[]): LayoutBox[] {
+		const parents = new Map(list.filter((node) => !node.parentId).map((node) => [node.id, node]));
+		return list.map((node) => {
+			const parent = node.parentId ? parents.get(node.parentId) : undefined;
+			return nodeBox(node, parent ? { x: parent.position.x, y: parent.position.y } : { x: 0, y: 0 });
+		});
+	}
+
 	$effect(() => {
-		const boxes = sceneNodes.map(nodeBox);
+		const boxes = absoluteBoxes(sceneNodes);
 		const culled = cullToViewport(boxes, sceneEdges, viewport);
 		const key = culled.nodes.map((node) => `${node.id}:${node.x}:${node.y}`).join('|');
 		if (key === mountedKey) return;
 		mountedKey = key;
 		const ids = new Set(culled.nodes.map((node) => node.id));
+		for (const node of sceneNodes) {
+			if (node.parentId && ids.has(node.id)) ids.add(node.parentId);
+		}
+		for (const node of sceneNodes) {
+			if (node.parentId && ids.has(node.parentId)) ids.add(node.id);
+		}
 		flowNodesStore.set(sceneNodes.filter((node) => ids.has(node.id)));
 		flowEdgesStore.set(sceneEdges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)));
 	});
@@ -108,7 +126,7 @@
 	function cameraFor(boxes: LayoutBox[], duration: number) {
 		if (paneWidth === 0 || paneHeight === 0 || boxes.length === 0) return;
 		const bounds = boundsOf(boxes);
-		const next = getViewportForBounds(bounds, paneWidth, paneHeight, 0.55, 1.5, 0.15);
+		const next = getViewportForBounds(bounds, paneWidth, paneHeight, 0.02, 1.25, 0.12);
 		viewX = next.x;
 		viewY = next.y;
 		viewZoom = next.zoom;
@@ -149,9 +167,9 @@
 		const flow = modelToFlow(model, devices);
 		const laid = await runElkLayout(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
 		if (token !== requestToken) return;
-		const boxes = laid.nodes.map(nodeBox);
+		const boxes = laid.nodes.map((node) => nodeBox(node));
 		if (paneWidth > 0 && paneHeight > 0) {
-			const next = getViewportForBounds(boxes.length ? boundsOf(boxes) : { x: 0, y: 0, width: 1, height: 1 }, paneWidth, paneHeight, 0.55, 1.5, 0.15);
+			const next = getViewportForBounds(boxes.length ? boundsOf(boxes) : { x: 0, y: 0, width: 1, height: 1 }, paneWidth, paneHeight, 0.02, 1.25, 0.12);
 			viewX = next.x;
 			viewY = next.y;
 			viewZoom = next.zoom;
@@ -159,6 +177,8 @@
 		}
 		sceneNodes = laid.nodes;
 		sceneEdges = laid.edges;
+		flatNodes = laid.nodes;
+		flatEdges = laid.edges;
 		for (const node of laid.nodes) {
 			const data = node.data as { kind?: string };
 			if (data?.kind === 'group') {
@@ -200,64 +220,42 @@
 				.map((node) => node.id)
 		);
 		if (newMemberIds.size === 0) return;
-		const current = new Map(sceneNodes.map((node) => [node.id, node]));
-		const subgraph = expansionSubgraph(model, newMemberIds, devices, current);
-		const laid = await runElkLayout(subgraph.nodes, subgraph.edges, GROUP_LAYOUT_OPTIONS);
+		const graph = buildCompoundGraph(model, devices, groupId, [...newMemberIds]);
+		const laid = await runElkGraph(graph);
 		if (token !== requestToken) return;
-
-		const kept = new Map(
-			sceneNodes.filter((node) => node.id !== groupId).map((node) => [node.id, { ...node.position }])
-		);
-		const placed = placeExpandedLayout(
-			laid.nodes.map(nodeBox),
-			kept,
-			newMemberIds,
-			home
-		);
-		const byId = new Map(laid.nodes.map((node) => [node.id, node]));
-		const stable = sceneNodes.filter((node) => node.id !== groupId);
-		const finals = [...newMemberIds].map((id) => {
-			const node = byId.get(id)!;
-			const position = placed.get(id) ?? home;
-			return { ...node, position: { x: position.x, y: position.y } };
+		const scene = sceneFromCompound(laid, groupId, home, model, devices, {
+			displayName: data.displayName || groupId,
+			groupKind: (group.data as { groupKind?: string }).groupKind,
+			memberCount: data.memberCount ?? newMemberIds.size
 		});
-		const atGroup = finals.map((node) => ({ ...node, position: { x: home.x, y: home.y } }));
 		animating = true;
-		sceneNodes = [...stable, ...atGroup];
-		sceneEdges = modelToFlow(model, devices).edges;
+		sceneNodes = scene.nodes;
+		sceneEdges = scene.edges;
 		deviceCount = model.deviceCount;
 		groupCount = model.groupCount;
 		expanded = [...expanded, { id: groupId, label: data.displayName || groupId }];
+		expandMs = Math.round(performance.now() - started);
 		await tick();
-		requestAnimationFrame(() => {
-			sceneNodes = [...stable, ...finals];
-			expandMs = Math.round(performance.now() - started);
-			cameraFor(finals.map(nodeBox), 600);
-			if (fitTimer) clearTimeout(fitTimer);
-			fitTimer = setTimeout(() => {
-				animating = false;
-			}, 650);
-		});
+		cameraFor(
+			scene.nodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
+			600
+		);
+		if (fitTimer) clearTimeout(fitTimer);
+		fitTimer = setTimeout(() => {
+			animating = false;
+		}, 650);
 	}
 
 	function collapseGroup(groupId: string) {
-		const nextExpanded = expanded.filter((item) => item.id !== groupId);
-		const devices = new Map(nodes.map((node) => [node.id, node]));
-		const model = buildRenderModel(nodes, edges, new Set(nextExpanded.map((item) => item.id)));
-		const flow = modelToFlow(model, devices);
-		const previous = new Map(sceneNodes.map((node) => [node.id, node]));
-		sceneNodes = flow.nodes.map((node) => {
-			const existing = previous.get(node.id);
-			if (existing) return { ...node, position: existing.position, width: existing.width, height: existing.height };
-			const home = groupHome.get(node.id);
-			if (home) return { ...node, position: { x: home.x, y: home.y }, width: home.width, height: home.height };
-			return node;
-		});
-		sceneEdges = flow.edges;
+		sceneNodes = flatNodes.map((node) => ({ ...node, position: { ...node.position } }));
+		sceneEdges = flatEdges;
+		const model = buildRenderModel(nodes, edges, new Set());
 		groupCount = model.groupCount;
-		expanded = nextExpanded;
-		const group = sceneNodes.find((node) => node.id === groupId);
-		if (group) cameraFor([nodeBox(group)], 400);
+		expanded = expanded.filter((item) => item.id !== groupId);
+		cameraFor(
+			sceneNodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
+			400
+		);
 	}
 
 	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
@@ -266,12 +264,16 @@
 			void expandGroup(node.id);
 			return;
 		}
+		if (data?.kind === 'cluster') return;
 		uiStore.selectNode(node.id);
 	}
 
 	function handlePaneClick() {
 		uiStore.clearSelection();
-		cameraFor(sceneNodes.map(nodeBox), 400);
+		cameraFor(
+			sceneNodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
+			400
+		);
 	}
 
 	function onMove(_event: MouseEvent | TouchEvent | null, next: { x: number; y: number; zoom: number }) {
@@ -283,7 +285,12 @@
 	function onInit() {
 		const api = useSvelteFlow();
 		flowApi = api;
-		if (sceneNodes.length > 0) cameraFor(sceneNodes.map(nodeBox), 300);
+		if (sceneNodes.length > 0) {
+			cameraFor(
+				sceneNodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
+				300
+			);
+		}
 	}
 </script>
 
@@ -329,8 +336,8 @@
 				edges={$flowEdgesStore}
 				{nodeTypes}
 				{colorMode}
-				minZoom={0.05}
-				maxZoom={1.5}
+				minZoom={0.02}
+				maxZoom={2}
 				onlyRenderVisibleElements={true}
 				proOptions={{ hideAttribution: true }}
 				onnodeclick={handleNodeClick}

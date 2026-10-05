@@ -113,6 +113,16 @@ let mainThreadElk: InstanceType<typeof ELK> | null = null;
 
 // Same ELK input and worker as applyElkLayout, without the homelab size cap
 // and without the grid fallback. Used for grouped graphs and for one opened group.
+export async function runElkGraph(graph: ElkNode): Promise<ElkNode> {
+	try {
+		return await elk.layout(graph);
+	} catch (error) {
+		console.error('ELK worker failed, running ELK on the main thread:', error);
+		if (!mainThreadElk) mainThreadElk = new ELK();
+		return await mainThreadElk.layout(graph);
+	}
+}
+
 export async function runElkLayout(
 	nodes: Node[],
 	edges: Edge[],
@@ -122,14 +132,6 @@ export async function runElkLayout(
 		return { nodes: [], edges: [] };
 	}
 
-	const elkGraph = buildElkLayoutInput(nodes, edges, options);
-	try {
-		const layoutedGraph = await elk.layout(elkGraph);
-		return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
-	} catch (error) {
-		console.error('ELK worker failed, running ELK on the main thread:', error);
-		if (!mainThreadElk) mainThreadElk = new ELK();
-		const layoutedGraph = await mainThreadElk.layout(elkGraph);
-		return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
-	}
+	const layoutedGraph = await runElkGraph(buildElkLayoutInput(nodes, edges, options));
+	return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
 }
