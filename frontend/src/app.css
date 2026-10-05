@@ -38,6 +38,12 @@
 
 	/* Policy graph edge colors */
 	--color-edge-relation: #9ca3af;
+
+	/* Policy neutrals. Light enough to read on the dark card. */
+	--color-policy-ip: #d1d5db;
+	--color-policy-cidr: #d1d5db;
+	--color-policy-wildcard: #e5e7eb;
+	--color-policy-unknown: #f4f4f5;
 }
 
 :root.light {
@@ -75,6 +81,12 @@
 
 	/* Policy graph edge colors - darker for light mode contrast */
 	--color-edge-relation: #52525b;
+
+	/* Policy neutrals stay dark on white so existing light-mode contrast is unchanged. */
+	--color-policy-ip: #4b5563;
+	--color-policy-cidr: #4b5563;
+	--color-policy-wildcard: #374151;
+	--color-policy-unknown: #111827;
 }
 
 html {

@@ -1,16 +1,24 @@
 import ELK, { type ElkNode, type ElkExtendedEdge, type LayoutOptions } from 'elkjs/lib/elk.bundled.js';
 import type { Node, Edge } from '@xyflow/svelte';
 import type { GraphNode, GraphEdge } from '#lib/policy-engine/types';
+import { collectSelfAccessByNode, isSelfAccessEdge } from './self-access';
 
-const elk = new ELK({
-	workerFactory: () => {
-		try {
-			return new Worker(new URL('elkjs/lib/elk-worker.min.js', import.meta.url), { type: 'module' });
-		} catch {
-			throw new Error('Failed to create ELK worker for policy layout');
-		}
+let elk: InstanceType<typeof ELK> | null = null;
+
+function getElk(): InstanceType<typeof ELK> {
+	if (!elk) {
+		elk = new ELK({
+			workerFactory: () => {
+				try {
+					return new Worker(new URL('elkjs/lib/elk-worker.min.js', import.meta.url), { type: 'module' });
+				} catch {
+					throw new Error('Failed to create ELK worker for policy layout');
+				}
+			}
+		});
 	}
-});
+	return elk;
+}
 
 export const NODE_COLORS: Record<string, string> = {
 	user: '#f59e0b',
@@ -20,10 +28,12 @@ export const NODE_COLORS: Record<string, string> = {
 	host: '#2563eb',
 	ipset: '#0891b2',
 	service: '#dc2626',
-	ip: '#4b5563',
-	cidr: '#4b5563',
-	wildcard: '#374151',
-	unknown: '#111827'
+	// Theme variables: dark ink on light backgrounds, light ink on dark ones.
+	// See --color-policy-* in app.css.
+	ip: 'var(--color-policy-ip)',
+	cidr: 'var(--color-policy-cidr)',
+	wildcard: 'var(--color-policy-wildcard)',
+	unknown: 'var(--color-policy-unknown)'
 };
 
 export const EDGE_STYLES: Record<string, { color: string; strokeDasharray?: string; width: number; opacity: number }> = {
@@ -74,11 +84,42 @@ export function isFastRenderMode(nodeCount: number, edgeCount: number): boolean 
 	return nodeCount >= FAST_RENDER_NODE_THRESHOLD || edgeCount >= FAST_RENDER_EDGE_THRESHOLD;
 }
 
-function policyNodeDimensions(node: Node): { width: number; height: number } {
-	const label = (node.data as any)?.label ?? '';
+/** Extra width so a same-line self badge fits without covering the label. */
+export const SELF_ACCESS_BADGE_ALLOWANCE = 56;
+
+export function estimatePolicyNodeSize(label: string, hasSelfAccess = false): { width: number; height: number } {
+	const extra = hasSelfAccess ? SELF_ACCESS_BADGE_ALLOWANCE : 0;
 	return {
-		width: Math.max(100, Math.min(220, label.length * 7.5 + 30)),
+		width: Math.max(100, Math.min(220, label.length * 7.5 + 30 + extra)),
 		height: 32
+	};
+}
+
+function policyNodeDimensions(node: Node): { width: number; height: number } {
+	const data = node.data as { label?: string; selfAccess?: unknown };
+	return estimatePolicyNodeSize(data?.label ?? '', Boolean(data?.selfAccess));
+}
+
+/**
+ * Convert a policy graph for the canvas.
+ * Self-access edges are omitted so the layout does not draw a stub under the
+ * node. Their ports and protocols are attached to the source node instead.
+ */
+export function buildPolicyFlow(nodes: GraphNode[], edges: GraphEdge[]): { nodes: Node[]; edges: Edge[] } {
+	const selfAccess = collectSelfAccessByNode(nodes, edges);
+	return {
+		nodes: policyNodesToXYFlow(nodes).map((node) => {
+			const summary = selfAccess.get(node.id);
+			if (!summary) return node;
+			return {
+				...node,
+				data: {
+					...node.data,
+					selfAccess: summary
+				}
+			};
+		}),
+		edges: policyEdgesToXYFlow(edges.filter((edge) => !isSelfAccessEdge(edge)))
 	};
 }
 
@@ -116,7 +157,7 @@ export async function applyPolicyElkLayout(
 	};
 
 	try {
-		const result = await elk.layout(elkGraph);
+		const result = await getElk().layout(elkGraph);
 		const layoutedNodes = nodes.map((node) => {
 			const ln = result.children?.find((n) => n.id === node.id);
 			return {

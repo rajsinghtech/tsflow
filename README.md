@@ -62,6 +62,31 @@ TSFlow supports OAuth (recommended) or API key authentication.
 2. Create a new API key
 3. Set `TAILSCALE_API_KEY`
 
+### Several tailnets
+
+The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. The current API and UI read only id `default`, so include that id when those routes should keep showing a network. Secrets are not written in the file. Each entry points at an environment variable or a file.
+
+```yaml
+tailnets:
+  - id: default
+    tailnet: example.com
+    api_key_env: DEFAULT_TAILSCALE_API_KEY
+    s3_prefix: network/
+  - id: lab
+    tailnet: lab.example.com
+    oauth_client_id_file: /secrets/lab/client-id
+    oauth_client_secret_file: /secrets/lab/client-secret
+    s3_prefix: lab/network/
+```
+
+`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret.
+
+JSON uses the same fields:
+
+```json
+{"tailnets":[{"id":"default","tailnet":"example.com","api_key_env":"DEFAULT_TAILSCALE_API_KEY"}]}
+```
+
 ### Environment Variables
 
 #### Tailscale Authentication
@@ -74,6 +99,7 @@ TSFlow supports OAuth (recommended) or API key authentication.
 | `TAILSCALE_API_KEY` | API key (alternative to OAuth) | - |
 | `TAILSCALE_TAILNET` | Tailnet name (`-` for auto-detect) | `-` |
 | `TAILSCALE_API_URL` | API endpoint | `https://api.tailscale.com` |
+| `TSFLOW_TAILNETS_FILE` | YAML or JSON list of tailnets. Do not combine with the single-tailnet variables above. | - |
 
 #### Server Settings
 
@@ -91,7 +117,7 @@ TSFlow can embed a Tailscale node and serve itself directly on your tailnet, eli
 | `TSFLOW_SERVE` | Enable tsnet serve mode | `false` |
 | `TSFLOW_HOSTNAME` | MagicDNS hostname on the tailnet | `tsflow` |
 | `TSFLOW_TAGS` | Comma-separated ACL tags (e.g. `tag:tsflow`) | - |
-| `TSFLOW_FUNNEL` | Expose via Tailscale Funnel | `false` |
+| `TSFLOW_FUNNEL` | Expose via Tailscale Funnel. Refused when more than one tailnet is configured. | `false` |
 | `TSFLOW_STATE_DIR` | tsnet state persistence directory | `./data/tsnet-state` |
 
 ##### Workload Identity Federation
