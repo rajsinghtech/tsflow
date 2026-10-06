@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	headerUserLogin = "Tailscale-User-Login"
-	headerUserName  = "Tailscale-User-Name"
 	headerForwarded = "X-Forwarded-For"
 )
 
@@ -122,8 +120,8 @@ func resolveWhoIs(ctx context.Context, who WhoIsClient, addr string, cfg config.
 }
 
 func resolveHeaders(r *http.Request, cfg config.Access) (Identity, error) {
-	login := decodeHeader(r.Header.Get(headerUserLogin))
-	name := decodeHeader(r.Header.Get(headerUserName))
+	login := decodeHeader(r.Header.Get(configuredHeader(cfg.UserHeader, config.DefaultUserHeader)))
+	name := decodeHeader(r.Header.Get(configuredHeader(cfg.NameHeader, config.DefaultNameHeader)))
 	groups := groupHeader(r, cfg)
 	if cfg.Grants == config.AccessGrantsIdentity {
 		if login == "" {
@@ -284,6 +282,17 @@ func mergeAllow(dst *Allow, src Allow) {
 		}
 		dst.ids[id] = struct{}{}
 	}
+}
+
+// configuredHeader returns the operator's header, or the Tailscale Serve
+// default when that field is empty. Empty covers Access values that never
+// went through prepareAccess. A configured name is used alone. The default
+// is not a fallback.
+func configuredHeader(configured, fallback string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	return fallback
 }
 
 func groupHeader(r *http.Request, cfg config.Access) []string {

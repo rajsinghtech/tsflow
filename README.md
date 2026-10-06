@@ -227,7 +227,7 @@ The empty object allows every configured tailnet. `group:ops` can see all of the
 
 **Reverse proxy.** Use this when Tailscale Serve, or Caddy with the Tailscale plugin, already authenticated the viewer. Set `TSFLOW_ACCESS_MODE=header` and `TSFLOW_ACCESS_TRUSTED_PROXIES` to the proxy CIDRs. Identity headers are trusted only from those CIDRs. If the proxy dials localhost over IPv6, include `::1/128` next to `127.0.0.1/32`. The same rule applies to the groups header. A client that is not in the list cannot supply `Tailscale-User-Login`, `Tailscale-User-Name`, the capability header, or the groups header. Those values are ignored, and the request is denied.
 
-Tailscale Serve sends `Tailscale-User-Login` and `Tailscale-User-Name`. To also send capabilities, pass `--accept-app-caps` with the same capability name. Serve puts them in `Tailscale-App-Capabilities`. Override that name with `TSFLOW_ACCESS_CAPABILITY_HEADER` if your proxy uses another header.
+Tailscale Serve sends `Tailscale-User-Login` and `Tailscale-User-Name`. If your proxy sends identity under other names, set `TSFLOW_ACCESS_USER_HEADER` (login, for example `X-Tailscale-User`) and `TSFLOW_ACCESS_NAME_HEADER` (display name, for example `X-Tailscale-Name`). Point them at headers the proxy always overwrites, never at one a client can pass through. A custom header replaces the default for that field, and the default name is not read as a fallback. To also send capabilities, pass `--accept-app-caps` with the same capability name. Serve puts them in `Tailscale-App-Capabilities`. Override that name with `TSFLOW_ACCESS_CAPABILITY_HEADER` if your proxy uses another header.
 
 ```bash
 tailscale serve --accept-app-caps=example.com/cap/tsflow --https=443 http://127.0.0.1:8080

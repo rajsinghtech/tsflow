@@ -54,6 +54,27 @@ func who(login, name, node string, groups []string, caps tailcfg.PeerCapMap) *ap
 	}
 }
 
+func headerIdentityConfig(userHeader, nameHeader string) config.Access {
+	cfg := &config.Config{
+		TailscaleAPIKey: "key",
+		TailscaleAPIURL: "https://api.tailscale.com",
+		Port:            "8080",
+		PollInterval:    "5m",
+		InitialBackfill: "6h",
+		Access: config.Access{
+			Mode:           config.AccessModeHeader,
+			TrustedProxies: "10.0.0.0/8",
+			Grants:         config.AccessGrantsIdentity,
+			UserHeader:     userHeader,
+			NameHeader:     nameHeader,
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		panic(err)
+	}
+	return cfg.Access
+}
+
 func headerConfig() config.Access {
 	cfg := &config.Config{
 		TailscaleAPIKey: "key",
@@ -219,6 +240,97 @@ func TestHeaderModeTrustsOnlyConfiguredProxies(t *testing.T) {
 	if code != http.StatusOK || !bytes.Contains(body, []byte(`"alpha"`)) || bytes.Contains(body, []byte(`"*"`)) {
 		t.Fatalf("capability only = %d %s", code, body)
 	}
+}
+
+func TestHeaderIdentityNames(t *testing.T) {
+	routerFor := func(cfg config.Access) http.Handler {
+		router := gin.New()
+		router.Use(Middleware(cfg, nil))
+		router.GET("/data", func(c *gin.Context) {
+			ident, _ := FromGin(c)
+			c.JSON(http.StatusOK, gin.H{"login": ident.Login, "name": ident.Name})
+		})
+		return router
+	}
+	identity := func(t *testing.T, cfg config.Access, headers map[string]string) (int, string, string) {
+		t.Helper()
+		code, body := do(routerFor(cfg), "10.1.2.3:443", "/data", headers)
+		if code != http.StatusOK {
+			return code, "", string(body)
+		}
+		var payload struct {
+			Login string `json:"login"`
+			Name  string `json:"name"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return code, payload.Login, payload.Name
+	}
+
+	t.Run("custom user header", func(t *testing.T) {
+		cfg := headerIdentityConfig("X-Tailscale-User", "")
+		code, login, name := identity(t, cfg, map[string]string{
+			"X-Tailscale-User":     "ada@example.com",
+			"Tailscale-User-Login": "mallory@example.com",
+			"Tailscale-User-Name":  "Ada Lovelace",
+		})
+		if code != http.StatusOK || login != "ada@example.com" || name != "Ada Lovelace" {
+			t.Fatalf("custom user header = %d login=%q name=%q", code, login, name)
+		}
+
+		code, body := do(routerFor(cfg), "10.1.2.3:443", "/data", map[string]string{
+			"Tailscale-User-Login": "ada@example.com",
+			"Tailscale-User-Name":  "Ada Lovelace",
+		})
+		if code != http.StatusForbidden || !bytes.Contains(body, []byte("missing tailscale identity")) || bytes.Contains(body, []byte("ada@example.com")) {
+			t.Fatalf("default login must not be a fallback: %d %s", code, body)
+		}
+	})
+
+	t.Run("custom name header", func(t *testing.T) {
+		cfg := headerIdentityConfig("", "X-Tailscale-Name")
+		code, login, name := identity(t, cfg, map[string]string{
+			"Tailscale-User-Login": "ada@example.com",
+			"X-Tailscale-Name":     "Ada Lovelace",
+			"Tailscale-User-Name":  "Mallory",
+		})
+		if code != http.StatusOK || login != "ada@example.com" || name != "Ada Lovelace" {
+			t.Fatalf("custom name header = %d login=%q name=%q", code, login, name)
+		}
+
+		code, login, name = identity(t, cfg, map[string]string{
+			"Tailscale-User-Login": "ada@example.com",
+			"Tailscale-User-Name":  "Mallory",
+		})
+		if code != http.StatusOK || login != "ada@example.com" || name != "" {
+			t.Fatalf("default name must not be a fallback: %d login=%q name=%q", code, login, name)
+		}
+	})
+
+	t.Run("defaults", func(t *testing.T) {
+		cfg := headerIdentityConfig("", "")
+		if cfg.UserHeader != config.DefaultUserHeader || cfg.NameHeader != config.DefaultNameHeader {
+			t.Fatalf("prepared headers = %q %q", cfg.UserHeader, cfg.NameHeader)
+		}
+		headers := map[string]string{
+			"Tailscale-User-Login": "ada@example.com",
+			"Tailscale-User-Name":  "Ada Lovelace",
+			"X-Tailscale-User":     "mallory@example.com",
+			"X-Tailscale-Name":     "Mallory",
+		}
+		code, login, name := identity(t, cfg, headers)
+		if code != http.StatusOK || login != "ada@example.com" || name != "Ada Lovelace" {
+			t.Fatalf("defaults = %d login=%q name=%q", code, login, name)
+		}
+
+		cfg.UserHeader = ""
+		cfg.NameHeader = ""
+		code, login, name = identity(t, cfg, headers)
+		if code != http.StatusOK || login != "ada@example.com" || name != "Ada Lovelace" {
+			t.Fatalf("unset headers = %d login=%q name=%q", code, login, name)
+		}
+	})
 }
 
 func TestHeaderWhoIsUsesForwardedPeer(t *testing.T) {
