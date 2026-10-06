@@ -12,9 +12,6 @@ func (s *SQLiteStore) GetPollState(ctx context.Context, tailnetID string) (*Poll
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var state PollState
 	var lastPollEnd, updatedAt sql.NullString
 	err := s.db.QueryRowContext(ctx,
@@ -39,9 +36,9 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, las
 	if err := checkTailnetID(tailnetID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return upsertPollCursor(ctx, s.db, tailnetID, lastPollEnd)
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
+	return upsertPollCursor(ctx, s.writer, tailnetID, lastPollEnd)
 }
 
 type sqlExecer interface {
@@ -74,9 +71,6 @@ func (s *SQLiteStore) IsObjectIngested(ctx context.Context, tailnetID string, ke
 	if err := checkTailnetID(tailnetID); err != nil {
 		return false, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var exists int
 	err := s.db.QueryRowContext(ctx,
 		"SELECT 1 FROM ingested_objects WHERE tailnet_id = ? AND object_key = ? LIMIT 1",
@@ -99,9 +93,6 @@ func (s *SQLiteStore) GetObjectsNeedingMetadata(ctx context.Context, tailnetID s
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if limit <= 0 {
 		return []string{}, nil
 	}
@@ -154,10 +145,10 @@ func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, tailnetID 
 	if key == "" {
 		return fmt.Errorf("object key is required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin metadata hydration transaction: %w", err)
 	}
@@ -165,7 +156,7 @@ func (s *SQLiteStore) MarkObjectMetadataHydrated(ctx context.Context, tailnetID 
 	if err := recordObjectMetadataTx(ctx, tx, tailnetID, key, nodeIDs); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitWrite(tx, tailnetID); err != nil {
 		return fmt.Errorf("failed to commit metadata hydration: %w", err)
 	}
 	return nil
@@ -258,10 +249,10 @@ func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, tailnetID string, 
 	if len(nodes) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -269,16 +260,13 @@ func (s *SQLiteStore) UpsertNodeMetadata(ctx context.Context, tailnetID string, 
 	if err := upsertNodeMetadataTx(ctx, tx, tailnetID, nodes); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 func (s *SQLiteStore) GetNodeMetadata(ctx context.Context, tailnetID string) ([]NodeMetadata, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT node_id, name, hostname, owner, ips, tags, updated_at
 		FROM node_metadata
@@ -316,9 +304,6 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*Data
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var minBucket, maxBucket sql.NullInt64
 	var count int64
 	err := s.db.QueryRowContext(ctx,
@@ -350,10 +335,10 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 		return 0, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin cleanup transaction: %w", err)
 	}
@@ -393,7 +378,7 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 	); err != nil {
 		return 0, fmt.Errorf("failed to cleanup ingested_objects: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitWrite(tx, tailnetID); err != nil {
 		return 0, fmt.Errorf("failed to commit cleanup: %w", err)
 	}
 	return total, nil
@@ -406,29 +391,32 @@ func (s *SQLiteStore) GetStats(ctx context.Context, tailnetID string) (map[strin
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	tableCounts := make(map[string]int64)
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats", "ingested_objects", "node_metadata"} {
 		var count int64
-		if err := s.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE tailnet_id = ?", table), tailnetID).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE tailnet_id = ?", table), tailnetID).Scan(&count); err != nil {
 			return nil, fmt.Errorf("failed to count %s: %w", table, err)
 		}
 		tableCounts[table] = count
 	}
 
 	var pageCount, pageSize int64
-	if err := s.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+	if err := tx.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
 		return nil, fmt.Errorf("failed to read database page count: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+	if err := tx.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
 		return nil, fmt.Errorf("failed to read database page size: %w", err)
 	}
 
 	var minB, maxB sql.NullInt64
 	var cnt int64
-	if err := s.db.QueryRowContext(ctx,
+	if err := tx.QueryRowContext(ctx,
 		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?", tailnetID,
 	).Scan(&minB, &maxB, &cnt); err != nil {
 		return nil, fmt.Errorf("failed to read database data range: %w", err)
