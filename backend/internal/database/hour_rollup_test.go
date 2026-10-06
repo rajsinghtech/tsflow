@@ -163,6 +163,53 @@ func TestHourRollupQueriesMatchAcrossTailnetsEdgesAndRetention(t *testing.T) {
 	}
 }
 
+func TestObjectStoreCursorClosesMinutesForThatTailnet(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	const base int64 = 1_699_999_200
+	ingest := func(tailnet string, txBytes int64) {
+		t.Helper()
+		// Object-store commits leave PollEnd zero so a later gap is not skipped.
+		if err := store.CommitObjectIngest(ctx, tailnet, ObjectIngestResult{
+			Key: "network/hour.ndjson",
+			NodePairs: []NodePairAggregate{{
+				Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual",
+				TxBytes: txBytes, RxBytes: 1, TxPkts: 1, RxPkts: 1, FlowCount: 1,
+				Protocols: "[6]", ProtocolBytes: `{"6":2}`,
+				Ports: `[{"port":443,"proto":6,"bytes":2}]`,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ingest("alpha", 10)
+	ingest("beta", 40)
+	for _, tailnetID := range []string{"alpha", "beta"} {
+		mark, err := readHourMark(ctx, store.db, tailnetID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mark != -1 {
+			t.Fatalf("%s mark = %d before the cursor moved", tailnetID, mark)
+		}
+	}
+	if err := store.UpdatePollState(ctx, "alpha", time.Unix(base+3600, 0).UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var alphaHours, betaHours int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_pair_hours WHERE tailnet_id = 'alpha'`).Scan(&alphaHours); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_pair_hours WHERE tailnet_id = 'beta'`).Scan(&betaHours); err != nil {
+		t.Fatal(err)
+	}
+	if alphaHours != 1 || betaHours != 0 {
+		t.Fatalf("hourly rows alpha=%d beta=%d", alphaHours, betaHours)
+	}
+	assertSamePairAPI(t, store, "alpha", time.Unix(base, 0).UTC(), time.Unix(base+3600, 0).UTC())
+	assertSamePairAPI(t, store, "beta", time.Unix(base, 0).UTC(), time.Unix(base+3600, 0).UTC())
+}
+
 func TestHourRollupClosesMinutesOnTheHourAndAcceptsLateDeltas(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

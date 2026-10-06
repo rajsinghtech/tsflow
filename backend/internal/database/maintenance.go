@@ -38,7 +38,24 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, las
 	}
 	unlock := s.lockTailnet(tailnetID)
 	defer unlock()
-	return upsertPollCursor(ctx, s.writer, tailnetID, lastPollEnd)
+
+	tx, err := s.beginWrite(ctx, tailnetID)
+	if err != nil {
+		return fmt.Errorf("failed to begin poll cursor update: %w", err)
+	}
+	defer tx.Rollback()
+	if err := upsertPollCursor(ctx, tx, tailnetID, lastPollEnd); err != nil {
+		return err
+	}
+	// Object-store polls commit each object without a poll end, then move the
+	// cursor once the batch has been examined. Closing minutes here rolls that
+	// tailnet's pairs up to the same cursor the API poll uses.
+	if !lastPollEnd.IsZero() {
+		if err := rollClosedMinutes(ctx, tx, tailnetID, lastPollEnd.UTC().Unix()); err != nil {
+			return err
+		}
+	}
+	return s.commitWrite(tx, tailnetID)
 }
 
 type sqlExecer interface {
