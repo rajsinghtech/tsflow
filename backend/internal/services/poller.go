@@ -23,9 +23,9 @@ type PollerConfig struct {
 	CleanupInterval time.Duration
 	// DeviceCacheRefresh is how often to refresh device cache
 	DeviceCacheRefresh time.Duration
-	// FlowBackend identifies where flow logs come from: "api" or "s3".
+	// FlowBackend identifies where flow logs come from: "api", "s3", or "gcs".
 	FlowBackend string
-	// ObjectStore is used when FlowBackend is "s3".
+	// ObjectStore is used when FlowBackend is "s3" or "gcs".
 	ObjectStore ObjectStoreConfig
 	// TailnetID selects the rows this poller reads and writes. Empty means
 	// the default tailnet, which is what a single-tailnet process uses.

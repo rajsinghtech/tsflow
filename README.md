@@ -81,7 +81,35 @@ tailnets:
     s3_prefix: lab/network/
 ```
 
-`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
+`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `prefix` is the same field. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
+
+An entry can also say where its flow logs live. `flow_backend` is `api`, `s3`, or `gcs`. `bucket`, `region`, `endpoint`, and `s3_auth` (`static`, `aws_default`, or `gcs_adc`) override the matching process settings. A field that is left out inherits the process value, so existing files that only set `s3_prefix` stay valid. `role_arn` with `web_identity_token_file` assumes that AWS role from the OIDC token in the file (`AssumeRoleWithWebIdentity`). That client does not read `AWS_ROLE_ARN` or `AWS_WEB_IDENTITY_TOKEN_FILE`, so two tailnets can use two token files. Static object-store keys stay on the process.
+
+```yaml
+tailnets:
+  - id: prod
+    tailnet: prod.example.com
+    api_key_env: PROD_TAILSCALE_API_KEY
+    flow_backend: gcs
+    bucket: example-prod-flow-logs
+    prefix: network/
+  - id: staging
+    tailnet: staging.example.com
+    api_key_env: STAGING_TAILSCALE_API_KEY
+    flow_backend: s3
+    s3_auth: aws_default
+    bucket: example-staging-flow-logs
+    region: us-east-1
+    role_arn: arn:aws:iam::123456789012:role/tsflow-reader
+    web_identity_token_file: /var/run/tsflow/staging/gcp-token
+    prefix: staging/network/
+  - id: lab
+    tailnet: lab.example.com
+    api_key_env: LAB_TAILSCALE_API_KEY
+    flow_backend: api
+```
+
+`prod` reads a GCS bucket with Application Default Credentials. `staging` assumes a role in another account with a Google-issued ID token. `lab` has no streaming bucket and uses the Tailscale API logs endpoint.
 
 JSON uses the same fields:
 
@@ -309,7 +337,8 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
 | `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
 | `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |
-| `TSFLOW_S3_ROLE_ARN` | Optional role to assume when auth is `aws_default` | - |
+| `TSFLOW_S3_ROLE_ARN` | Optional role to assume when auth is `aws_default`. With a web identity token file this is `AssumeRoleWithWebIdentity`. | - |
+| `TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE` | OIDC token file used to assume `TSFLOW_S3_ROLE_ARN`. A tailnets entry can set its own file. | - |
 | `TSFLOW_S3_BUCKET` | S3/Garage bucket containing exported flow logs | `tailscale-logs` |
 | `TSFLOW_S3_PREFIX` | Object prefix for network flow objects | `network/` |
 | `TSFLOW_S3_ENDPOINT` | S3-compatible endpoint URL | - |

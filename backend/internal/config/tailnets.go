@@ -35,11 +35,24 @@ type TailnetSpec struct {
 	WIFIDToken     string
 	WIFIDTokenFile string
 	// S3Prefix overrides the process object-store prefix when non-empty.
+	// The tailnets file accepts prefix and s3_prefix as the same field.
 	S3Prefix string
+	// Flow fields override the process flow source when non-empty. An empty
+	// field inherits TSFLOW_FLOW_BACKEND, TSFLOW_S3_BUCKET, TSFLOW_S3_REGION,
+	// TSFLOW_S3_ENDPOINT, TSFLOW_S3_AUTH, TSFLOW_S3_ROLE_ARN, or
+	// TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE.
+	FlowBackend          string
+	Bucket               string
+	Region               string
+	Endpoint             string
+	ObjectStoreAuth      string
+	RoleARN              string
+	WebIdentityTokenFile string
 }
 
 // ServiceConfig returns the Tailscale client settings for this tailnet.
-// Poll intervals and the object store stay on the process config.
+// Poll intervals stay on the process config. The registry applies flow
+// source overrides from this spec.
 func (s TailnetSpec) ServiceConfig(global *Config) *Config {
 	apiURL := s.APIURL
 	if apiURL == "" && global != nil {
@@ -170,6 +183,16 @@ type tailnetFileEntry struct {
 	OAuthClientSecretFile string
 	OAuthScopes           []string
 	S3Prefix              string
+	s3PrefixSet           bool
+	Prefix                string
+	prefixSet             bool
+	FlowBackend           string
+	Bucket                string
+	Region                string
+	Endpoint              string
+	ObjectStoreAuth       string
+	RoleARN               string
+	WebIdentityTokenFile  string
 	Auth                  *tailnetAuthBlock
 }
 
@@ -251,8 +274,7 @@ func (e tailnetFileEntry) resolve(index int, global *Config) (TailnetSpec, error
 		mode = TailscaleAuthOAuth
 	}
 	scopes := e.scopesOrDefault(global)
-	prefix := strings.TrimSpace(e.S3Prefix)
-	return TailnetSpec{
+	return e.finish(where, TailnetSpec{
 		ID:                id,
 		Name:              name,
 		APIURL:            apiURL,
@@ -261,8 +283,7 @@ func (e tailnetFileEntry) resolve(index int, global *Config) (TailnetSpec, error
 		OAuthClientSecret: oauthSecret,
 		OAuthScopes:       scopes,
 		AuthMode:          mode,
-		S3Prefix:          prefix,
-	}, nil
+	}, global)
 }
 
 func (e tailnetFileEntry) hasFlatCredentials() bool {
@@ -295,7 +316,6 @@ func (e tailnetFileEntry) resolveAuthBlock(where, id, name, apiURL string, globa
 		APIURL:      apiURL,
 		OAuthScopes: scopes,
 		AuthMode:    authType,
-		S3Prefix:    strings.TrimSpace(e.S3Prefix),
 	}
 	switch authType {
 	case TailscaleAuthAPIKey:
@@ -310,7 +330,7 @@ func (e tailnetFileEntry) resolveAuthBlock(where, id, name, apiURL string, globa
 			return TailnetSpec{}, fmt.Errorf("%s is missing credentials", where)
 		}
 		spec.APIKey = apiKey
-		return spec, nil
+		return e.finish(where, spec, global)
 	case TailscaleAuthOAuth:
 		if err := block.rejectNonOAuthFields(where); err != nil {
 			return TailnetSpec{}, err
@@ -328,7 +348,7 @@ func (e tailnetFileEntry) resolveAuthBlock(where, id, name, apiURL string, globa
 		}
 		spec.OAuthClientID = clientID
 		spec.OAuthClientSecret = secret
-		return spec, nil
+		return e.finish(where, spec, global)
 	case TailscaleAuthWIF:
 		if err := block.rejectNonWIFFields(where); err != nil {
 			return TailnetSpec{}, err
@@ -348,7 +368,7 @@ func (e tailnetFileEntry) resolveAuthBlock(where, id, name, apiURL string, globa
 		spec.WIFAudience = strings.TrimSpace(block.Audience)
 		spec.WIFIDToken = token
 		spec.WIFIDTokenFile = strings.TrimSpace(block.IDTokenFile)
-		return spec, nil
+		return e.finish(where, spec, global)
 	default:
 		return TailnetSpec{}, fmt.Errorf("%s auth type must be oauth, api_key, or wif", where)
 	}
@@ -407,6 +427,37 @@ func (a *tailnetAuthBlock) rejectNonWIFFields(where string) error {
 	return nil
 }
 
+func (e tailnetFileEntry) finish(where string, spec TailnetSpec, global *Config) (TailnetSpec, error) {
+	prefix, err := e.resolvedPrefix(where)
+	if err != nil {
+		return TailnetSpec{}, err
+	}
+	spec.S3Prefix = prefix
+	spec.FlowBackend = strings.ToLower(strings.TrimSpace(e.FlowBackend))
+	spec.Bucket = strings.TrimSpace(e.Bucket)
+	spec.Region = strings.TrimSpace(e.Region)
+	spec.Endpoint = strings.TrimSpace(e.Endpoint)
+	spec.ObjectStoreAuth = strings.ToLower(strings.TrimSpace(e.ObjectStoreAuth))
+	spec.RoleARN = strings.TrimSpace(e.RoleARN)
+	spec.WebIdentityTokenFile = strings.TrimSpace(e.WebIdentityTokenFile)
+	if err := validateTailnetFlow(where, spec, global); err != nil {
+		return TailnetSpec{}, err
+	}
+	return spec, nil
+}
+
+func (e tailnetFileEntry) resolvedPrefix(where string) (string, error) {
+	prefix := strings.TrimSpace(e.Prefix)
+	s3Prefix := strings.TrimSpace(e.S3Prefix)
+	if e.prefixSet && e.s3PrefixSet && prefix != s3Prefix {
+		return "", fmt.Errorf("%s sets both prefix and s3_prefix", where)
+	}
+	if e.prefixSet && prefix != "" {
+		return prefix, nil
+	}
+	return s3Prefix, nil
+}
+
 func readSecret(what, envName, path string) (string, error) {
 	envName = strings.TrimSpace(envName)
 	path = strings.TrimSpace(path)
@@ -446,6 +497,14 @@ var tailnetEntryFields = map[string]struct{}{
 	"oauth_client_secret_file": {},
 	"oauth_scopes":             {},
 	"s3_prefix":                {},
+	"prefix":                   {},
+	"flow_backend":             {},
+	"bucket":                   {},
+	"region":                   {},
+	"endpoint":                 {},
+	"s3_auth":                  {},
+	"role_arn":                 {},
+	"web_identity_token_file":  {},
 	"auth":                     {},
 }
 
@@ -579,12 +638,42 @@ func entryFromMap(fields map[string]any, index int) (tailnetFileEntry, error) {
 			return tailnetFileEntry{}, err
 		}
 	}
-	if raw, ok := fields["s3_prefix"]; ok {
-		prefix, err := stringValue(raw, where+" s3_prefix")
+	if _, ok := fields["s3_prefix"]; ok {
+		entry.s3PrefixSet = true
+		prefix, err := optionalString(fields, "s3_prefix", where)
 		if err != nil {
 			return tailnetFileEntry{}, err
 		}
 		entry.S3Prefix = prefix
+	}
+	if _, ok := fields["prefix"]; ok {
+		entry.prefixSet = true
+		prefix, err := optionalString(fields, "prefix", where)
+		if err != nil {
+			return tailnetFileEntry{}, err
+		}
+		entry.Prefix = prefix
+	}
+	if entry.FlowBackend, err = optionalString(fields, "flow_backend", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.Bucket, err = optionalString(fields, "bucket", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.Region, err = optionalString(fields, "region", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.Endpoint, err = optionalString(fields, "endpoint", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.ObjectStoreAuth, err = optionalString(fields, "s3_auth", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.RoleARN, err = optionalString(fields, "role_arn", where); err != nil {
+		return tailnetFileEntry{}, err
+	}
+	if entry.WebIdentityTokenFile, err = optionalString(fields, "web_identity_token_file", where); err != nil {
+		return tailnetFileEntry{}, err
 	}
 	if raw, ok := fields["auth"]; ok && raw != nil {
 		block, err := parseAuthBlock(raw, where)
