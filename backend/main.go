@@ -207,6 +207,11 @@ func main() {
 			stats.GET("/top-pairs", statsCache, handlerService.GetTopPairs)
 			stats.GET("/node/:id", statsCache, handlerService.GetNodeDetailStats)
 		}
+		analytics := api.Group("/analytics")
+		{
+			analytics.GET("/talkers", statsCache, handlerService.GetRankedTalkers)
+			analytics.GET("/pairs", statsCache, handlerService.GetRankedPairs)
+		}
 
 		// Policy endpoints
 		api.GET("/policy", liveCache, handlerService.GetPolicy)

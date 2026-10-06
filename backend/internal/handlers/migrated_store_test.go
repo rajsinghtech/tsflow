@@ -152,6 +152,8 @@ func TestMigratedDatabaseMatchesFreshHandlerResponses(t *testing.T) {
 		{name: "overview", method: (*Handlers).GetStatsOverview, target: "/api/stats/overview?" + qs, want: `"virtualBytes":140`},
 		{name: "talkers", method: (*Handlers).GetTopTalkers, target: "/api/stats/top-talkers?" + qs, want: `"nodeId":"node-a"`},
 		{name: "pairs", method: (*Handlers).GetTopPairs, target: "/api/stats/top-pairs?" + qs, want: `"dstNodeId":"node-b"`},
+		{name: "ranked talkers", method: (*Handlers).GetRankedTalkers, target: "/api/analytics/talkers?" + qs, want: `"nodeId":"node-a"`},
+		{name: "ranked pairs", method: (*Handlers).GetRankedPairs, target: "/api/analytics/pairs?" + qs, want: `"dstNodeId":"node-b"`},
 		{name: "node", method: (*Handlers).GetNodeDetailStats, target: "/api/stats/nodes/node-a?" + qs, paramID: "node-a", want: `"totalTx":125`},
 		{name: "range", method: (*Handlers).GetDataRange, target: "/api/data-range", want: `"count":2`},
 	}
