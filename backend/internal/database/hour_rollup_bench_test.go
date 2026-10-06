@@ -11,7 +11,10 @@ import (
 
 // BenchmarkHourRollupScale compares minute scans with hourly rollups at
 // 20,000 nodes. Windows are hour-aligned, one peer per node, one virtual
-// flow per minute. It is skipped under -short.
+// flow per minute. The 1 hour and 24 hour windows are a median of three
+// runs. The 7 day window is one run: it is the same 20,000 nodes and one
+// row per minute (10,080 minutes), loaded with one INSERT SELECT per hour
+// instead of a statement per row. It is skipped under -short.
 func BenchmarkHourRollupScale(b *testing.B) {
 	if testing.Short() {
 		b.Skip("skipping hourly rollup scale benchmark in short mode")
@@ -154,6 +157,51 @@ func BenchmarkHourRollupScale(b *testing.B) {
 	}
 }
 
+func TestBulkScaleInsertMatchesFormula(t *testing.T) {
+	store := setupBenchDB(t)
+	const nodes = 5
+	const minutes = 61
+	const base int64 = 1_699_999_200
+	if got := insertScalePairs(t, store, nodes, minutes, base); got != nodes*minutes {
+		t.Fatalf("inserted %d", got)
+	}
+	ctx := context.Background()
+	for minute := 0; minute < minutes; minute++ {
+		for node := 0; node < nodes; node++ {
+			wantTx := int64(node%50 + (minute % 60) + 1)
+			wantRx := wantTx / 2
+			var gotTx, gotRx int64
+			var dst string
+			err := store.db.QueryRowContext(ctx, `
+				SELECT tx_bytes, rx_bytes, dst_node_id FROM node_pairs
+				WHERE tailnet_id = ? AND bucket = ? AND src_node_id = ?
+			`, DefaultTailnetID, base+int64(minute)*60, fmt.Sprintf("n%05d", node)).Scan(&gotTx, &gotRx, &dst)
+			if err != nil {
+				t.Fatalf("minute %d node %d: %v", minute, node, err)
+			}
+			if gotTx != wantTx || gotRx != wantRx || dst != fmt.Sprintf("n%05d", (node+1)%nodes) {
+				t.Fatalf("minute %d node %d: tx %d rx %d dst %s", minute, node, gotTx, gotRx, dst)
+			}
+		}
+	}
+	var tcp, flows, pairs int64
+	// Minute 60 is the first minute of the next hour, so off is 0.
+	err := store.db.QueryRowContext(ctx, `
+		SELECT tcp_bytes, total_flows, unique_pairs FROM traffic_stats
+		WHERE tailnet_id = ? AND bucket = ?
+	`, DefaultTailnetID, base+60*60).Scan(&tcp, &flows, &pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantTCP int64
+	for node := 0; node < nodes; node++ {
+		wantTCP += int64(node%50 + 0 + 1)
+	}
+	if tcp != wantTCP || flows != int64(nodes) || pairs != int64(nodes) {
+		t.Fatalf("stats tcp %d flows %d pairs %d, want tcp %d", tcp, flows, pairs, wantTCP)
+	}
+}
+
 func ms(d time.Duration) float64 {
 	return float64(d) / float64(time.Millisecond)
 }
@@ -174,95 +222,131 @@ func medianQuery(b *testing.B, samples int, name string, fn func()) time.Duratio
 	return taken[len(taken)/2]
 }
 
-func insertScalePairs(b *testing.B, store *SQLiteStore, nodes, minutes int, base int64) int {
-	b.Helper()
+func insertScalePairs(tb testing.TB, store *SQLiteStore, nodes, minutes int, base int64) int {
+	tb.Helper()
 	ctx := context.Background()
-	names := make([]string, nodes)
-	for i := range names {
-		names[i] = fmt.Sprintf("n%05d", i)
+	// One connection owns the temp tables. Loading is not part of the timed
+	// query: synchronous is off, the secondary indexes are rebuilt after the
+	// rows exist, and the production cache size is restored before return.
+	conn, err := store.db.Conn(ctx)
+	if err != nil {
+		tb.Fatal(err)
 	}
-	// Loading is not part of the timed query. Turning synchronous off keeps
-	// the insert from waiting on a disk flush after every hour. Queries run
-	// after a full checkpoint, with the production synchronous setting.
-	if _, err := store.db.ExecContext(ctx, "PRAGMA synchronous=OFF"); err != nil {
-		b.Fatal(err)
+	defer conn.Close()
+	for _, pragma := range []string{
+		"PRAGMA synchronous=OFF",
+		"PRAGMA cache_size=-262144",
+		"DROP INDEX IF EXISTS idx_node_pairs_src",
+		"DROP INDEX IF EXISTS idx_node_pairs_dst",
+		"DROP INDEX IF EXISTS idx_node_pairs_endpoints",
+		`CREATE TEMP TABLE scale_nodes (i INTEGER PRIMARY KEY, name TEXT NOT NULL)`,
+		`CREATE TEMP TABLE scale_minutes (i INTEGER PRIMARY KEY, bucket INTEGER NOT NULL, off INTEGER NOT NULL)`,
+	} {
+		if _, err := conn.ExecContext(ctx, pragma); err != nil {
+			tb.Fatal(err)
+		}
 	}
-	inserted := 0
+	nodeStmt, err := conn.PrepareContext(ctx, `INSERT INTO scale_nodes (i, name) VALUES (?, ?)`)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	for i := 0; i < nodes; i++ {
+		if _, err := nodeStmt.ExecContext(ctx, i, fmt.Sprintf("n%05d", i)); err != nil {
+			nodeStmt.Close()
+			tb.Fatal(err)
+		}
+	}
+	nodeStmt.Close()
+	minuteStmt, err := conn.PrepareContext(ctx, `INSERT INTO scale_minutes (i, bucket, off) VALUES (?, ?, ?)`)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	for i := 0; i < minutes; i++ {
+		if _, err := minuteStmt.ExecContext(ctx, i, base+int64(i)*60, i%60); err != nil {
+			minuteStmt.Close()
+			tb.Fatal(err)
+		}
+	}
+	minuteStmt.Close()
+
+	const pairInsert = `
+		INSERT INTO node_pairs (
+			tailnet_id, bucket, src_node_id, dst_node_id, traffic_type,
+			tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count,
+			protocols, protocol_bytes, ports,
+			tx_ports, rx_ports, tx_protocol_bytes, rx_protocol_bytes,
+			directional_ports
+		)
+		SELECT ?, m.bucket, s.name, d.name, 'virtual',
+			(s.i % 50) + m.off + 1,
+			((s.i % 50) + m.off + 1) / 2,
+			1, 1, 1,
+			'[6,17]', '{"6":100,"17":40}',
+			'[{"port":443,"proto":6,"bytes":100},{"port":53,"proto":17,"bytes":40}]',
+			'[{"port":443,"proto":6,"bytes":100}]',
+			'[{"port":53,"proto":17,"bytes":40}]',
+			'{"6":100}', '{"17":40}', 1
+		FROM scale_minutes m
+		JOIN scale_nodes s
+		JOIN scale_nodes d ON d.i = (s.i + 1) % ?
+		WHERE m.i >= ? AND m.i < ?
+	`
+	const statsInsert = `
+		INSERT INTO traffic_stats (
+			tailnet_id, bucket, tcp_bytes, udp_bytes, virtual_bytes, total_flows, unique_pairs, top_ports
+		)
+		SELECT ?, m.bucket,
+			SUM((s.i % 50) + m.off + 1),
+			SUM(((s.i % 50) + m.off + 1) / 2),
+			SUM((s.i % 50) + m.off + 1) + SUM(((s.i % 50) + m.off + 1) / 2),
+			?, ?,
+			'[{"port":443,"proto":6,"bytes":100}]'
+		FROM scale_minutes m
+		JOIN scale_nodes s
+		WHERE m.i >= ? AND m.i < ?
+		GROUP BY m.bucket
+	`
 	for startMin := 0; startMin < minutes; startMin += 60 {
 		endMin := startMin + 60
 		if endMin > minutes {
 			endMin = minutes
 		}
-		tx, err := store.db.BeginTx(ctx, nil)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
-		stmt, err := tx.PrepareContext(ctx, `
-			INSERT INTO node_pairs (
-				tailnet_id, bucket, src_node_id, dst_node_id, traffic_type,
-				tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count,
-				protocols, protocol_bytes, ports,
-				tx_ports, rx_ports, tx_protocol_bytes, rx_protocol_bytes,
-				directional_ports
-			) VALUES (
-				?, ?, ?, ?, 'virtual',
-				?, ?, 1, 1, 1,
-				'[6,17]', '{"6":100,"17":40}', '[{"port":443,"proto":6,"bytes":100},{"port":53,"proto":17,"bytes":40}]',
-				'[{"port":443,"proto":6,"bytes":100}]', '[{"port":53,"proto":17,"bytes":40}]',
-				'{"6":100}', '{"17":40}', 1
-			)
-		`)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, pairInsert, DefaultTailnetID, nodes, startMin, endMin); err != nil {
 			tx.Rollback()
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
-		stats, err := tx.PrepareContext(ctx, `
-			INSERT INTO traffic_stats (
-				tailnet_id, bucket, tcp_bytes, udp_bytes, virtual_bytes, total_flows, unique_pairs, top_ports
-			) VALUES (?, ?, ?, ?, ?, ?, ?, '[{"port":443,"proto":6,"bytes":100}]')
-		`)
-		if err != nil {
-			stmt.Close()
+		if _, err := tx.ExecContext(ctx, statsInsert, DefaultTailnetID, nodes, nodes, startMin, endMin); err != nil {
 			tx.Rollback()
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
-		for minute := startMin; minute < endMin; minute++ {
-			bucket := base + int64(minute)*60
-			var txBytes, rxBytes int64
-			for node := 0; node < nodes; node++ {
-				bytes := int64(node%50 + (minute % 60) + 1)
-				rx := bytes / 2
-				if _, err := stmt.ExecContext(ctx, DefaultTailnetID, bucket, names[node], names[(node+1)%nodes], bytes, rx); err != nil {
-					stmt.Close()
-					stats.Close()
-					tx.Rollback()
-					b.Fatal(err)
-				}
-				txBytes += bytes
-				rxBytes += rx
-				inserted++
-			}
-			if _, err := stats.ExecContext(ctx, DefaultTailnetID, bucket, txBytes, rxBytes, txBytes+rxBytes, int64(nodes), int64(nodes)); err != nil {
-				stmt.Close()
-				stats.Close()
-				tx.Rollback()
-				b.Fatal(err)
-			}
-		}
-		stmt.Close()
-		stats.Close()
 		if err := tx.Commit(); err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
-		if (startMin/60)%24 == 0 {
-			b.Logf("inserted through minute %d/%d", endMin, minutes)
+		if startMin == 0 || (startMin/60)%24 == 0 {
+			if b, ok := tb.(*testing.B); ok {
+				b.Logf("inserted through minute %d/%d", endMin, minutes)
+			}
 		}
 	}
-	if _, err := store.db.ExecContext(ctx, "PRAGMA synchronous=NORMAL"); err != nil {
-		b.Fatal(err)
+	indexStart := time.Now()
+	for _, stmt := range []string{
+		`CREATE INDEX idx_node_pairs_src ON node_pairs(tailnet_id, src_node_id, bucket)`,
+		`CREATE INDEX idx_node_pairs_dst ON node_pairs(tailnet_id, dst_node_id, bucket)`,
+		`CREATE INDEX idx_node_pairs_endpoints ON node_pairs(tailnet_id, src_node_id, dst_node_id, traffic_type, bucket)`,
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA cache_size=10000",
+		"PRAGMA wal_checkpoint(TRUNCATE)",
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			tb.Fatal(err)
+		}
 	}
-	if _, err := store.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		b.Fatal(err)
+	if b, ok := tb.(*testing.B); ok {
+		b.Logf("rebuilt secondary indexes in %s", time.Since(indexStart).Round(time.Millisecond))
 	}
-	return inserted
+	return nodes * minutes
 }
