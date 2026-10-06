@@ -89,6 +89,11 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, tailnetID string, r
 	if err := upsertPollCursor(ctx, tx, tailnetID, results.PollEnd); err != nil {
 		return err
 	}
+	if !results.PollEnd.IsZero() {
+		if err := rollClosedMinutes(ctx, tx, tailnetID, results.PollEnd.UTC().Unix()); err != nil {
+			return err
+		}
+	}
 
 	return tx.Commit()
 }
@@ -148,6 +153,11 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 	}
 	if err := upsertTrafficStatsTx(ctx, tx, tailnetID, result.TrafficStats); err != nil {
 		return err
+	}
+	if !result.PollEnd.IsZero() {
+		if err := rollClosedMinutes(ctx, tx, tailnetID, result.PollEnd.UTC().Unix()); err != nil {
+			return err
+		}
 	}
 
 	// Object-store polls update the cursor after the full object batch has been
@@ -217,6 +227,11 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggreg
 					LIMIT 20
 				)
 			)`, existing, existing, incoming, incoming)
+	}
+
+	mark, err := readHourMark(ctx, tx, tailnetID)
+	if err != nil {
+		return err
 	}
 
 	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
@@ -303,17 +318,36 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggreg
 	const bucketSize = int64(60)
 	for _, agg := range aggregates {
 		bucket := (agg.Bucket / bucketSize) * bucketSize
+		protocols := agg.Protocols
+		protocolBytes := normalizeProtocolBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes)
+		txProto := normalizeProtocolBytes(agg.TxProtocolBytes, "[]", agg.TxBytes)
+		rxProto := normalizeProtocolBytes(agg.RxProtocolBytes, "[]", agg.RxBytes)
+		directional := int64(0)
+		if agg.DirectionalPorts {
+			directional = 1
+		}
 		if _, err := stmt.ExecContext(ctx,
 			tailnetID, bucket, agg.SrcNodeID, agg.DstNodeID, agg.TrafficType,
 			agg.TxBytes, agg.RxBytes, agg.TxPkts, agg.RxPkts,
-			agg.FlowCount, agg.Protocols,
-			normalizeProtocolBytes(agg.ProtocolBytes, agg.Protocols, agg.TxBytes+agg.RxBytes),
+			agg.FlowCount, protocols, protocolBytes,
 			agg.Ports, agg.TxPorts, agg.RxPorts,
-			normalizeProtocolBytes(agg.TxProtocolBytes, "[]", agg.TxBytes),
-			normalizeProtocolBytes(agg.RxProtocolBytes, "[]", agg.RxBytes),
-			agg.DirectionalPorts,
+			txProto, rxProto, directional,
 		); err != nil {
 			return fmt.Errorf("failed to upsert node pair: %w", err)
+		}
+		// A minute that is already inside the rollup has to take the same
+		// delta. The row is the source of truth either way; this keeps the
+		// hour equal to the sum of its minutes.
+		if bucket <= mark {
+			if err := mergeHourDelta(ctx, tx, tailnetID, bucket, hourDelta{
+				src: agg.SrcNodeID, dst: agg.DstNodeID, traffic: agg.TrafficType,
+				tx: agg.TxBytes, rx: agg.RxBytes, txPkts: agg.TxPkts, rxPkts: agg.RxPkts,
+				flows: agg.FlowCount, directional: directional,
+				protocols: protocols, protocolBytes: protocolBytes, ports: agg.Ports,
+				txPorts: agg.TxPorts, rxPorts: agg.RxPorts, txProto: txProto, rxProto: rxProto,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -450,6 +484,9 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, tailnetID st
 	if err := upsertNodePairsTx(ctx, tx, tailnetID, aggregates); err != nil {
 		return err
 	}
+	if err := rollClosedMinutes(ctx, tx, tailnetID, time.Now().UTC().Unix()); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -557,19 +594,40 @@ func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, tailnetID 
 	}
 
 	bs := resolveBucketSize(endUnix - startUnix)
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, bs)
+	if err != nil {
+		return nil, err
+	}
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(trafficTypes)), ",")
-	query := fmt.Sprintf(`
+	var query string
+	var args []any
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"bucket, tx_bytes, rx_bytes",
+			"min_bucket AS bucket, tx_bytes, rx_bytes",
+			fmt.Sprintf(" AND traffic_type IN (%s)", placeholders),
+			trafficTypeArgs(trafficTypes),
+		)
+		query = fmt.Sprintf(`
+			SELECT (bucket / %d) * %d AS b, SUM(tx_bytes + rx_bytes), 0
+			FROM (%s) AS pair_rows
+			GROUP BY b
+			ORDER BY b ASC
+		`, bs, bs, source)
+		args = sourceArgs
+	} else {
+		query = fmt.Sprintf(`
 		SELECT (bucket / %d) * %d AS b, SUM(tx_bytes + rx_bytes), 0
 		FROM node_pairs
 		WHERE tailnet_id = ? AND bucket >= ? AND bucket < ? AND traffic_type IN (%s)
 		GROUP BY b
 		ORDER BY b ASC
 	`, bs, bs, placeholders)
-
-	args := make([]any, 0, 3+len(trafficTypes))
-	args = append(args, tailnetID, startUnix, endUnix)
-	for _, trafficType := range trafficTypes {
-		args = append(args, trafficType)
+		args = make([]any, 0, 3+len(trafficTypes))
+		args = append(args, tailnetID, startUnix, endUnix)
+		for _, trafficType := range trafficTypes {
+			args = append(args, trafficType)
+		}
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -609,7 +667,45 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 	// bandwidth_by_node table. This keeps historical self-flows from appearing
 	// as both TX and RX after the self-flow accounting fix.
 	bs := resolveBucketSize(endUnix - startUnix)
-	query := fmt.Sprintf(`
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, bs)
+	if err != nil {
+		return nil, err
+	}
+	var query string
+	var args []any
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"bucket, src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			"min_bucket AS bucket, src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			"", nil,
+		)
+		query = fmt.Sprintf(`
+		WITH pair_rows AS (%s),
+		node_bytes AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id AS node_id,
+			       SUM(tx_bytes) AS tx,
+			       SUM(rx_bytes) AS rx
+			FROM pair_rows
+			GROUP BY b, src_node_id
+			UNION ALL
+			SELECT (bucket / %d) * %d AS b,
+			       dst_node_id AS node_id,
+			       SUM(rx_bytes) AS tx,
+			       SUM(tx_bytes) AS rx
+			FROM pair_rows
+			WHERE src_node_id != dst_node_id
+			GROUP BY b, dst_node_id
+		)
+		SELECT b, SUM(tx), SUM(rx)
+		FROM node_bytes
+		WHERE node_id = ?
+		GROUP BY b
+		ORDER BY b ASC
+	`, source, bs, bs, bs, bs)
+		args = append(sourceArgs, nodeID)
+	} else {
+		query = fmt.Sprintf(`
 		WITH node_bytes AS (
 			SELECT (bucket / %d) * %d AS b,
 			       src_node_id AS node_id,
@@ -634,8 +730,10 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 		GROUP BY b
 		ORDER BY b ASC
 	`, bs, bs, bs, bs)
+		args = []any{tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix, nodeID}
+	}
 
-	rows, err := s.db.QueryContext(ctx, query, tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix, nodeID)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
@@ -691,6 +789,25 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 	}
 
 	bs := resolveBucketSize(endUnix - startUnix)
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, bs)
+	if err != nil {
+		return nil, err
+	}
+	pairFrom := "node_pairs"
+	pairBucket := "bucket"
+	pairWhere := "tailnet_id = ? AND bucket >= ? AND bucket < ?"
+	pairArgs := []any{tailnetID, startUnix, endUnix}
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"bucket, src_node_id, dst_node_id",
+			"min_bucket AS bucket, src_node_id, dst_node_id",
+			"", nil,
+		)
+		pairFrom = "(" + source + ") AS pair_rows"
+		pairBucket = "bucket"
+		pairWhere = "1 = 1"
+		pairArgs = sourceArgs
+	}
 	query := fmt.Sprintf(`
 		WITH stat_buckets AS (
 			SELECT (bucket / %d) * %d AS b,
@@ -709,9 +826,9 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 		), pair_buckets AS (
 			SELECT b, COUNT(*) AS unique_pairs
 			FROM (
-				SELECT (bucket / %d) * %d AS b, src_node_id, dst_node_id
-				FROM node_pairs
-				WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+				SELECT (%s / %d) * %d AS b, src_node_id, dst_node_id
+				FROM %s
+				WHERE %s
 				GROUP BY b, src_node_id, dst_node_id
 			)
 			GROUP BY b
@@ -723,9 +840,10 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 		FROM stat_buckets sb
 		LEFT JOIN pair_buckets pb ON pb.b = sb.b
 		ORDER BY sb.b ASC
-	`, bs, bs, bs, bs)
+	`, bs, bs, pairBucket, bs, bs, pairFrom, pairWhere)
+	statsArgs := append([]any{tailnetID, startUnix, endUnix}, pairArgs...)
 
-	rows, err := s.db.QueryContext(ctx, query, tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix)
+	rows, err := s.db.QueryContext(ctx, query, statsArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traffic stats: %w", err)
 	}
@@ -843,6 +961,20 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	s.noteDerivedStatsRead(ranges)
 
 	bs := resolveBucketSize(endUnix - startUnix)
+	if bs >= hourSeconds {
+		mark, err := readHourMark(ctx, s.db, tailnetID)
+		if err != nil {
+			return nil, err
+		}
+		plan := combineHourPlans(ranges, mark, true)
+		if plan.useHours() {
+			plan.legacy, err = readHourLegacy(ctx, s.db, tailnetID)
+			if err != nil {
+				return nil, err
+			}
+			return s.queryTrafficStatsFromRollup(ctx, tailnetID, bs, plan, trafficTypes)
+		}
+	}
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	rangeSQL, rangeArgs := bucketRangePredicate("bucket", ranges)
 	query := fmt.Sprintf(`
@@ -1053,6 +1185,222 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	return results, nil
 }
 
+// queryTrafficStatsFromRollup is queryTrafficStatsFromNodePairs for a window
+// whose complete hours are already rolled up. Integer totals, protocol bytes,
+// and ports come from the hourly rows in the middle and minute rows on the
+// edges. The protocol-list fallback still reads minute rows, including the
+// middle only when a rolled row was stored without protocol byte totals.
+func (s *SQLiteStore) queryTrafficStatsFromRollup(ctx context.Context, tailnetID string, bs int64, plan hourPlan, trafficTypes []string) ([]TrafficStats, error) {
+	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	source, sourceArgs := plan.unionPairRows(tailnetID,
+		"bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count, protocol_bytes, protocols, ports",
+		"min_bucket AS bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count, protocol_bytes, protocols, ports",
+		typeClause, typeArgs,
+	)
+	query := fmt.Sprintf(`
+		WITH filtered_pairs AS (
+			SELECT (bucket / %d) * %d AS b,
+			       src_node_id,
+			       dst_node_id,
+			       traffic_type,
+			       tx_bytes,
+			       rx_bytes,
+			       flow_count
+			FROM (%s) AS pair_rows
+		), traffic_totals AS (
+			SELECT b,
+			       SUM(CASE WHEN traffic_type = 'virtual'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS virtual_bytes,
+			       SUM(CASE WHEN traffic_type = 'exit'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS exit_bytes,
+			       SUM(CASE WHEN traffic_type = 'subnet'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS subnet_bytes,
+			       SUM(CASE WHEN traffic_type = 'physical'
+			                THEN tx_bytes + rx_bytes ELSE 0 END) AS physical_bytes,
+			       SUM(flow_count) AS total_flows
+			FROM filtered_pairs
+			GROUP BY b
+		), unique_pair_counts AS (
+			SELECT b, COUNT(*) AS unique_pairs
+			FROM (
+				SELECT DISTINCT b, src_node_id, dst_node_id
+				FROM filtered_pairs
+			)
+			GROUP BY b
+		)
+		SELECT t.b, t.virtual_bytes, t.exit_bytes, t.subnet_bytes, t.physical_bytes,
+		       t.total_flows, p.unique_pairs
+		FROM traffic_totals t
+		JOIN unique_pair_counts p ON p.b = t.b
+		ORDER BY t.b ASC
+	`, bs, bs, source)
+	rows, err := s.db.QueryContext(ctx, query, sourceArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pairs for traffic stats: %w", err)
+	}
+	defer rows.Close()
+
+	bucketMap := make(map[int64]*TrafficStats)
+	for rows.Next() {
+		var bucket int64
+		var virtualBytes, exitBytes, subnetBytes, physicalBytes, totalFlows, uniquePairs int64
+		if err := rows.Scan(&bucket, &virtualBytes, &exitBytes, &subnetBytes, &physicalBytes, &totalFlows, &uniquePairs); err != nil {
+			return nil, fmt.Errorf("failed to scan: %w", err)
+		}
+		st := &TrafficStats{Bucket: bucket, TopPorts: "[]"}
+		st.VirtualBytes = virtualBytes
+		st.ExitBytes = exitBytes
+		st.SubnetBytes = subnetBytes
+		st.PhysicalBytes = physicalBytes
+		st.TotalFlows = totalFlows
+		st.UniquePairs = uniquePairs
+		bucketMap[bucket] = st
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	protoSource, protoArgs := plan.unionPairRows(tailnetID,
+		"bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
+		"min_bucket AS bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
+		typeClause, typeArgs,
+	)
+	fallback := plan.fallbackRanges()
+	var fallbackSQL string
+	var fallbackArgs []any
+	if len(fallback) > 0 {
+		fallbackPred, fallbackPredArgs := bucketRangePredicate("np.bucket", fallback)
+		fallbackSQL = fmt.Sprintf(`
+			UNION ALL
+			SELECT (np.bucket / %d) * %d AS b,
+			       CAST(j.value AS INTEGER) AS proto,
+			       (np.tx_bytes + np.rx_bytes) / json_array_length(np.protocols)
+			       + CASE WHEN CAST(j.key AS INTEGER) = 0 THEN
+				           (np.tx_bytes + np.rx_bytes) -
+				           ((np.tx_bytes + np.rx_bytes) / json_array_length(np.protocols)) * json_array_length(np.protocols)
+				         ELSE 0 END AS bytes
+			FROM node_pairs np, json_each(
+				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
+			WHERE np.tailnet_id = ? AND %s%s
+			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
+			       OR NOT json_valid(np.protocol_bytes))
+			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
+		`, bs, bs, fallbackPred, typeClause)
+		fallbackArgs = append([]any{tailnetID}, fallbackPredArgs...)
+		fallbackArgs = append(fallbackArgs, typeArgs...)
+	}
+	protoQuery := fmt.Sprintf(`
+		WITH protocol_values AS (
+			SELECT (np.bucket / %d) * %d AS b,
+			       CAST(j.key AS INTEGER) AS proto,
+			       CAST(j.value AS INTEGER) AS bytes
+			FROM (%s) AS np, json_each(
+				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
+				     THEN np.protocol_bytes ELSE '{}' END) AS j
+			%s
+		)
+		SELECT b, proto, SUM(bytes)
+		FROM protocol_values
+		GROUP BY b, proto
+	`, bs, bs, protoSource, fallbackSQL)
+	protoQueryArgs := append(append([]any{}, protoArgs...), fallbackArgs...)
+	protoRows, err := s.db.QueryContext(ctx, protoQuery, protoQueryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair protocols: %w", err)
+	}
+	for protoRows.Next() {
+		var b int64
+		var protocol int
+		var totalBytes int64
+		if err := protoRows.Scan(&b, &protocol, &totalBytes); err != nil {
+			protoRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair protocol: %w", err)
+		}
+		st := bucketMap[b]
+		if st == nil {
+			continue
+		}
+		switch protocol {
+		case 6:
+			st.TCPBytes += totalBytes
+		case 17:
+			st.UDPBytes += totalBytes
+		default:
+			st.OtherProtoBytes += totalBytes
+		}
+	}
+	if err := protoRows.Err(); err != nil {
+		protoRows.Close()
+		return nil, fmt.Errorf("failed to read node pair protocols: %w", err)
+	}
+	if err := protoRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair protocol rows: %w", err)
+	}
+
+	portSource, portArgs := plan.unionPairRows(tailnetID,
+		"bucket, ports",
+		"min_bucket AS bucket, ports",
+		typeClause+" AND ports != '[]'", typeArgs,
+	)
+	portQuery := fmt.Sprintf(`
+		WITH port_totals AS (
+			SELECT (bucket / %d) * %d AS b,
+			       CAST(json_extract(p.value, '$.proto') AS INTEGER) AS proto,
+			       CAST(json_extract(p.value, '$.port') AS INTEGER) AS port,
+			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
+			FROM (%s) AS pair_rows, json_each(
+				CASE WHEN json_valid(ports) THEN ports ELSE '[]' END) AS p
+			GROUP BY b, proto, port
+		),
+		ranked_ports AS (
+			SELECT b, proto, port, bytes,
+			       ROW_NUMBER() OVER (PARTITION BY b ORDER BY bytes DESC, proto ASC, port ASC) AS rn
+			FROM port_totals
+		)
+		SELECT b, proto, port, bytes
+		FROM ranked_ports
+		WHERE rn <= 20
+		ORDER BY b ASC, bytes DESC, proto ASC, port ASC
+	`, bs, bs, portSource)
+	portRows, err := s.db.QueryContext(ctx, portQuery, portArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query node pair ports: %w", err)
+	}
+	topPortsByBucket := make(map[int64][]PortStat)
+	for portRows.Next() {
+		var b int64
+		var port PortStat
+		if err := portRows.Scan(&b, &port.Proto, &port.Port, &port.Bytes); err != nil {
+			portRows.Close()
+			return nil, fmt.Errorf("failed to scan node pair port: %w", err)
+		}
+		topPortsByBucket[b] = append(topPortsByBucket[b], port)
+	}
+	if err := portRows.Err(); err != nil {
+		portRows.Close()
+		return nil, fmt.Errorf("failed to read node pair ports: %w", err)
+	}
+	if err := portRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair port rows: %w", err)
+	}
+	for b, topPorts := range topPortsByBucket {
+		encoded, err := json.Marshal(topPorts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode node pair ports: %w", err)
+		}
+		if st := bucketMap[b]; st != nil {
+			st.TopPorts = string(encoded)
+		}
+	}
+
+	results := make([]TrafficStats, 0, len(bucketMap))
+	for _, st := range bucketMap {
+		results = append(results, *st)
+	}
+	sort.Slice(results, func(i, j int) bool { return results[i].Bucket < results[j].Bucket })
+	return results, nil
+}
+
 // GetTopTalkers returns nodes ranked by total traffic volume.
 func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
@@ -1072,7 +1420,41 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start
 
 	// Use node_pairs as the source of truth so old per-node rows cannot retain
 	// the pre-fix self-flow double count.
-	rows, err := s.db.QueryContext(ctx, `
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	var rows *sql.Rows
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			"", nil,
+		)
+		query := fmt.Sprintf(`
+		WITH pair_rows AS (%s),
+		node_bytes AS (
+			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM pair_rows
+			GROUP BY src_node_id
+			UNION ALL
+			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM pair_rows
+			WHERE src_node_id != dst_node_id
+			GROUP BY dst_node_id
+		), totals AS (
+			SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx
+			FROM node_bytes
+			GROUP BY node_id
+		)
+		SELECT node_id, tx, rx, tx + rx AS total
+		FROM totals
+		ORDER BY total DESC, node_id ASC
+		LIMIT ?
+	`, source)
+		rows, err = s.db.QueryContext(ctx, query, append(sourceArgs, limit)...)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
 		WITH node_bytes AS (
 			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
@@ -1094,6 +1476,7 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start
 		ORDER BY total DESC, node_id ASC
 		LIMIT ?
 	`, tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top talkers: %w", err)
 	}
@@ -1128,7 +1511,39 @@ func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID
 	}
 
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
-	query := fmt.Sprintf(`
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	var query string
+	var args []any
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
+			typeClause, typeArgs,
+		)
+		query = fmt.Sprintf(`
+		WITH pair_rows AS (%s),
+		node_bytes AS (
+			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
+			FROM pair_rows
+			GROUP BY src_node_id
+			UNION ALL
+			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
+			FROM pair_rows
+			WHERE src_node_id != dst_node_id
+			GROUP BY dst_node_id
+		)
+		SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx, SUM(tx + rx) AS total
+		FROM node_bytes
+		GROUP BY node_id
+		ORDER BY total DESC, node_id ASC
+		LIMIT ?
+	`, source)
+		args = append(sourceArgs, limit)
+	} else {
+		query = fmt.Sprintf(`
 		WITH node_bytes AS (
 			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
@@ -1147,10 +1562,11 @@ func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID
 		ORDER BY total DESC, node_id ASC
 		LIMIT ?
 	`, typeClause, typeClause)
-	args := append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
-	args = append(args, tailnetID, startUnix, endUnix)
-	args = append(args, typeArgs...)
-	args = append(args, limit)
+		args = append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
+		args = append(args, tailnetID, startUnix, endUnix)
+		args = append(args, typeArgs...)
+		args = append(args, limit)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1186,7 +1602,29 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, tailnetID string, start, 
 		limit = 10
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	var rows *sql.Rows
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
+			"", nil,
+		)
+		query := fmt.Sprintf(`
+		SELECT src_node_id, dst_node_id,
+		       SUM(tx_bytes), SUM(rx_bytes),
+		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
+		FROM (%s) AS pair_rows
+		GROUP BY src_node_id, dst_node_id
+		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
+		LIMIT ?
+	`, source)
+		rows, err = s.db.QueryContext(ctx, query, append(sourceArgs, limit)...)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
 		SELECT src_node_id, dst_node_id,
 		       SUM(tx_bytes), SUM(rx_bytes),
 		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
@@ -1196,6 +1634,7 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, tailnetID string, start, 
 		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
 		LIMIT ?
 	`, tailnetID, startUnix, endUnix, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query top pairs: %w", err)
 	}
@@ -1230,7 +1669,30 @@ func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, tailnetID s
 	}
 
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
-	query := fmt.Sprintf(`
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	var query string
+	var args []any
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID,
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
+			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
+			typeClause, typeArgs,
+		)
+		query = fmt.Sprintf(`
+		SELECT src_node_id, dst_node_id,
+		       SUM(tx_bytes), SUM(rx_bytes),
+		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
+		FROM (%s) AS pair_rows
+		GROUP BY src_node_id, dst_node_id
+		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
+		LIMIT ?
+	`, source)
+		args = append(sourceArgs, limit)
+	} else {
+		query = fmt.Sprintf(`
 		SELECT src_node_id, dst_node_id,
 		       SUM(tx_bytes), SUM(rx_bytes),
 		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
@@ -1240,8 +1702,9 @@ func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, tailnetID s
 		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
 		LIMIT ?
 	`, typeClause)
-	args := append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
-	args = append(args, limit)
+		args = append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
+		args = append(args, limit)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1272,6 +1735,11 @@ func trafficTypeWhereClause(trafficTypes []string) (string, []any) {
 	return fmt.Sprintf(" AND traffic_type IN (%s)", placeholders), args
 }
 
+func trafficTypeArgs(trafficTypes []string) []any {
+	_, args := trafficTypeWhereClause(trafficTypes)
+	return args
+}
+
 // GetNodeStats returns detailed traffic statistics for a single node.
 func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
@@ -1294,7 +1762,25 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 
 	// Keep totals consistent with GetNodeBandwidth and GetTopTalkers: derive
 	// them from normalized pairs instead of legacy per-node bandwidth rows.
-	if err := s.db.QueryRowContext(ctx, `
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	if plan.useHours() {
+		srcSource, srcArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", " AND src_node_id = ?", []any{nodeID})
+		dstSource, dstArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", " AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
+		totalQuery := fmt.Sprintf(`
+		WITH node_bytes AS (
+			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx FROM (%s) AS src_rows
+			UNION ALL
+			SELECT SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx FROM (%s) AS dst_rows
+		)
+		SELECT COALESCE(SUM(tx), 0), COALESCE(SUM(rx), 0) FROM node_bytes
+	`, srcSource, dstSource)
+		if err := s.db.QueryRowContext(ctx, totalQuery, append(srcArgs, dstArgs...)...).Scan(&result.TotalTx, &result.TotalRx); err != nil {
+			return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
+		}
+	} else if err := s.db.QueryRowContext(ctx, `
 		WITH node_bytes AS (
 			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
@@ -1311,7 +1797,34 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	var rows *sql.Rows
+	if plan.useHours() {
+		srcSource, srcArgs := plan.unionPairRows(tailnetID,
+			"dst_node_id, tx_bytes, rx_bytes, flow_count",
+			"dst_node_id, tx_bytes, rx_bytes, flow_count",
+			" AND src_node_id = ?", []any{nodeID})
+		dstSource, dstArgs := plan.unionPairRows(tailnetID,
+			"src_node_id, tx_bytes, rx_bytes, flow_count",
+			"src_node_id, tx_bytes, rx_bytes, flow_count",
+			" AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
+		peerQuery := fmt.Sprintf(`
+		SELECT peer_id, SUM(tx), SUM(rx), SUM(tx+rx) AS total, SUM(fc)
+		FROM (
+			SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS fc
+			FROM (%s) AS src_rows
+			GROUP BY dst_node_id
+			UNION ALL
+			SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS fc
+			FROM (%s) AS dst_rows
+			GROUP BY src_node_id
+		)
+		GROUP BY peer_id
+		ORDER BY total DESC, peer_id ASC
+		LIMIT 10
+	`, srcSource, dstSource)
+		rows, err = s.db.QueryContext(ctx, peerQuery, append(srcArgs, dstArgs...)...)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
 		SELECT peer_id, SUM(tx), SUM(rx), SUM(tx+rx) AS total, SUM(fc)
 		FROM (
 			SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS fc
@@ -1329,6 +1842,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		ORDER BY total DESC, peer_id ASC
 		LIMIT 10
 	`, tailnetID, nodeID, startUnix, endUnix, tailnetID, nodeID, startUnix, endUnix)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node peers: %w", err)
 	}
@@ -1345,13 +1859,20 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		return nil, err
 	}
 
-	portRows, err := s.db.QueryContext(ctx, `
+	var portRows *sql.Rows
+	if plan.useHours() {
+		source, sourceArgs := plan.unionPairRows(tailnetID, "ports", "ports",
+			" AND (src_node_id = ? OR dst_node_id = ?) AND ports != '[]'", []any{nodeID, nodeID})
+		portRows, err = s.db.QueryContext(ctx, fmt.Sprintf("SELECT ports FROM (%s) AS pair_rows", source), sourceArgs...)
+	} else {
+		portRows, err = s.db.QueryContext(ctx, `
 		SELECT ports FROM node_pairs
 		WHERE tailnet_id = ?
 		  AND (src_node_id = ? OR dst_node_id = ?)
 		  AND bucket >= ? AND bucket < ?
 		  AND ports != '[]'
 	`, tailnetID, nodeID, nodeID, startUnix, endUnix)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node ports: %w", err)
 	}

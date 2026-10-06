@@ -376,6 +376,13 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 			total += n
 		}
 	}
+	pruned, err := pruneHourRollups(ctx, tx, tailnetID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	if pruned > 0 {
+		total += pruned
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM object_metadata_nodes
 		 WHERE tailnet_id = ?
