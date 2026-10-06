@@ -22,6 +22,10 @@ const (
 	// DefaultCapabilityHeader is the header Tailscale Serve sets when
 	// --accept-app-caps is configured.
 	DefaultCapabilityHeader = "Tailscale-App-Capabilities"
+	// DefaultUserHeader is the login header Tailscale Serve sends.
+	DefaultUserHeader = "Tailscale-User-Login"
+	// DefaultNameHeader is the display name header Tailscale Serve sends.
+	DefaultNameHeader = "Tailscale-User-Name"
 
 	AccessAutoscopeOff    = "off"
 	AccessAutoscopeUser   = "user"
@@ -53,6 +57,8 @@ type Access struct {
 	Mode             string
 	Capability       string
 	CapabilityHeader string
+	UserHeader       string
+	NameHeader       string
 	TrustedProxies   string
 	TrustedPrefixes  []netip.Prefix
 	GroupsHeader     string
@@ -71,6 +77,8 @@ func (c *Config) loadAccess() Access {
 		Capability:       strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_CAPABILITY")),
 		Mode:             strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_MODE")),
 		CapabilityHeader: strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_CAPABILITY_HEADER")),
+		UserHeader:       strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_USER_HEADER")),
+		NameHeader:       strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_NAME_HEADER")),
 		TrustedProxies:   strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_TRUSTED_PROXIES")),
 		GroupsHeader:     strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_GROUPS_HEADER")),
 		GroupGrantsRaw:   strings.TrimSpace(os.Getenv("TSFLOW_ACCESS_GROUP_GRANTS")),
@@ -124,6 +132,14 @@ func (c *Config) prepareAccess() error {
 	if access.CapabilityHeader == "" {
 		access.CapabilityHeader = DefaultCapabilityHeader
 	}
+	access.UserHeader = strings.TrimSpace(access.UserHeader)
+	if access.UserHeader == "" {
+		access.UserHeader = DefaultUserHeader
+	}
+	access.NameHeader = strings.TrimSpace(access.NameHeader)
+	if access.NameHeader == "" {
+		access.NameHeader = DefaultNameHeader
+	}
 
 	groupGrants, err := loadGroupGrants(access.GroupGrantsRaw, access.GroupGrantsFile)
 	if err != nil {
@@ -156,7 +172,7 @@ func accessRequested(a Access) bool {
 	if a.Autoscope != "" && !strings.EqualFold(a.Autoscope, AccessAutoscopeOff) && a.Autoscope != "false" && a.Autoscope != "0" {
 		return true
 	}
-	if a.TailscaledSocket != "" || a.CapabilityHeader != "" || a.Grants == AccessGrantsIdentity {
+	if a.TailscaledSocket != "" || a.CapabilityHeader != "" || a.UserHeader != "" || a.NameHeader != "" || a.Grants == AccessGrantsIdentity {
 		return true
 	}
 	switch strings.ToLower(a.LocalWhoIs) {
@@ -199,6 +215,10 @@ func validateAccessMode(a Access, tsnetServe bool) error {
 			return errors.New("TSFLOW_ACCESS_LOCAL_WHOIS=require is only valid with TSFLOW_ACCESS_MODE=header")
 		case a.CapabilityHeader != DefaultCapabilityHeader:
 			return errors.New("TSFLOW_ACCESS_CAPABILITY_HEADER is only valid with TSFLOW_ACCESS_MODE=header")
+		case a.UserHeader != DefaultUserHeader:
+			return errors.New("TSFLOW_ACCESS_USER_HEADER is only valid with TSFLOW_ACCESS_MODE=header")
+		case a.NameHeader != DefaultNameHeader:
+			return errors.New("TSFLOW_ACCESS_NAME_HEADER is only valid with TSFLOW_ACCESS_MODE=header")
 		case a.Grants != AccessGrantsIdentity && a.Capability == "" && len(a.GroupGrants) == 0:
 			return errors.New("tsnet access control requires TSFLOW_ACCESS_CAPABILITY or a group grant map")
 		}
