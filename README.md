@@ -16,6 +16,8 @@ brew install rajsinghtech/tap/tsflow
 docker pull ghcr.io/rajsinghtech/tsflow:latest
 ```
 
+`ghcr.io/rajsinghtech/tsflow:main` tracks main and isn't a release.
+
 ### Binary Download
 
 Download from [GitHub Releases](https://github.com/rajsinghtech/tsflow/releases).
@@ -81,7 +83,35 @@ tailnets:
     s3_prefix: lab/network/
 ```
 
-`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
+`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `prefix` is the same field. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
+
+An entry can also say where its flow logs live. `flow_backend` is `api`, `s3`, or `gcs`. `bucket`, `region`, `endpoint`, and `s3_auth` (`static`, `aws_default`, or `gcs_adc`) override the matching process settings. A field that is left out inherits the process value, so existing files that only set `s3_prefix` stay valid. `role_arn` with `web_identity_token_file` assumes that AWS role from the OIDC token in the file (`AssumeRoleWithWebIdentity`). That client does not read `AWS_ROLE_ARN` or `AWS_WEB_IDENTITY_TOKEN_FILE`, so two tailnets can use two token files. Static object-store keys stay on the process.
+
+```yaml
+tailnets:
+  - id: prod
+    tailnet: prod.example.com
+    api_key_env: PROD_TAILSCALE_API_KEY
+    flow_backend: gcs
+    bucket: example-prod-flow-logs
+    prefix: network/
+  - id: staging
+    tailnet: staging.example.com
+    api_key_env: STAGING_TAILSCALE_API_KEY
+    flow_backend: s3
+    s3_auth: aws_default
+    bucket: example-staging-flow-logs
+    region: us-east-1
+    role_arn: arn:aws:iam::123456789012:role/tsflow-reader
+    web_identity_token_file: /var/run/tsflow/staging/gcp-token
+    prefix: staging/network/
+  - id: lab
+    tailnet: lab.example.com
+    api_key_env: LAB_TAILSCALE_API_KEY
+    flow_backend: api
+```
+
+`prod` reads a GCS bucket with Application Default Credentials. `staging` assumes a role in another account with a Google-issued ID token. `lab` has no streaming bucket and uses the Tailscale API logs endpoint.
 
 JSON uses the same fields:
 
@@ -227,7 +257,7 @@ The empty object allows every configured tailnet. `group:ops` can see all of the
 
 **Reverse proxy.** Use this when Tailscale Serve, or Caddy with the Tailscale plugin, already authenticated the viewer. Set `TSFLOW_ACCESS_MODE=header` and `TSFLOW_ACCESS_TRUSTED_PROXIES` to the proxy CIDRs. Identity headers are trusted only from those CIDRs. If the proxy dials localhost over IPv6, include `::1/128` next to `127.0.0.1/32`. The same rule applies to the groups header. A client that is not in the list cannot supply `Tailscale-User-Login`, `Tailscale-User-Name`, the capability header, or the groups header. Those values are ignored, and the request is denied.
 
-Tailscale Serve sends `Tailscale-User-Login` and `Tailscale-User-Name`. To also send capabilities, pass `--accept-app-caps` with the same capability name. Serve puts them in `Tailscale-App-Capabilities`. Override that name with `TSFLOW_ACCESS_CAPABILITY_HEADER` if your proxy uses another header.
+Tailscale Serve sends `Tailscale-User-Login` and `Tailscale-User-Name`. If your proxy sends identity under other names, set `TSFLOW_ACCESS_USER_HEADER` (login, for example `X-Tailscale-User`) and `TSFLOW_ACCESS_NAME_HEADER` (display name, for example `X-Tailscale-Name`). Point them at headers the proxy always overwrites, never at one a client can pass through. A custom header replaces the default for that field, and the default name is not read as a fallback. To also send capabilities, pass `--accept-app-caps` with the same capability name. Serve puts them in `Tailscale-App-Capabilities`. Override that name with `TSFLOW_ACCESS_CAPABILITY_HEADER` if your proxy uses another header.
 
 ```bash
 tailscale serve --accept-app-caps=example.com/cap/tsflow --https=443 http://127.0.0.1:8080
@@ -309,7 +339,8 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
 | `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
 | `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |
-| `TSFLOW_S3_ROLE_ARN` | Optional role to assume when auth is `aws_default` | - |
+| `TSFLOW_S3_ROLE_ARN` | Optional role to assume when auth is `aws_default`. With a web identity token file this is `AssumeRoleWithWebIdentity`. | - |
+| `TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE` | OIDC token file used to assume `TSFLOW_S3_ROLE_ARN`. A tailnets entry can set its own file. | - |
 | `TSFLOW_S3_BUCKET` | S3/Garage bucket containing exported flow logs | `tailscale-logs` |
 | `TSFLOW_S3_PREFIX` | Object prefix for network flow objects | `network/` |
 | `TSFLOW_S3_ENDPOINT` | S3-compatible endpoint URL | - |

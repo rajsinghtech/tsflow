@@ -99,6 +99,24 @@ func TestAccessValidation(t *testing.T) {
 			want: "TSFLOW_ACCESS_AUTOSCOPE=groups",
 		},
 		{
+			name: "user header on tsnet",
+			mutate: func(c *Config) {
+				c.TsnetServe = true
+				c.Access.Capability = "example.com/cap/tsflow"
+				c.Access.UserHeader = "X-Tailscale-User"
+			},
+			want: "TSFLOW_ACCESS_USER_HEADER is only valid",
+		},
+		{
+			name: "name header on tsnet",
+			mutate: func(c *Config) {
+				c.TsnetServe = true
+				c.Access.Capability = "example.com/cap/tsflow"
+				c.Access.NameHeader = "X-Tailscale-Name"
+			},
+			want: "TSFLOW_ACCESS_NAME_HEADER is only valid",
+		},
+		{
 			name: "groups header on tsnet",
 			mutate: func(c *Config) {
 				c.TsnetServe = true
@@ -129,6 +147,9 @@ func TestAccessValidation(t *testing.T) {
 				if !c.Access.Enabled || c.Access.Grants != AccessGrantsIdentity || c.Access.Capability != "" {
 					t.Fatalf("access = %+v", c.Access)
 				}
+				if c.Access.UserHeader != DefaultUserHeader || c.Access.NameHeader != DefaultNameHeader {
+					t.Fatalf("identity headers = %q %q", c.Access.UserHeader, c.Access.NameHeader)
+				}
 			},
 		},
 		{
@@ -143,6 +164,9 @@ func TestAccessValidation(t *testing.T) {
 			check: func(t *testing.T, c *Config) {
 				if c.Access.Mode != AccessModeTsnet || c.Access.Grants != AccessGrantsIdentity || c.Access.Capability != "" {
 					t.Fatalf("access = %+v", c.Access)
+				}
+				if c.Access.UserHeader != DefaultUserHeader || c.Access.NameHeader != DefaultNameHeader {
+					t.Fatalf("identity headers = %q %q", c.Access.UserHeader, c.Access.NameHeader)
 				}
 			},
 		},
@@ -170,6 +194,25 @@ func TestAccessValidation(t *testing.T) {
 				}
 				if c.Access.CapabilityHeader != DefaultCapabilityHeader {
 					t.Fatalf("header = %q", c.Access.CapabilityHeader)
+				}
+				if c.Access.UserHeader != DefaultUserHeader || c.Access.NameHeader != DefaultNameHeader {
+					t.Fatalf("identity headers = %q %q", c.Access.UserHeader, c.Access.NameHeader)
+				}
+			},
+		},
+		{
+			name: "custom identity headers replace defaults",
+			mutate: func(c *Config) {
+				c.Access.Mode = "header"
+				c.Access.TrustedProxies = "127.0.0.1/32"
+				c.Access.Grants = "identity"
+				c.Access.UserHeader = "X-Tailscale-User"
+				c.Access.NameHeader = "X-Tailscale-Name"
+			},
+			wantOK: true,
+			check: func(t *testing.T, c *Config) {
+				if c.Access.UserHeader != "X-Tailscale-User" || c.Access.NameHeader != "X-Tailscale-Name" {
+					t.Fatalf("identity headers = %q %q", c.Access.UserHeader, c.Access.NameHeader)
 				}
 			},
 		},
@@ -257,6 +300,7 @@ func TestLoadAccessFromEnv(t *testing.T) {
 	for _, key := range []string{
 		"TAILSCALE_API_KEY", "TSFLOW_ACCESS_CAPABILITY", "TSFLOW_ACCESS_MODE",
 		"TSFLOW_ACCESS_TRUSTED_PROXIES", "TSFLOW_ACCESS_GROUPS_HEADER",
+		"TSFLOW_ACCESS_CAPABILITY_HEADER", "TSFLOW_ACCESS_USER_HEADER", "TSFLOW_ACCESS_NAME_HEADER",
 		"TSFLOW_ACCESS_GROUP_GRANTS", "TSFLOW_ACCESS_AUTOSCOPE", "TSFLOW_ACCESS_GRANTS", "TSFLOW_LOG_LEVEL",
 		"TSFLOW_SERVE", "TSFLOW_FLOW_BACKEND",
 	} {
@@ -267,6 +311,8 @@ func TestLoadAccessFromEnv(t *testing.T) {
 	t.Setenv("TSFLOW_ACCESS_CAPABILITY", " example.com/cap/tsflow ")
 	t.Setenv("TSFLOW_ACCESS_TRUSTED_PROXIES", "127.0.0.1/32")
 	t.Setenv("TSFLOW_ACCESS_GROUPS_HEADER", "X-Tsflow-Groups")
+	t.Setenv("TSFLOW_ACCESS_USER_HEADER", " X-Tailscale-User ")
+	t.Setenv("TSFLOW_ACCESS_NAME_HEADER", " X-Tailscale-Name ")
 	t.Setenv("TSFLOW_ACCESS_GROUP_GRANTS", `{"group:eng":{"tailnets":["lab"]}}`)
 	t.Setenv("TSFLOW_ACCESS_AUTOSCOPE", "groups")
 	t.Setenv("TSFLOW_LOG_LEVEL", "debug")
@@ -278,8 +324,44 @@ func TestLoadAccessFromEnv(t *testing.T) {
 	if !cfg.Access.Enabled || !cfg.Access.Debug || cfg.Access.Autoscope != AccessAutoscopeGroups {
 		t.Fatalf("access = %+v", cfg.Access)
 	}
+	if cfg.Access.UserHeader != "X-Tailscale-User" || cfg.Access.NameHeader != "X-Tailscale-Name" {
+		t.Fatalf("identity headers = %q %q", cfg.Access.UserHeader, cfg.Access.NameHeader)
+	}
 	grant := cfg.Access.GroupGrants["group:eng"]
 	if grant.All || len(grant.Tailnets) != 1 || grant.Tailnets[0] != "lab" {
 		t.Fatalf("grant = %+v", grant)
 	}
+}
+
+func TestTsnetModeRejectsIdentityHeaderEnv(t *testing.T) {
+	for _, key := range []string{
+		"TAILSCALE_API_KEY", "TAILSCALE_OAUTH_CLIENT_ID", "TAILSCALE_OAUTH_CLIENT_SECRET",
+		"TSFLOW_ACCESS_CAPABILITY", "TSFLOW_ACCESS_MODE", "TSFLOW_ACCESS_TRUSTED_PROXIES",
+		"TSFLOW_ACCESS_CAPABILITY_HEADER", "TSFLOW_ACCESS_USER_HEADER", "TSFLOW_ACCESS_NAME_HEADER",
+		"TSFLOW_ACCESS_GROUPS_HEADER", "TSFLOW_ACCESS_GROUP_GRANTS", "TSFLOW_ACCESS_GROUP_GRANTS_FILE",
+		"TSFLOW_ACCESS_AUTOSCOPE", "TSFLOW_ACCESS_GRANTS", "TSFLOW_LOG_LEVEL",
+		"TSFLOW_SERVE", "TSFLOW_FLOW_BACKEND", "TSFLOW_TAILNETS_FILE",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("TAILSCALE_API_KEY", "key")
+	t.Setenv("TAILSCALE_OAUTH_CLIENT_ID", "id")
+	t.Setenv("TAILSCALE_OAUTH_CLIENT_SECRET", "secret")
+	t.Setenv("TSFLOW_SERVE", "true")
+	t.Setenv("TSFLOW_ACCESS_CAPABILITY", "example.com/cap/tsflow")
+
+	t.Run("user header", func(t *testing.T) {
+		t.Setenv("TSFLOW_ACCESS_USER_HEADER", "X-Tailscale-User")
+		err := Load().Validate()
+		if err == nil || !strings.Contains(err.Error(), "TSFLOW_ACCESS_USER_HEADER is only valid") {
+			t.Fatalf("Validate() = %v", err)
+		}
+	})
+	t.Run("name header", func(t *testing.T) {
+		t.Setenv("TSFLOW_ACCESS_NAME_HEADER", "X-Tailscale-Name")
+		err := Load().Validate()
+		if err == nil || !strings.Contains(err.Error(), "TSFLOW_ACCESS_NAME_HEADER is only valid") {
+			t.Fatalf("Validate() = %v", err)
+		}
+	})
 }

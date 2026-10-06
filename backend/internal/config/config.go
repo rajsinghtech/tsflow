@@ -55,9 +55,13 @@ type Config struct {
 	// static when object-store credentials are configured.
 	FlowObjectStoreAuth    string
 	FlowObjectStoreRoleARN string
-	PollInterval           string
-	InitialBackfill        string
-	Retention              string
+	// FlowObjectStoreWebIdentityTokenFile is an OIDC token used to assume
+	// FlowObjectStoreRoleARN. Set means AssumeRoleWithWebIdentity, not the
+	// AWS SDK default chain.
+	FlowObjectStoreWebIdentityTokenFile string
+	PollInterval                        string
+	InitialBackfill                     string
+	Retention                           string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
@@ -108,6 +112,7 @@ func Load() *Config {
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 	}
+	cfg.FlowObjectStoreWebIdentityTokenFile = strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE"))
 	cfg.Access = cfg.loadAccess()
 	return cfg
 }
@@ -238,6 +243,9 @@ func (c *Config) validateObjectStore(backend string) error {
 	if strings.TrimSpace(c.FlowObjectStoreRoleARN) != "" && c.objectStoreAuth() != ObjectStoreAuthAWSDefault {
 		return errors.New("TSFLOW_S3_ROLE_ARN requires TSFLOW_S3_AUTH=aws_default")
 	}
+	if err := c.validateWebIdentityTokenFile(); err != nil {
+		return err
+	}
 	switch backend {
 	case FlowBackendGCS:
 		return c.validateGCS()
@@ -270,6 +278,20 @@ func (c *Config) validateObjectStore(backend string) error {
 		return errors.New("TSFLOW_S3_MAX_OBJECTS_PER_POLL must be a positive integer")
 	}
 	return nil
+}
+
+func (c *Config) validateWebIdentityTokenFile() error {
+	file := strings.TrimSpace(c.FlowObjectStoreWebIdentityTokenFile)
+	if file == "" {
+		return nil
+	}
+	if c.objectStoreAuth() != ObjectStoreAuthAWSDefault {
+		return errors.New("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE requires TSFLOW_S3_AUTH=aws_default")
+	}
+	if strings.TrimSpace(c.FlowObjectStoreRoleARN) == "" {
+		return errors.New("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE requires TSFLOW_S3_ROLE_ARN")
+	}
+	return readNonEmptyFile("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE", file)
 }
 
 func (c *Config) validateGCS() error {

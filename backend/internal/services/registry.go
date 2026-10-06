@@ -31,7 +31,7 @@ type Registry struct {
 }
 
 // PollerConfigFrom builds the process-wide poller settings from config.
-// Per-tailnet id and object prefix are applied later by NewRegistry.
+// Per-tailnet id and flow source overrides are applied later by NewRegistry.
 func PollerConfigFrom(cfg *config.Config) (PollerConfig, error) {
 	if cfg == nil {
 		return PollerConfig{}, fmt.Errorf("config is nil")
@@ -61,19 +61,34 @@ func PollerConfigFrom(cfg *config.Config) (PollerConfig, error) {
 	// earlier by config validation.
 	lookback, _ := time.ParseDuration(cfg.FlowObjectStoreLookback)
 	pc.ObjectStore = ObjectStoreConfig{
-		Bucket:       cfg.FlowObjectStoreBucket,
-		Prefix:       cfg.FlowObjectStorePrefix,
-		Endpoint:     cfg.FlowObjectStoreEndpoint,
-		Region:       cfg.FlowObjectStoreRegion,
-		AccessKey:    cfg.FlowObjectStoreAccessKey,
-		SecretKey:    cfg.FlowObjectStoreSecretKey,
-		UsePathStyle: cfg.FlowObjectStorePathStyle,
-		Lookback:     lookback,
-		MaxObjects:   cfg.FlowObjectStoreMaxObjects,
-		AuthMode:     objectStoreAuth(cfg, pc.FlowBackend),
-		RoleARN:      cfg.FlowObjectStoreRoleARN,
+		Bucket:               cfg.FlowObjectStoreBucket,
+		Prefix:               cfg.FlowObjectStorePrefix,
+		Endpoint:             cfg.FlowObjectStoreEndpoint,
+		Region:               cfg.FlowObjectStoreRegion,
+		AccessKey:            cfg.FlowObjectStoreAccessKey,
+		SecretKey:            cfg.FlowObjectStoreSecretKey,
+		UsePathStyle:         cfg.FlowObjectStorePathStyle,
+		Lookback:             lookback,
+		MaxObjects:           cfg.FlowObjectStoreMaxObjects,
+		AuthMode:             objectStoreAuth(cfg, pc.FlowBackend),
+		RoleARN:              cfg.FlowObjectStoreRoleARN,
+		WebIdentityTokenFile: cfg.FlowObjectStoreWebIdentityTokenFile,
 	}
 	return pc, nil
+}
+
+func flowSourceFromPoller(pc PollerConfig) config.FlowSource {
+	return config.FlowSource{
+		Backend:              pc.FlowBackend,
+		Bucket:               pc.ObjectStore.Bucket,
+		Prefix:               pc.ObjectStore.Prefix,
+		Region:               pc.ObjectStore.Region,
+		Endpoint:             pc.ObjectStore.Endpoint,
+		Auth:                 pc.ObjectStore.AuthMode,
+		RoleARN:              pc.ObjectStore.RoleARN,
+		WebIdentityTokenFile: pc.ObjectStore.WebIdentityTokenFile,
+		UsePathStyle:         pc.ObjectStore.UsePathStyle,
+	}
 }
 
 func objectStoreAuth(cfg *config.Config, backend string) string {
@@ -103,9 +118,16 @@ func NewRegistry(ctx context.Context, specs []config.TailnetSpec, store database
 		}
 		pollerCfg := base
 		pollerCfg.TailnetID = spec.ID
-		if spec.S3Prefix != "" {
-			pollerCfg.ObjectStore.Prefix = spec.S3Prefix
-		}
+		resolved := spec.ResolveFlow(flowSourceFromPoller(base))
+		pollerCfg.FlowBackend = resolved.Backend
+		pollerCfg.ObjectStore.Bucket = resolved.Bucket
+		pollerCfg.ObjectStore.Prefix = resolved.Prefix
+		pollerCfg.ObjectStore.Region = resolved.Region
+		pollerCfg.ObjectStore.Endpoint = resolved.Endpoint
+		pollerCfg.ObjectStore.AuthMode = resolved.Auth
+		pollerCfg.ObjectStore.RoleARN = resolved.RoleARN
+		pollerCfg.ObjectStore.WebIdentityTokenFile = resolved.WebIdentityTokenFile
+		pollerCfg.ObjectStore.UsePathStyle = resolved.UsePathStyle
 		service := NewTailscaleService(spec.ServiceConfig(nil))
 		if service.baseURL == "" {
 			return nil, fmt.Errorf("tailnet %q is missing an API URL", spec.ID)
