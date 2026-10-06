@@ -16,6 +16,8 @@ brew install rajsinghtech/tap/tsflow
 docker pull ghcr.io/rajsinghtech/tsflow:latest
 ```
 
+`ghcr.io/rajsinghtech/tsflow:main` tracks main and isn't a release.
+
 ### Binary Download
 
 Download from [GitHub Releases](https://github.com/rajsinghtech/tsflow/releases).
