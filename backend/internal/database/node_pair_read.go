@@ -36,9 +36,9 @@ func nodePairBounds(start, end time.Time) (int64, int64, error) {
 
 // GetNodePairAggregates retrieves node-pair aggregates for a time range.
 //
-// The scan is one statement. SQLite's WAL lock covers it, so this method does
-// not take s.mu. Holding the store read lock here kept a poll commit waiting
-// until the whole window had been aggregated.
+// The scan is one statement on the read pool. It does not take a tailnet
+// lock. A poll commit uses the writer connection, and WAL keeps this scan on
+// the last committed snapshot.
 func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err

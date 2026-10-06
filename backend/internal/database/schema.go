@@ -13,17 +13,33 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// SQLiteStore implements Store using SQLite
+// SQLiteStore implements Store using SQLite.
+//
+// db is a pool of read connections. writer is a single connection used for
+// commits. WAL lets a read run while a write transaction is open, so queries
+// do not take a lock. tailnetLocks serializes writers for one tailnet only.
 type SQLiteStore struct {
 	db     *sql.DB
+	writer *sql.DB
 	dbPath string
-	mu     sync.RWMutex
+
+	// tailnetLocks maps a tailnet id to *sync.Mutex.
+	tailnetLocks sync.Map
+
+	// writeStarted, when set, runs after a write transaction begins and before
+	// its statements. beforeCommit runs after those statements and before
+	// Commit. Tests use them to show one tailnet's ingest does not block
+	// another tailnet's query, and that a concurrent read sees the previous
+	// commit. Production leaves both nil.
+	writeStarted func(tailnetID string)
+	beforeCommit func(tailnetID string)
+
 	// migrateFailAfter aborts tailnet migration after the named table is
 	// dropped and before the transaction commits. Tests use it to prove a
 	// failed upgrade leaves the previous rows in place.
 	migrateFailAfter string
 	// nodePairReadHook, when set, runs immediately before the graph query.
-	// Tests use it to show the store mutex is not held across that read.
+	// Tests use it to show a poll commit is not waiting on that read.
 	nodePairReadHook func()
 
 	// derivedStatsScans counts node_pairs reads that build traffic stats.
@@ -39,8 +55,23 @@ type SQLiteStore struct {
 	protocolBackfillTailnets []string
 }
 
-// NewSQLiteStore creates a new SQLite store
+// NewSQLiteStore creates a new SQLite store.
+// The read pool and the writer connection are separate so a long query does
+// not occupy the connection a poll commit needs.
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
+	reader, err := openSQLite(dbPath, 10, 5)
+	if err != nil {
+		return nil, err
+	}
+	writer, err := openSQLite(dbPath, 1, 1)
+	if err != nil {
+		reader.Close()
+		return nil, err
+	}
+	return &SQLiteStore{db: reader, writer: writer, dbPath: dbPath}, nil
+}
+
+func openSQLite(dbPath string, maxOpen, maxIdle int) (*sql.DB, error) {
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=10000", dbPath)
 
 	db, err := sql.Open("sqlite", dsn)
@@ -48,11 +79,12 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
 	db.SetConnMaxLifetime(time.Hour)
 
-	// Ensure PRAGMAs are applied — DSN params aren't always honored by all drivers
+	// DSN pragmas are applied to each new connection. Running them once also
+	// creates the file before any query.
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
@@ -64,8 +96,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 			return nil, fmt.Errorf("failed to set %s: %w", pragma, err)
 		}
 	}
-
-	return &SQLiteStore{db: db, dbPath: dbPath}, nil
+	return db, nil
 }
 
 // Init creates the database schema
@@ -523,9 +554,14 @@ func (s *SQLiteStore) columnExists(ctx context.Context, table, column string) (b
 	return false, rows.Err()
 }
 
-// Close closes the database connection
+// Close closes the writer connection and the read pool.
 func (s *SQLiteStore) Close() error {
-	return s.db.Close()
+	errWriter := s.writer.Close()
+	errReader := s.db.Close()
+	if errWriter != nil {
+		return errWriter
+	}
+	return errReader
 }
 
 // parseTime parses a time string from SQLite

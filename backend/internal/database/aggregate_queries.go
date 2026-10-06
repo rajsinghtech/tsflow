@@ -65,10 +65,10 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, tailnetID string, r
 	if err := checkTailnetID(tailnetID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -90,7 +90,7 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, tailnetID string, r
 		return err
 	}
 
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 // CommitObjectIngest atomically writes aggregates for one immutable object and
@@ -100,10 +100,10 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 	if err := checkTailnetID(tailnetID); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -128,7 +128,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 		if err := recordObjectMetadataTx(ctx, tx, tailnetID, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
 			return err
 		}
-		return tx.Commit()
+		return s.commitWrite(tx, tailnetID)
 	}
 
 	if err := upsertNodeMetadataTx(ctx, tx, tailnetID, result.NodeMetadata); err != nil {
@@ -159,7 +159,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 		}
 	}
 
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 func nodeMetadataIDs(nodes []NodeMetadata) []string {
@@ -439,10 +439,10 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, tailnetID st
 	if len(aggregates) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -450,7 +450,7 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, tailnetID st
 	if err := upsertNodePairsTx(ctx, tx, tailnetID, aggregates); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 // UpsertBandwidth upserts total bandwidth into bandwidth.
@@ -461,10 +461,10 @@ func (s *SQLiteStore) UpsertBandwidth(ctx context.Context, tailnetID string, buc
 	if len(buckets) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -472,7 +472,7 @@ func (s *SQLiteStore) UpsertBandwidth(ctx context.Context, tailnetID string, buc
 	if err := upsertBandwidthTx(ctx, tx, tailnetID, buckets); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 // UpsertNodeBandwidth upserts per-node bandwidth into bandwidth_by_node.
@@ -483,10 +483,10 @@ func (s *SQLiteStore) UpsertNodeBandwidth(ctx context.Context, tailnetID string,
 	if len(buckets) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -494,7 +494,7 @@ func (s *SQLiteStore) UpsertNodeBandwidth(ctx context.Context, tailnetID string,
 	if err := upsertNodeBandwidthTx(ctx, tx, tailnetID, buckets); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 // GetBandwidth retrieves total bandwidth for a time range, bucketed by window size.
@@ -502,9 +502,6 @@ func (s *SQLiteStore) GetBandwidth(ctx context.Context, tailnetID string, start,
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -544,9 +541,6 @@ func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, tailnetID 
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -596,9 +590,6 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -662,10 +653,10 @@ func (s *SQLiteStore) UpsertTrafficStats(ctx context.Context, tailnetID string, 
 	if len(stats) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -673,7 +664,7 @@ func (s *SQLiteStore) UpsertTrafficStats(ctx context.Context, tailnetID string, 
 	if err := upsertTrafficStatsTx(ctx, tx, tailnetID, stats); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitWrite(tx, tailnetID)
 }
 
 // GetTrafficStats retrieves network-wide traffic statistics for a time range, bucketed by window size.
@@ -681,9 +672,6 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -725,7 +713,13 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 		ORDER BY sb.b ASC
 	`, bs, bs, bs, bs)
 
-	rows, err := s.db.QueryContext(ctx, query, tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix)
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, query, tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traffic stats: %w", err)
 	}
@@ -746,6 +740,9 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close traffic stats rows: %w", err)
 	}
 
 	portQuery := fmt.Sprintf(`
@@ -768,7 +765,7 @@ func (s *SQLiteStore) GetTrafficStats(ctx context.Context, tailnetID string, sta
 		WHERE rn <= 20
 		ORDER BY b ASC, bytes DESC, proto ASC, port ASC
 	`, bs, bs)
-	portRows, err := s.db.QueryContext(ctx, portQuery, tailnetID, startUnix, endUnix)
+	portRows, err := tx.QueryContext(ctx, portQuery, tailnetID, startUnix, endUnix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traffic stat ports: %w", err)
 	}
@@ -822,15 +819,14 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.queryTrafficStatsFromNodePairs(ctx, tailnetID, start, end, nil, trafficTypes)
 }
 
 // queryTrafficStatsFromNodePairs reads derived traffic stats from node_pairs.
 // ranges limits the read to those half-open intervals. Nil reads the whole
 // window. Bucket grouping always uses the full window, so a short gap inside
-// a long window lands on the same timestamps as a full read. Caller holds s.mu.
+// a long window lands on the same timestamps as a full read. The statements
+// share one read transaction so a commit cannot land between them.
 func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailnetID string, start, end time.Time, ranges [][2]int64, trafficTypes []string) ([]TrafficStats, error) {
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
@@ -840,6 +836,11 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	if len(ranges) == 0 {
 		ranges = [][2]int64{{startUnix, endUnix}}
 	}
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 	s.noteDerivedStatsRead(ranges)
 
 	bs := resolveBucketSize(endUnix - startUnix)
@@ -891,7 +892,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 
 	args := append([]any{tailnetID}, rangeArgs...)
 	args = append(args, typeArgs...)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pairs for traffic stats: %w", err)
 	}
@@ -918,6 +919,9 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node pair traffic rows: %w", err)
 	}
 
 	// Derive protocol breakdown from persisted protocol byte totals. The
@@ -957,7 +961,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	protoArgs = append(protoArgs, tailnetID)
 	protoArgs = append(protoArgs, protoRangeArgs...)
 	protoArgs = append(protoArgs, typeArgs...)
-	protoRows, err := s.db.QueryContext(ctx, protoQuery, protoArgs...)
+	protoRows, err := tx.QueryContext(ctx, protoQuery, protoArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pair protocols: %w", err)
 	}
@@ -1015,7 +1019,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		WHERE rn <= 20
 			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
 	`, bs, bs, rangeSQL, typeClause)
-	portRows, err := s.db.QueryContext(ctx, portQuery, args...)
+	portRows, err := tx.QueryContext(ctx, portQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pair ports: %w", err)
 	}
@@ -1058,9 +1062,6 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -1115,9 +1116,6 @@ func (s *SQLiteStore) GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -1174,9 +1172,6 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, tailnetID string, start, 
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -1217,9 +1212,6 @@ func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, tailnetID s
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
@@ -1277,14 +1269,17 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
 		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
 	}
+
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
 	result := &NodeDetailStats{
 		NodeID:   nodeID,
@@ -1294,7 +1289,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 
 	// Keep totals consistent with GetNodeBandwidth and GetTopTalkers: derive
 	// them from normalized pairs instead of legacy per-node bandwidth rows.
-	if err := s.db.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		WITH node_bytes AS (
 			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
@@ -1311,7 +1306,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		return nil, fmt.Errorf("failed to query node bandwidth: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT peer_id, SUM(tx), SUM(rx), SUM(tx+rx) AS total, SUM(fc)
 		FROM (
 			SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS fc
@@ -1344,8 +1339,11 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close node peer rows: %w", err)
+	}
 
-	portRows, err := s.db.QueryContext(ctx, `
+	portRows, err := tx.QueryContext(ctx, `
 		SELECT ports FROM node_pairs
 		WHERE tailnet_id = ?
 		  AND (src_node_id = ? OR dst_node_id = ?)
