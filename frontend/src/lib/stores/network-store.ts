@@ -1,8 +1,9 @@
 import { writable, derived, get } from 'svelte/store';
-import type { Device, NetworkLog, NetworkNode, NetworkLink, PortStat, TrafficEntry } from '#lib/types';
+import type { Device, DeviceScope, NetworkLog, NetworkNode, NetworkLink, PortStat, TrafficEntry } from '#lib/types';
 import { tailscaleService, type AggregatedFlow } from '#lib/services';
 import { processNetworkLogs } from '#lib/utils/network-processor';
 import { isValidIPv4, isIPv6 } from '#lib/utils/ip-utils';
+import { nodeMatchesDeviceScope, hasDeviceScope } from '#lib/utils/device-scope';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
@@ -71,13 +72,17 @@ function nodeMatchesSearch(node: NetworkNode, query: string): boolean {
 	}
 }
 
+function viewIsNarrowed(search: string, scope: DeviceScope | null): boolean {
+	return search.trim() !== '' || hasDeviceScope(scope);
+}
+
 // Primary matched nodes (nodes directly matching the search query)
 export const primaryMatchedNodes = derived(
 	[processedNetwork, debouncedFilterStore, nodesWithTrafficConnections],
 	([$network, $filters, $connectedNodeIds]) => {
 		return $network.nodes.filter((node) => {
 			if (!$connectedNodeIds.has(node.id)) return false;
-			return nodeMatchesSearch(node, $filters.search);
+			return nodeMatchesSearch(node, $filters.search) && nodeMatchesDeviceScope(node, $filters.deviceScope);
 		});
 	}
 );
@@ -112,8 +117,8 @@ export const filteredNodes = derived(
 	([$network, $primaryNodes, $connectedIds, $connectedNodeIds, $filters]) => {
 		const primaryIds = new Set($primaryNodes.map((n) => n.id));
 
-		// If no search, return all nodes with connections
-		if (!$filters.search) {
+		// If nothing narrows the view, return all nodes with connections
+		if (!viewIsNarrowed($filters.search, $filters.deviceScope)) {
 			return $network.nodes.filter((node) => $connectedNodeIds.has(node.id));
 		}
 
@@ -136,8 +141,8 @@ export const filteredEdges = derived(
 			// Both nodes must be visible
 			if (!nodeIds.has(link.source) || !nodeIds.has(link.target)) return false;
 
-			// If searching, at least one endpoint must be a primary match
-			if ($filters.search) {
+			// If the view is narrowed, at least one endpoint must be a primary match
+			if (viewIsNarrowed($filters.search, $filters.deviceScope)) {
 				return primaryIds.has(link.source) || primaryIds.has(link.target);
 			}
 

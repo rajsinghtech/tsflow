@@ -2,6 +2,7 @@
 	import { X } from 'lucide-svelte';
 	import { filterStore, uiStore } from '#lib/stores';
 	import type { TrafficType } from '#lib/types';
+	import { deviceScopeLabel, hasDeviceScope } from '#lib/utils/device-scope';
 	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 
 	// Traffic type options including exit node traffic
@@ -62,6 +63,22 @@
 			<X class="h-4 w-4" />
 		</button>
 	</div>
+
+	{#if hasDeviceScope($filterStore.deviceScope)}
+		<div class="mb-4 flex items-start justify-between gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2">
+			<div class="min-w-0">
+				<div class="text-sm font-medium">My devices</div>
+				<div class="truncate text-xs text-muted-foreground">{deviceScopeLabel($filterStore.deviceScope)}</div>
+			</div>
+			<button
+				type="button"
+				class="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary"
+				onclick={() => filterStore.clearDeviceScope()}
+			>
+				Clear
+			</button>
+		</div>
+	{/if}
 
 	<!-- Search -->
 	<div class="mb-4">

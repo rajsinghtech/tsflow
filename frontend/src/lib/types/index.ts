@@ -100,6 +100,13 @@ export interface NetworkLinkDirection {
 	ports: Set<number>;
 }
 
+// DeviceScope is the optional "My devices" view. Null means the
+// traffic graph is not narrowed. An empty list matches no devices.
+export interface DeviceScope {
+	owners: string[];
+	tags: string[];
+}
+
 // Filter types
 export interface FilterState {
 	search: string;
@@ -111,6 +118,7 @@ export interface FilterState {
 	showIpv4: boolean;
 	showIpv6: boolean;
 	selectedTags: string[];
+	deviceScope: DeviceScope | null;
 }
 
 // UI state types

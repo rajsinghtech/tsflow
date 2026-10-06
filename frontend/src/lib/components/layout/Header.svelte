@@ -5,7 +5,7 @@
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
-	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers } from '#lib/stores';
+	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
 	import { formatBytes, formatDuration } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
@@ -292,6 +292,14 @@
 
 	<!-- Right section: Actions -->
 	<div class="flex shrink-0 items-center gap-1 sm:gap-2">
+		{#if $viewerStore?.name || $viewerStore?.login}
+			<span
+				class="hidden max-w-[9rem] truncate text-xs text-muted-foreground sm:inline"
+				title={$viewerStore.login || $viewerStore.name}
+			>
+				{$viewerStore.name || $viewerStore.login}
+			</span>
+		{/if}
 		{#if isTrafficPage}
 			<button
 				onclick={handleFilterToggle}
