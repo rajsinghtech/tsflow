@@ -11,31 +11,33 @@ import (
 
 // BenchmarkHourRollupScale compares minute scans with hourly rollups at
 // 20,000 nodes. Windows are hour-aligned, one peer per node, one virtual
-// flow per minute. The 1 hour and 24 hour windows are a median of three
-// runs. The 7 day window is one run: it is the same 20,000 nodes and one
-// row per minute (10,080 minutes), loaded with one INSERT SELECT per hour
-// instead of a statement per row. That load leaves the secondary indexes
+// flow per minute. The 1 hour and 24 hour windows use 20,000 nodes and a
+// median of three runs. The 7 day window is one run at 4,000 nodes: a
+// 20,000-node week is about 50GB and the minute scan waits on disk instead
+// of the same in-memory merge measured for the shorter windows. 4,000 nodes
+// keeps that week in the same regime (about 10GB, 40 million minute rows).
+// The week is loaded with one INSERT SELECT per hour. Secondary indexes stay
 // off because these queries scan the primary key. It is skipped under -short.
 func BenchmarkHourRollupScale(b *testing.B) {
 	if testing.Short() {
 		b.Skip("skipping hourly rollup scale benchmark in short mode")
 	}
-	const nodes = 20000
 	const base int64 = 1_699_999_200
 	for _, window := range []struct {
 		name    string
 		minutes int
+		nodes   int
 	}{
-		{name: "1h", minutes: 60},
-		{name: "24h", minutes: 24 * 60},
-		{name: "7d", minutes: 7 * 24 * 60},
+		{name: "1h", minutes: 60, nodes: 20000},
+		{name: "24h", minutes: 24 * 60, nodes: 20000},
+		{name: "7d", minutes: 7 * 24 * 60, nodes: 4000},
 	} {
 		window := window
 		b.Run(window.name, func(b *testing.B) {
 			ctx := context.Background()
 			store := setupBenchDB(b)
 			loadStart := time.Now()
-			inserted := insertScalePairs(b, store, nodes, window.minutes, base)
+			inserted := insertScalePairs(b, store, window.nodes, window.minutes, base)
 			b.Logf("loaded %d minute rows in %s", inserted, time.Since(loadStart).Round(time.Millisecond))
 			// ANALYZE on a week of rows samples the whole file. These queries
 			// are primary-key range scans either way, so the week run skips it.
@@ -60,7 +62,7 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(rows) != nodes {
+				if len(rows) != window.nodes {
 					b.Fatalf("before graph pairs = %d", len(rows))
 				}
 				graphBefore = rows
@@ -105,7 +107,7 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(rows) != nodes {
+				if len(rows) != window.nodes {
 					b.Fatalf("after graph pairs = %d", len(rows))
 				}
 				graphAfter = rows
