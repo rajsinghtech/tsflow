@@ -32,7 +32,7 @@ One federated client per tailnet can cover both the API and the tsnet join. Give
 
 ### Object storage
 
-Flow objects are read with `github.com/aws/aws-sdk-go-v2/service/s3` and `github.com/aws/aws-sdk-go-v2/config`. There is no MinIO client. `NewObjectStoreSource` calls `config.LoadDefaultConfig`. If an access key or secret is present it installs `credentials.NewStaticCredentialsProvider` and the default chain is not used. The S3 client is selected when `TSFLOW_FLOW_BACKEND=s3`, or when the backend is unset and bucket, endpoint, access key, and secret are all set.
+Flow objects are read with `github.com/aws/aws-sdk-go-v2/service/s3` and `github.com/aws/aws-sdk-go-v2/config`. There is no MinIO client. `NewObjectStoreSource` calls `config.LoadDefaultConfig` for static keys and for `aws_default` without a web identity token file. If an access key or secret is present on the static path it installs `credentials.NewStaticCredentialsProvider` and the default chain is not used. A web identity token file does not call `LoadDefaultConfig`. That client is an STS `AssumeRoleWithWebIdentity` provider for the tailnet's role and token file. The S3 client is selected when `TSFLOW_FLOW_BACKEND=s3`, or when the backend is unset and bucket, endpoint, access key, and secret are all set, or when auth is `aws_default`. A tailnets entry can select a different backend.
 
 `LoadDefaultConfig` without a static provider uses the AWS SDK default credential chain, in this order:
 
@@ -76,7 +76,9 @@ OAuth scopes on a WIF entry are ignored. The federated identity already has its 
 
 ### Object storage, process-wide
 
-One bucket configuration is shared by every tailnet. Tailnets still override the prefix with `s3_prefix`. Per-tailnet buckets are out of scope.
+The process environment is still the default source for every tailnet. A tailnets file entry inherits any flow field it leaves unset, including the prefix. A file that only sets `s3_prefix` (or `prefix`, the same field) keeps today's behavior: one backend, one bucket, one credential, and a per-tailnet prefix.
+
+An entry may override `flow_backend` (`api`, `s3`, or `gcs`), `bucket`, `region`, `endpoint`, `s3_auth` (`static`, `aws_default`, or `gcs_adc`), `role_arn`, and `web_identity_token_file`. Static access keys are not per entry. They stay on `TSFLOW_S3_ACCESS_KEY_ID` and `TSFLOW_S3_SECRET_ACCESS_KEY`. `TSFLOW_S3_PATH_STYLE`, lookback, and the object cap stay process-wide too. Path style still follows the auth mode when that variable is unset and the entry changes backend or auth: `aws_default` uses virtual-hosted style, static S3 keeps path style.
 
 | `TSFLOW_S3_AUTH` | Status | Reader |
 | --- | --- | --- |
@@ -95,7 +97,9 @@ One bucket configuration is shared by every tailnet. Tailnets still override the
 
 `aws_default` does not require an endpoint. An empty endpoint uses the SDK's regional S3 endpoint. A set endpoint is still checked as an absolute `http` or `https` URL, for a non-AWS S3 API that should use the default chain. Region comes from `TSFLOW_S3_REGION`, then `AWS_REGION`, then `AWS_DEFAULT_REGION`. It is required. The historical `garage` region default is not applied in this mode. Path style defaults to false when `TSFLOW_S3_PATH_STYLE` is unset, because AWS S3 uses virtual-hosted style. Set the variable to keep path style.
 
-`TSFLOW_S3_ROLE_ARN` is only valid with `aws_default`. The pod or instance role from the chain calls STS `AssumeRole`. Session name is `tsflow`. The cache refreshes that credential. Do not point this at the role Tailscale itself assumes to write logs. That role trusts Tailscale's account and an external ID. tsflow does not send an external ID. The reader role should trust the workload identity, and the bucket policy should allow that role to list and get objects.
+`TSFLOW_S3_ROLE_ARN` is only valid with `aws_default`. Without a web identity token file, the pod or instance role from the chain calls STS `AssumeRole`. Session name is `tsflow`. The cache refreshes that credential. Do not point this at the role Tailscale itself assumes to write logs. That role trusts Tailscale's account and an external ID. tsflow does not send an external ID. The reader role should trust the workload identity, and the bucket policy should allow that role to list and get objects.
+
+`TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE`, or `web_identity_token_file` on a tailnet, changes that hop. The role is assumed with STS `AssumeRoleWithWebIdentity` and the OIDC token in the file. A Google-issued ID token is the usual cross-account case: the token's audience is the IAM OIDC provider, and the role trusts that provider. tsflow reads the file again when the cached credentials expire, and it trims whitespace. It does not call `config.LoadDefaultConfig` for that client. `AWS_ACCESS_KEY_ID`, `AWS_ROLE_ARN`, and `AWS_WEB_IDENTITY_TOKEN_FILE` are not consulted, so two tailnets can assume two roles from two token files in one process. A role without a token file still uses the default chain. Startup checks that the file exists and is non-empty. It does not call STS.
 
 ### Tailscale log streaming is not the reader
 
@@ -206,7 +210,35 @@ auth:
   id_token_env: LAB_WIF_ID_TOKEN
 ```
 
-Object-store auth is not per entry. It stays on the process environment above. `s3_prefix` remains the per-tailnet override.
+Flow logs can differ per entry. Unset fields inherit the process environment above. `prefix` and `s3_prefix` are the same override. Do not set them to different values.
+
+```yaml
+tailnets:
+  - id: prod
+    tailnet: prod.example.com
+    api_key_env: PROD_TAILSCALE_API_KEY
+    flow_backend: gcs
+    bucket: example-prod-flow-logs
+    prefix: network/
+  - id: staging
+    tailnet: staging.example.com
+    api_key_env: STAGING_TAILSCALE_API_KEY
+    flow_backend: s3
+    s3_auth: aws_default
+    bucket: example-staging-flow-logs
+    region: us-east-1
+    role_arn: arn:aws:iam::123456789012:role/tsflow-reader
+    web_identity_token_file: /var/run/tsflow/staging/gcp-token
+    prefix: staging/network/
+  - id: lab
+    tailnet: lab.example.com
+    api_key_env: LAB_TAILSCALE_API_KEY
+    flow_backend: api
+```
+
+`prod` uses the native GCS reader and Application Default Credentials. It needs a bucket and must not inherit an S3 endpoint, static keys, or a role ARN. `staging` reads an S3 bucket in another account. The token file is a Google-issued ID token for that role, not the Tailscale API token in `auth.id_token_file`, and not `AWS_WEB_IDENTITY_TOKEN_FILE`. `lab` does not stream to a bucket. Its poller uses the Tailscale API logs endpoint. Each of the three gets its own poller, its own object store client when it has one, and its own cursor. Ingested keys are unique per `(tailnet_id, object_key)`.
+
+A `gcs` entry that inherits a process `TSFLOW_S3_ENDPOINT` fails startup, because the native reader does not use an S3 endpoint. Leave the process endpoint unset, or do not point a GCS tailnet at a process that is configured for an S3-compatible endpoint.
 
 `TSFLOW_TAILNETS_FILE` still cannot be combined with `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, OAuth client variables, `TAILSCALE_AUTH`, or the `TAILSCALE_WIF_*` variables.
 
@@ -221,7 +253,7 @@ Within one tailnet the cache is two layers, both on that tailnet's token source:
 
 A tailnet of about 20k nodes does not exchange once per node. Device refresh is one list call. Flow import is a sequence of time-range calls. All of them share the tailnet's cached API token. Audience discovery is the expensive source: `ObtainProviderToken` may spend a few seconds probing metadata, and an AWS web identity token lives about five minutes. That still happens once per tailnet per ID-token lifetime, then the API token cache covers the poll.
 
-AWS credentials are cached inside the SDK provider. The optional assume-role provider is wrapped in `aws.NewCredentialsCache`, so a poll that lists and downloads many objects does not call STS per object. Several tailnets share that one process-wide S3 client configuration. They do not assume the role separately.
+AWS credentials are cached inside the SDK provider. The assume-role provider and the web identity provider are wrapped in `aws.NewCredentialsCache`, so a poll that lists and downloads many objects does not call STS per object. Each tailnet has its own client and its own cache. A tailnet with `web_identity_token_file` assumes only its own role. A tailnet that leaves the file unset uses the process chain, and `TSFLOW_S3_ROLE_ARN` when that is set.
 
 Startup checks that a configured token file exists and is non-empty. It does not exchange a token and it does not call STS. A bad JWT or a missing cloud credential fails the first API or S3 call that needs it. There is no silent fallback to an API key, an OAuth secret, or static S3 keys.
 
@@ -229,7 +261,7 @@ Startup checks that a configured token file exists and is non-empty. It does not
 
 `TailnetSpec` carries the resolved auth mode and WIF material for that entry. `NewTailscaleService` builds the client from that spec alone. OAuth client-credentials caches and WIF caches live inside the HTTP client for that service. The registry still runs one poller goroutine per tailnet, and a slow token exchange in one tailnet does not block another's poll loop beyond the usual startup sequencing.
 
-Object storage is the exception: one credential, one bucket, many prefixes. That matches the current poller, which already shares `ObjectStoreConfig` and overrides `Prefix`.
+Object storage follows the same split. Each tailnet resolves a flow source, builds its own client when the backend is `s3` or `gcs`, and writes its cursor on its own tailnet id. An entry that leaves the flow fields unset shares the process bucket and credentials and still keeps its own client and cursor. Prefix overrides remain per tailnet.
 
 tsnet WIF is the one embedded node for the process. Use the same federated client as that tailnet's API identity when one client should both join and read. Separate client ids still work if the scopes must differ. tsflow does not copy API WIF fields onto the node automatically.
 
@@ -256,13 +288,25 @@ Object storage:
 - `aws_default` requires `TSFLOW_FLOW_BACKEND=s3` when the backend is set to `api`, requires a bucket and a region, and rejects the static key variables named above.
 - `aws_default` with an empty backend selects `s3`.
 - `TSFLOW_S3_ROLE_ARN` requires `aws_default`.
+- `TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE` requires `aws_default` and `TSFLOW_S3_ROLE_ARN`. The file must exist and be non-empty.
 - `static` S3 still requires bucket, endpoint, access key, and secret. Endpoint scheme and lookback rules are unchanged.
+
+Per-tailnet flow fields use the same combinations, with the tailnet id in the message:
+
+- `flow_backend` must be `api`, `s3`, or `gcs`. `s3_auth` must be `static`, `aws_default`, or `gcs_adc`.
+- `prefix` and `s3_prefix` may both be set only when the values match.
+- `flow_backend: api` rejects bucket, region, endpoint, `s3_auth`, `role_arn`, and `web_identity_token_file`. A prefix on an API tailnet is still accepted.
+- Object store fields with no backend, while the process backend is `api`, are rejected. The entry has to set `flow_backend`.
+- `gcs` requires a bucket, `s3_auth` of `gcs_adc` or empty, and rejects an endpoint, a role ARN, a web identity token file, and the static key variables named above.
+- `gcs_adc` with backend `s3` is rejected. `aws_default` requires backend `s3`, a bucket, and a region, and rejects those static key variables.
+- `role_arn` requires `aws_default`. `web_identity_token_file` requires `aws_default` and `role_arn`, and the file must exist and be non-empty.
+- `s3` with `static` or empty auth still requires a bucket, an endpoint, and the process static keys.
 
 `NewObjectStoreSource` repeats the GCS endpoint rejection. A caller that skips `Validate` still cannot treat a native GCS bucket as an S3 endpoint, and it cannot fall through to static keys.
 
 ## Not in this change
 
-- Per-tailnet object-store credentials or buckets.
+- Per-tailnet static access keys. Those remain `TSFLOW_S3_ACCESS_KEY_ID` and `TSFLOW_S3_SECRET_ACCESS_KEY`.
 - An external ID on `AssumeRole`.
 - Azure metadata discovery for audience mode.
 

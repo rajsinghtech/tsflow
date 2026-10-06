@@ -2,6 +2,7 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -39,7 +41,13 @@ type ObjectStoreConfig struct {
 	// historical static provider when keys are set.
 	AuthMode string
 	// RoleARN, when set with aws_default, is assumed using the default chain.
-	RoleARN string
+	// WebIdentityTokenFile selects AssumeRoleWithWebIdentity for that role
+	// and does not consult the process AWS credential environment.
+	RoleARN              string
+	WebIdentityTokenFile string
+	// stsEndpoint overrides the STS endpoint for AssumeRoleWithWebIdentity.
+	// Tests set it. Production leaves it empty.
+	stsEndpoint string
 }
 
 type blobObject struct {
@@ -158,8 +166,25 @@ func normalizeObjectStoreConfig(cfg ObjectStoreConfig) (ObjectStoreConfig, error
 			return ObjectStoreConfig{}, fmt.Errorf("object-store endpoint must use http or https")
 		}
 	}
-	if strings.TrimSpace(cfg.RoleARN) != "" && cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault {
+	cfg.RoleARN = strings.TrimSpace(cfg.RoleARN)
+	cfg.WebIdentityTokenFile = strings.TrimSpace(cfg.WebIdentityTokenFile)
+	if cfg.RoleARN != "" && cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault {
 		return ObjectStoreConfig{}, fmt.Errorf("object-store role ARN requires auth %s", tsconfig.ObjectStoreAuthAWSDefault)
+	}
+	if cfg.WebIdentityTokenFile != "" && cfg.AuthMode != tsconfig.ObjectStoreAuthAWSDefault {
+		return ObjectStoreConfig{}, fmt.Errorf("object-store web identity token file requires auth %s", tsconfig.ObjectStoreAuthAWSDefault)
+	}
+	if cfg.WebIdentityTokenFile != "" && cfg.RoleARN == "" {
+		return ObjectStoreConfig{}, fmt.Errorf("object-store web identity token file requires a role ARN")
+	}
+	if cfg.WebIdentityTokenFile != "" {
+		body, err := os.ReadFile(cfg.WebIdentityTokenFile)
+		if err != nil {
+			return ObjectStoreConfig{}, fmt.Errorf("object-store web identity token file: %w", err)
+		}
+		if strings.TrimSpace(string(body)) == "" {
+			return ObjectStoreConfig{}, fmt.Errorf("object-store web identity token file %s is empty", cfg.WebIdentityTokenFile)
+		}
 	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = "network/"
@@ -179,6 +204,12 @@ func normalizeObjectStoreConfig(cfg ObjectStoreConfig) (ObjectStoreConfig, error
 }
 
 func loadObjectStoreAWSConfig(ctx context.Context, cfg ObjectStoreConfig) (aws.Config, error) {
+	if cfg.AuthMode == tsconfig.ObjectStoreAuthAWSDefault && strings.TrimSpace(cfg.WebIdentityTokenFile) != "" {
+		// A token file is this tailnet's identity. LoadDefaultConfig would
+		// read AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE and apply one
+		// role to every client in the process.
+		return loadWebIdentityAWSConfig(cfg)
+	}
 	loadOptions := []func(*config.LoadOptions) error{}
 	if cfg.Region != "" {
 		loadOptions = append(loadOptions, config.WithRegion(cfg.Region))
@@ -206,6 +237,50 @@ func loadObjectStoreAWSConfig(ctx context.Context, cfg ObjectStoreConfig) (aws.C
 		))
 	}
 	return awsCfg, nil
+}
+
+// tokenFileRetriever reads an OIDC token at credential refresh time and
+// drops surrounding whitespace. Projected tokens and Google ID tokens often
+// end with a newline. stscreds.IdentityTokenFile does not trim.
+type tokenFileRetriever string
+
+func (f tokenFileRetriever) GetIdentityToken() ([]byte, error) {
+	body, err := os.ReadFile(string(f))
+	if err != nil {
+		return nil, fmt.Errorf("web identity token file: %w", err)
+	}
+	token := bytes.TrimSpace(body)
+	if len(token) == 0 {
+		return nil, fmt.Errorf("web identity token file %s is empty", string(f))
+	}
+	return token, nil
+}
+
+func loadWebIdentityAWSConfig(cfg ObjectStoreConfig) (aws.Config, error) {
+	region := strings.TrimSpace(cfg.Region)
+	roleARN := strings.TrimSpace(cfg.RoleARN)
+	tokenFile := strings.TrimSpace(cfg.WebIdentityTokenFile)
+	options := sts.Options{Region: region}
+	if endpoint := strings.TrimSpace(cfg.stsEndpoint); endpoint != "" {
+		options.BaseEndpoint = aws.String(endpoint)
+	}
+	// Do not use config.LoadDefaultConfig here. That chain reads
+	// AWS_ACCESS_KEY_ID, AWS_ROLE_ARN, and AWS_WEB_IDENTITY_TOKEN_FILE, so
+	// every tailnet in the process would assume the same role.
+	// AssumeRoleWithWebIdentity is unsigned. The OIDC token is the credential.
+	client := sts.New(options)
+	provider := stscreds.NewWebIdentityRoleProvider(
+		client,
+		roleARN,
+		tokenFileRetriever(tokenFile),
+		func(o *stscreds.WebIdentityRoleOptions) {
+			o.RoleSessionName = "tsflow"
+		},
+	)
+	return aws.Config{
+		Region:      region,
+		Credentials: aws.NewCredentialsCache(provider),
+	}, nil
 }
 
 func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time.Time) (int, int, time.Time, error) {
