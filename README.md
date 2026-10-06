@@ -354,6 +354,16 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 
 TSFlow stores per-minute flow aggregates in SQLite with a rolling retention window (default 30 days). Charts over wider windows use query-time bucketing — no data loss from pre-aggregation. When `TSFLOW_FLOW_BACKEND=s3`, TSFlow imports immutable `network/YYYY/MM/DD/*.ndjson`, `*.ndjson.zst`, `*.ndjson.zstd`, `*.ndjson.gz`, or `*.ndjson.gzip` objects from S3-compatible storage and tracks ingested object keys so repeated polling does not double count traffic.
 
+### Ranked talkers and pairs
+
+`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. This is the API behind a later table view. The existing graph and `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay as they are.
+
+`start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use.
+
+A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `hostname` is the stored device hostname, or the stored device name when the hostname is blank. A pair row has `srcNodeId`, `srcHostname`, `dstNodeId`, `dstHostname`, the same byte fields, and `flowCount`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
+
+An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
+
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`

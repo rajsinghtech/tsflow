@@ -85,6 +85,51 @@ type TopPair struct {
 	FlowCount  int64  `json:"flowCount"`
 }
 
+const (
+	// RankDefaultLimit is the page size for ranked talker and pair reads.
+	RankDefaultLimit = 20
+	// RankMaxLimit is the largest page a ranked read will return.
+	RankMaxLimit = 200
+	// RankMaxOffset bounds how far a ranked page can skip.
+	RankMaxOffset = 100000
+	// RankSortBytes orders by total volume descending.
+	RankSortBytes = "bytes"
+	// RankSortFlows orders by flow count descending.
+	RankSortFlows = "flows"
+)
+
+// RankedTalker is one device over a window, with the same byte and flow
+// fields the pair and traffic-stats reads already use.
+type RankedTalker struct {
+	NodeID     string `json:"nodeId"`
+	Hostname   string `json:"hostname"`
+	TxBytes    int64  `json:"txBytes"`
+	RxBytes    int64  `json:"rxBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+	FlowCount  int64  `json:"flowCount"`
+}
+
+// RankedPair is one directed src/dst over a window.
+type RankedPair struct {
+	SrcNodeID   string `json:"srcNodeId"`
+	SrcHostname string `json:"srcHostname"`
+	DstNodeID   string `json:"dstNodeId"`
+	DstHostname string `json:"dstHostname"`
+	TxBytes     int64  `json:"txBytes"`
+	RxBytes     int64  `json:"rxBytes"`
+	TotalBytes  int64  `json:"totalBytes"`
+	FlowCount   int64  `json:"flowCount"`
+}
+
+// RankQuery selects one page of a ranked read.
+// An empty Sort means bytes. Limit <= 0 selects RankDefaultLimit.
+type RankQuery struct {
+	Limit        int
+	Offset       int
+	Sort         string
+	TrafficTypes []string
+}
+
 // PortStat represents traffic volume for a specific port/protocol
 type PortStat struct {
 	Port  int   `json:"port"`
@@ -200,6 +245,11 @@ type Store interface {
 	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
 	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
+	// ListRankedTalkers and ListRankedPairs page device and pair totals.
+	// Complete hours come from the hourly rollup. The bool is true when
+	// another row exists after this page.
+	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
+	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 
 	// Atomic poll commit
