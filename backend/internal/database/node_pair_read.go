@@ -34,11 +34,28 @@ func nodePairBounds(start, end time.Time) (int64, int64, error) {
 	return startUnix, endUnix, nil
 }
 
+// nodePairHourScanSQL reads hourly rollup rows. min_bucket is the earliest
+// minute that contributed, which is what the graph aggregate reports.
+const nodePairHourScanSQL = `
+SELECT min_bucket, src_node_id, dst_node_id, traffic_type,
+       tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count,
+       protocol_bytes, ports,
+       tx_protocol_bytes, rx_protocol_bytes,
+       tx_ports, rx_ports,
+       directional_ports
+FROM node_pair_hours
+WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
 // GetNodePairAggregates retrieves node-pair aggregates for a time range.
 //
-// The scan is one statement on the read pool. It does not take a tailnet
-// lock. A poll commit uses the writer connection, and WAL keeps this scan on
-// the last committed snapshot.
+// Hours that sit entirely inside the window and are already rolled up are
+// read from node_pair_hours. The partial hour at each end is read from
+// minute rows. A window with no complete rolled hour is one scan of
+// node_pairs, which is the previous query.
+//
+// The read uses the read pool and does not take a tailnet lock. A poll
+// commit uses the writer connection, and WAL keeps this read on one snapshot.
 func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
@@ -50,13 +67,48 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if s.nodePairReadHook != nil {
 		s.nodePairReadHook()
 	}
-	rows, err := s.db.QueryContext(ctx, nodePairScanSQL, tailnetID, startUnix, endUnix)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query node pairs: %w", err)
-	}
-	defer rows.Close()
 
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	plan, err := s.hourPlan(ctx, tx, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
 	grouped := make(map[pairGroupKey]*pairGroup)
+	if err := collectPairGroups(ctx, tx, tailnetID, plan, grouped); err != nil {
+		return nil, err
+	}
+	return sortedPairAggregates(grouped)
+}
+
+func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan hourPlan, grouped map[pairGroupKey]*pairGroup) error {
+	for _, span := range plan.minutes {
+		rows, err := q.QueryContext(ctx, nodePairScanSQL, tailnetID, span[0], span[1])
+		if err != nil {
+			return fmt.Errorf("failed to query node pairs: %w", err)
+		}
+		if err := readPairRows(rows, grouped, false); err != nil {
+			return err
+		}
+	}
+	for _, span := range plan.hours {
+		rows, err := q.QueryContext(ctx, nodePairHourScanSQL, tailnetID, span[0], span[1])
+		if err != nil {
+			return fmt.Errorf("failed to query node pairs: %w", err)
+		}
+		if err := readPairRows(rows, grouped, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty bool) error {
+	defer rows.Close()
 	for rows.Next() {
 		var bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64
 		var src, dst, traffic string
@@ -69,7 +121,7 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 			&txPorts, &rxPorts,
 			&directional,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan node pair: %w", err)
+			return fmt.Errorf("failed to scan node pair: %w", err)
 		}
 		key := pairGroupKey{src: src, dst: dst, traffic: traffic}
 		group := grouped[key]
@@ -78,16 +130,22 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 			grouped[key] = group
 		}
 		if err := group.add(bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
-			return nil, fmt.Errorf("failed to scan node pair: %w", err)
+			return fmt.Errorf("failed to scan node pair: %w", err)
+		}
+		if dirty {
+			group.dirty = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to query node pairs: %w", err)
+		return fmt.Errorf("failed to query node pairs: %w", err)
 	}
+	return nil
+}
+
+func sortedPairAggregates(grouped map[pairGroupKey]*pairGroup) ([]NodePairAggregate, error) {
 	if len(grouped) == 0 {
 		return nil, nil
 	}
-
 	aggregates := make([]NodePairAggregate, 0, len(grouped))
 	for key, group := range grouped {
 		agg, err := group.aggregate(key)
@@ -187,6 +245,9 @@ type pairGroup struct {
 	ports       portSums
 	txPorts     portSums
 	rxPorts     portSums
+	// dirty marks a group that absorbed a minute row during an hourly merge.
+	// Seeded hourly rows stay clean so an untouched pair is not rewritten.
+	dirty bool
 }
 
 func newPairGroup() *pairGroup {
@@ -359,6 +420,10 @@ type portItem struct {
 }
 
 func formatPorts(sums portSums) string {
+	return formatPortsLimit(sums, 20)
+}
+
+func formatPortsLimit(sums portSums, limit int) string {
 	if len(sums.byKey) == 0 {
 		return "[]"
 	}
@@ -385,8 +450,8 @@ func formatPorts(sums portSums) string {
 		}
 		return a.key.port < b.key.port
 	})
-	if len(items) > 20 {
-		items = items[:20]
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 	var b strings.Builder
 	b.WriteByte('[')

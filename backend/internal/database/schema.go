@@ -53,6 +53,11 @@ type SQLiteStore struct {
 	// protocolBackfillTailnets is the order those passes ran.
 	protocolBackfillScans    int
 	protocolBackfillTailnets []string
+
+	// hourRollupBackfillScans counts startup passes that merge minute rows into
+	// hourly rollups. A startup whose high-water mark already covers every
+	// closed minute does not increment it.
+	hourRollupBackfillScans atomic.Int64
 }
 
 // NewSQLiteStore creates a new SQLite store.
@@ -128,6 +133,8 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	}
 
 	// Step 2: Drop old tier tables and the ephemeral raw-log table.
+	// node_pairs_hourly is the pre-tailnet tier table, not the rollup. The
+	// rollup lives in node_pair_hours and is created below.
 	for _, table := range []string{
 		"node_pairs_hourly", "node_pairs_daily",
 		"bandwidth_hourly", "bandwidth_daily",
@@ -156,10 +163,18 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if err := s.ensureBackfillState(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureHourRollupSchema(ctx); err != nil {
+		return err
+	}
 	// Repair legacy protocol totals after the tailnet rewrite so every row
 	// already has a tailnet id. Databases that finished this pass skip it.
+	// Hour rollups run after that repair so a rolled hour stores the same
+	// protocol totals the minute rows have.
 	if err := s.backfillProtocolBytes(ctx); err != nil {
 		return fmt.Errorf("failed to backfill protocol byte totals: %w", err)
+	}
+	if err := s.backfillHourRollups(ctx); err != nil {
+		return fmt.Errorf("failed to backfill hourly node pair rollups: %w", err)
 	}
 
 	log.Printf("Database initialized at %s", s.dbPath)
@@ -272,6 +287,8 @@ func (s *SQLiteStore) ensureBackfillState(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS backfill_state (
 			tailnet_id TEXT NOT NULL PRIMARY KEY,
 			protocol_bytes_bucket INTEGER NOT NULL DEFAULT -1,
+			hour_rollup_bucket INTEGER NOT NULL DEFAULT -1,
+			hour_rollup_legacy INTEGER NOT NULL DEFAULT 0,
 			completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		) WITHOUT ROWID
 	`)
@@ -288,6 +305,23 @@ func (s *SQLiteStore) ensureBackfillState(ctx context.Context) error {
 			ADD COLUMN protocol_bytes_bucket INTEGER NOT NULL DEFAULT -1
 		`); err != nil {
 			return fmt.Errorf("failed to add backfill_state.protocol_bytes_bucket: %w", err)
+		}
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "hour_rollup_bucket", ddl: `ALTER TABLE backfill_state ADD COLUMN hour_rollup_bucket INTEGER NOT NULL DEFAULT -1`},
+		{name: "hour_rollup_legacy", ddl: `ALTER TABLE backfill_state ADD COLUMN hour_rollup_legacy INTEGER NOT NULL DEFAULT 0`},
+	} {
+		exists, err := s.columnExists(ctx, "backfill_state", column.name)
+		if err != nil {
+			return fmt.Errorf("failed to inspect backfill_state.%s: %w", column.name, err)
+		}
+		if !exists {
+			if _, err := s.db.ExecContext(ctx, column.ddl); err != nil {
+				return fmt.Errorf("failed to add backfill_state.%s: %w", column.name, err)
+			}
 		}
 	}
 	// The first cut of this table used an empty tailnet id as a pass-wide
