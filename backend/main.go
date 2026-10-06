@@ -249,11 +249,16 @@ func main() {
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
 	log.Printf("Retention: %s", pollerConfig.Retention)
 	log.Printf("Flow Backend: %s", pollerConfig.FlowBackend)
-	if pollerConfig.FlowBackend == "s3" {
-		log.Printf("Flow Object Store: bucket=%s prefix=%s endpoint=%s maxObjectsPerPoll=%d",
+	if pollerConfig.FlowBackend == "s3" || pollerConfig.FlowBackend == "gcs" {
+		authMode := pollerConfig.ObjectStore.AuthMode
+		if authMode == "" {
+			authMode = "static"
+		}
+		log.Printf("Flow Object Store: bucket=%s prefix=%s endpoint=%s auth=%s maxObjectsPerPoll=%d",
 			pollerConfig.ObjectStore.Bucket,
 			pollerConfig.ObjectStore.Prefix,
 			pollerConfig.ObjectStore.Endpoint,
+			authMode,
 			pollerConfig.ObjectStore.MaxObjects,
 		)
 	}
@@ -261,20 +266,30 @@ func main() {
 	// Log authentication method being used. The single-tailnet env path keeps
 	// the original line. A tailnet file logs only the method, not the secret.
 	if cfg.TailnetsFile == "" {
-		if cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "" {
+		switch {
+		case cfg.TailscaleAuth == config.TailscaleAuthWIF:
+			maskedID := cfg.TailscaleWIFClientID
+			if len(maskedID) > 4 {
+				maskedID = "****" + maskedID[len(maskedID)-4:]
+			}
+			log.Printf("Authentication: workload identity federation (Client ID: %s)", maskedID)
+		case cfg.TailscaleOAuthClientID != "" && cfg.TailscaleOAuthClientSecret != "":
 			maskedID := cfg.TailscaleOAuthClientID
 			if len(maskedID) > 4 {
 				maskedID = "****" + maskedID[len(maskedID)-4:]
 			}
 			log.Printf("Authentication: OAuth Client Credentials (Client ID: %s)", maskedID)
-		} else {
+		default:
 			log.Printf("Authentication: API Key")
 		}
 	} else {
 		for _, spec := range tailnets {
 			method := "API key"
-			if spec.OAuthClientID != "" {
+			switch spec.AuthMode {
+			case config.TailscaleAuthOAuth:
 				method = "OAuth"
+			case config.TailscaleAuthWIF:
+				method = "workload identity federation"
 			}
 			log.Printf("Tailnet %s authentication: %s", spec.ID, method)
 		}

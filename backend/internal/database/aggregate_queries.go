@@ -824,15 +824,27 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.queryTrafficStatsFromNodePairs(ctx, tailnetID, start, end, nil, trafficTypes)
+}
 
+// queryTrafficStatsFromNodePairs reads derived traffic stats from node_pairs.
+// ranges limits the read to those half-open intervals. Nil reads the whole
+// window. Bucket grouping always uses the full window, so a short gap inside
+// a long window lands on the same timestamps as a full read. Caller holds s.mu.
+func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailnetID string, start, end time.Time, ranges [][2]int64, trafficTypes []string) ([]TrafficStats, error) {
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
 		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
 	}
+	if len(ranges) == 0 {
+		ranges = [][2]int64{{startUnix, endUnix}}
+	}
+	s.noteDerivedStatsRead(ranges)
 
 	bs := resolveBucketSize(endUnix - startUnix)
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	rangeSQL, rangeArgs := bucketRangePredicate("bucket", ranges)
 	query := fmt.Sprintf(`
 		WITH filtered_pairs AS (
 			SELECT (bucket / %d) * %d AS b,
@@ -843,7 +855,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			       rx_bytes,
 			       flow_count
 			FROM node_pairs
-			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?%s
+			WHERE tailnet_id = ? AND %s%s
 		), traffic_totals AS (
 			SELECT b,
 			       SUM(CASE WHEN traffic_type = 'virtual'
@@ -875,9 +887,10 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 		FROM traffic_totals t
 		JOIN unique_pair_counts p ON p.b = t.b
 		ORDER BY t.b ASC
-	`, bs, bs, typeClause)
+	`, bs, bs, rangeSQL, typeClause)
 
-	args := append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
+	args := append([]any{tailnetID}, rangeArgs...)
+	args = append(args, typeArgs...)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pairs for traffic stats: %w", err)
@@ -910,6 +923,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 	// Derive protocol breakdown from persisted protocol byte totals. The
 	// fallback branch keeps pre-migration rows useful if they are inserted by
 	// an older writer after startup.
+	protoRangeSQL, protoRangeArgs := bucketRangePredicate("np.bucket", ranges)
 	protoQuery := fmt.Sprintf(`
 		WITH protocol_values AS (
 			SELECT (np.bucket / %d) * %d AS b,
@@ -918,7 +932,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
-			WHERE np.tailnet_id = ? AND np.bucket >= ? AND np.bucket < ?%s
+			WHERE np.tailnet_id = ? AND %s%s
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
 			       CAST(j.value AS INTEGER) AS proto,
@@ -929,7 +943,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 				         ELSE 0 END AS bytes
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
-			WHERE np.tailnet_id = ? AND np.bucket >= ? AND np.bucket < ?%s
+			WHERE np.tailnet_id = ? AND %s%s
 			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
 			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
@@ -937,9 +951,11 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 		SELECT b, proto, SUM(bytes)
 		FROM protocol_values
 		GROUP BY b, proto
-	`, bs, bs, typeClause, bs, bs, typeClause)
-	protoArgs := append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
-	protoArgs = append(protoArgs, tailnetID, startUnix, endUnix)
+	`, bs, bs, protoRangeSQL, typeClause, bs, bs, protoRangeSQL, typeClause)
+	protoArgs := append([]any{tailnetID}, protoRangeArgs...)
+	protoArgs = append(protoArgs, typeArgs...)
+	protoArgs = append(protoArgs, tailnetID)
+	protoArgs = append(protoArgs, protoRangeArgs...)
 	protoArgs = append(protoArgs, typeArgs...)
 	protoRows, err := s.db.QueryContext(ctx, protoQuery, protoArgs...)
 	if err != nil {
@@ -985,7 +1001,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
 			FROM node_pairs, json_each(
 				CASE WHEN json_valid(ports) THEN ports ELSE '[]' END) AS p
-			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?%s
+			WHERE tailnet_id = ? AND %s%s
 			  AND ports != '[]'
 			GROUP BY b, proto, port
 		),
@@ -998,7 +1014,7 @@ func (s *SQLiteStore) GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Con
 		FROM ranked_ports
 		WHERE rn <= 20
 			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
-	`, bs, bs, typeClause)
+	`, bs, bs, rangeSQL, typeClause)
 	portRows, err := s.db.QueryContext(ctx, portQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pair ports: %w", err)

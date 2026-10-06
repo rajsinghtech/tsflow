@@ -192,6 +192,10 @@ type Store interface {
 	GetTrafficStats(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
 	GetTrafficStatsFromNodePairs(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
 	GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]TrafficStats, error)
+	// FillMissingTrafficStats derives stats for aggregated buckets in the
+	// window that primary does not already contain. Nil means traffic_stats
+	// covers the window and node_pairs was not read.
+	FillMissingTrafficStats(ctx context.Context, tailnetID string, start, end time.Time, primary []TrafficStats) ([]TrafficStats, error)
 	GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error)
 	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)

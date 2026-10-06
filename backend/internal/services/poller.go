@@ -111,7 +111,7 @@ func (c PollerConfig) validate() error {
 
 func (p *Poller) ConfigureObjectStore(source *ObjectStoreSource) {
 	p.objectStore = source
-	if source != nil {
+	if source != nil && p.config.FlowBackend != "gcs" {
 		p.config.FlowBackend = "s3"
 	}
 }

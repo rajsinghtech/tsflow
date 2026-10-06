@@ -9,6 +9,7 @@ import type {
 } from '#lib/policy-engine/types';
 import { parsePolicyText } from '#lib/policy-engine/parser';
 import { whatCanAccess, whatHasAccessTo } from '#lib/policy-engine/query';
+import { apiUrl } from '#lib/services/api-service';
 
 // --- Visibility types (local, not from library) ---
 
@@ -105,22 +106,42 @@ export interface TailnetUser {
 
 export const tailnetUsers = writable<TailnetUser[]>([]);
 
+let policyRequestId = 0;
+
+export function clearPolicyData(): void {
+	policyRequestId++;
+	policyText.set('');
+	policyGraph.set(null);
+	parseErrors.set([]);
+	queryResult.set(null);
+	queryText.set('');
+	tailnetUsers.set([]);
+	fetchError.set(null);
+	isParsing.set(false);
+}
+
 // --- Actions ---
 
 export async function fetchAndRenderPolicy(): Promise<void> {
+	const requestId = ++policyRequestId;
 	isParsing.set(true);
 	fetchError.set(null);
 	try {
-		// Fetch policy and users in parallel
+		const policyURL = await apiUrl('/policy');
+		const usersURL = await apiUrl('/users');
+		if (requestId !== policyRequestId) return;
+		// Fetch policy and users in parallel. Users are optional (needs users:read scope).
 		const [policyResp, usersResp] = await Promise.all([
-			fetch('/api/policy'),
-			fetch('/api/users').catch(() => null) // Users are optional (needs users:read scope)
+			fetch(policyURL),
+			fetch(usersURL).catch(() => null)
 		]);
+		if (requestId !== policyRequestId) return;
 
 		if (!policyResp.ok) {
 			throw new Error(`HTTP ${policyResp.status}: ${policyResp.statusText}`);
 		}
 		const text = await policyResp.text();
+		if (requestId !== policyRequestId) return;
 		policyText.set(text);
 		const result = parsePolicyText(text);
 
@@ -128,6 +149,7 @@ export async function fetchAndRenderPolicy(): Promise<void> {
 		let users: TailnetUser[] = [];
 		if (usersResp?.ok) {
 			const usersData = await usersResp.json();
+			if (requestId !== policyRequestId) return;
 			users = usersData.users ?? [];
 			tailnetUsers.set(users);
 		}
@@ -188,14 +210,16 @@ export async function fetchAndRenderPolicy(): Promise<void> {
 			}
 		}
 
+		if (requestId !== policyRequestId) return;
 		policyGraph.set(result.graph);
 		parseErrors.set(result.errors);
 		queryResult.set(null);
 		queryText.set('');
 	} catch (err: any) {
+		if (requestId !== policyRequestId) return;
 		fetchError.set(err.message ?? 'Failed to fetch policy');
 	} finally {
-		isParsing.set(false);
+		if (requestId === policyRequestId) isParsing.set(false);
 	}
 }
 
