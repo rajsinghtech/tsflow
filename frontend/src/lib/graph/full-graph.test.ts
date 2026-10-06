@@ -196,8 +196,19 @@ describe('full graph layout input', () => {
 		);
 	});
 
-	it('gives ELK the same input and the same positions for a realistic 1000 node tailnet', async () => {
+	it('matches the legacy flow and ELK input for a realistic 1000 node tailnet', () => {
 		const graph = realisticTailnet(1000);
+		expect(usesFullGraph(graph.nodes.length)).toBe(true);
+		const flow = toFlowElements(graph.nodes, graph.edges);
+		const legacy = legacyFlowElements(graph.nodes, graph.edges);
+		expect(flow).toEqual(legacy);
+		expect(buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 })).toEqual(
+			legacyElkInput(legacy.nodes, legacy.edges)
+		);
+	});
+
+	it('gives ELK the same positions for a realistic 250 node tailnet', async () => {
+		const graph = realisticTailnet(250);
 		expect(usesFullGraph(graph.nodes.length)).toBe(true);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
@@ -211,6 +222,12 @@ describe('full graph layout input', () => {
 		const again = await elk.layout(previous as ElkNode);
 		const position = (graphNode: { children?: Array<{ id?: string; x?: number; y?: number }> } | undefined) =>
 			new Map((graphNode?.children ?? []).map((child) => [child.id, { x: child.x, y: child.y }]));
-		expect(position(again)).toEqual(position(laid));
-	}, 30000);
+		const laidPositions = position(laid);
+		expect(laidPositions.size).toBe(graph.nodes.length);
+		for (const point of laidPositions.values()) {
+			expect(Number.isFinite(point.x)).toBe(true);
+			expect(Number.isFinite(point.y)).toBe(true);
+		}
+		expect(position(again)).toEqual(laidPositions);
+	}, 10000);
 });

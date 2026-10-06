@@ -29,8 +29,6 @@ func (s *SQLiteStore) FillMissingTrafficStats(ctx context.Context, tailnetID str
 		return nil, nil
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.queryTrafficStatsFromNodePairs(ctx, tailnetID, start, end, ranges, nil)
 }
 

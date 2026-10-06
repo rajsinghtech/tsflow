@@ -54,8 +54,8 @@ WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
 // minute rows. A window with no complete rolled hour is one scan of
 // node_pairs, which is the previous query.
 //
-// The read does not take s.mu. SQLite's WAL lock covers it, so a poll commit
-// is not stuck behind the aggregation.
+// The read uses the read pool and does not take a tailnet lock. A poll
+// commit uses the writer connection, and WAL keeps this read on one snapshot.
 func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
@@ -68,9 +68,9 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 		s.nodePairReadHook()
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginRead(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query node pairs: %w", err)
+		return nil, err
 	}
 	defer tx.Rollback()
 

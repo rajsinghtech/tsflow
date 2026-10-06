@@ -233,10 +233,12 @@ func (s *SQLiteStore) backfillHourRollups(ctx context.Context) error {
 }
 
 func (s *SQLiteStore) backfillHourRollupTailnet(ctx context.Context, tailnetID string, closedThrough int64) error {
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
 	var wrote int64
 	merged := false
 	for {
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := s.beginWrite(ctx, tailnetID)
 		if err != nil {
 			return fmt.Errorf("failed to begin hourly rollup backfill: %w", err)
 		}
@@ -245,7 +247,7 @@ func (s *SQLiteStore) backfillHourRollupTailnet(ctx context.Context, tailnetID s
 			tx.Rollback()
 			return err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := s.commitWrite(tx, tailnetID); err != nil {
 			return fmt.Errorf("failed to commit hourly rollup backfill: %w", err)
 		}
 		wrote += n
