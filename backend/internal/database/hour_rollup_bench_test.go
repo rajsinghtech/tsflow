@@ -38,8 +38,16 @@ func BenchmarkHourRollupScale(b *testing.B) {
 			}
 			start := time.Unix(base, 0).UTC()
 			end := time.Unix(base+int64(window.minutes)*60, 0).UTC()
+			// A week of minute rows is large enough that three samples would
+			// dominate the run. One sample is enough there; shorter windows
+			// keep a median of three.
+			samples := 3
+			if window.minutes > 24*60 {
+				samples = 1
+			}
 
-			beforeGraph := medianQuery(b, "before graph", func() {
+			var graphBefore []NodePairAggregate
+			beforeGraph := medianQuery(b, samples, "before graph", func() {
 				rows, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
 				if err != nil {
 					b.Fatal(err)
@@ -47,8 +55,10 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) != nodes {
 					b.Fatalf("before graph pairs = %d", len(rows))
 				}
+				graphBefore = rows
 			})
-			beforeTalkers := medianQuery(b, "before talkers", func() {
+			var talkersBefore []TopTalker
+			beforeTalkers := medianQuery(b, samples, "before talkers", func() {
 				rows, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 20)
 				if err != nil {
 					b.Fatal(err)
@@ -56,8 +66,10 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) == 0 {
 					b.Fatal("before talkers empty")
 				}
+				talkersBefore = rows
 			})
-			beforeStats := medianQuery(b, "before stats", func() {
+			var statsBefore []TrafficStats
+			beforeStats := medianQuery(b, samples, "before stats", func() {
 				rows, err := store.GetTrafficStats(ctx, DefaultTailnetID, start, end)
 				if err != nil {
 					b.Fatal(err)
@@ -65,20 +77,8 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) == 0 {
 					b.Fatal("before stats empty")
 				}
+				statsBefore = rows
 			})
-
-			graphBefore, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
-			if err != nil {
-				b.Fatal(err)
-			}
-			talkersBefore, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 20)
-			if err != nil {
-				b.Fatal(err)
-			}
-			statsBefore, err := store.GetTrafficStats(ctx, DefaultTailnetID, start, end)
-			if err != nil {
-				b.Fatal(err)
-			}
 
 			rollStart := time.Now()
 			if err := store.backfillHourRollups(ctx); err != nil {
@@ -89,7 +89,8 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			afterGraph := medianQuery(b, "after graph", func() {
+			var graphAfter []NodePairAggregate
+			afterGraph := medianQuery(b, samples, "after graph", func() {
 				rows, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
 				if err != nil {
 					b.Fatal(err)
@@ -97,8 +98,10 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) != nodes {
 					b.Fatalf("after graph pairs = %d", len(rows))
 				}
+				graphAfter = rows
 			})
-			afterTalkers := medianQuery(b, "after talkers", func() {
+			var talkersAfter []TopTalker
+			afterTalkers := medianQuery(b, samples, "after talkers", func() {
 				rows, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 20)
 				if err != nil {
 					b.Fatal(err)
@@ -106,8 +109,10 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) == 0 {
 					b.Fatal("after talkers empty")
 				}
+				talkersAfter = rows
 			})
-			afterStats := medianQuery(b, "after stats", func() {
+			var statsAfter []TrafficStats
+			afterStats := medianQuery(b, samples, "after stats", func() {
 				rows, err := store.GetTrafficStats(ctx, DefaultTailnetID, start, end)
 				if err != nil {
 					b.Fatal(err)
@@ -115,25 +120,14 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				if len(rows) == 0 {
 					b.Fatal("after stats empty")
 				}
+				statsAfter = rows
 			})
 
-			graphAfter, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
-			if err != nil {
-				b.Fatal(err)
-			}
 			if !reflect.DeepEqual(graphBefore, graphAfter) {
 				b.Fatal("graph rollup result differs from the minute scan")
 			}
-			talkersAfter, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 20)
-			if err != nil {
-				b.Fatal(err)
-			}
 			if !reflect.DeepEqual(talkersBefore, talkersAfter) {
 				b.Fatalf("talkers differ\nbefore %#v\nafter %#v", talkersBefore, talkersAfter)
-			}
-			statsAfter, err := store.GetTrafficStats(ctx, DefaultTailnetID, start, end)
-			if err != nil {
-				b.Fatal(err)
 			}
 			if !reflect.DeepEqual(statsBefore, statsAfter) {
 				b.Fatalf("stats differ\nbefore %#v\nafter %#v", statsBefore, statsAfter)
@@ -164,17 +158,20 @@ func ms(d time.Duration) float64 {
 	return float64(d) / float64(time.Millisecond)
 }
 
-func medianQuery(b *testing.B, name string, fn func()) time.Duration {
+func medianQuery(b *testing.B, samples int, name string, fn func()) time.Duration {
 	b.Helper()
-	samples := make([]time.Duration, 3)
-	for i := range samples {
+	if samples < 1 {
+		samples = 1
+	}
+	taken := make([]time.Duration, samples)
+	for i := range taken {
 		start := time.Now()
 		fn()
-		samples[i] = time.Since(start)
-		b.Logf("%s run %d %s", name, i+1, samples[i].Round(time.Millisecond))
+		taken[i] = time.Since(start)
+		b.Logf("%s run %d %s", name, i+1, taken[i].Round(time.Millisecond))
 	}
-	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-	return samples[1]
+	sort.Slice(taken, func(i, j int) bool { return taken[i] < taken[j] })
+	return taken[len(taken)/2]
 }
 
 func insertScalePairs(b *testing.B, store *SQLiteStore, nodes, minutes int, base int64) int {
@@ -183,6 +180,12 @@ func insertScalePairs(b *testing.B, store *SQLiteStore, nodes, minutes int, base
 	names := make([]string, nodes)
 	for i := range names {
 		names[i] = fmt.Sprintf("n%05d", i)
+	}
+	// Loading is not part of the timed query. Turning synchronous off keeps
+	// the insert from waiting on a disk flush after every hour. Queries run
+	// after a full checkpoint, with the production synchronous setting.
+	if _, err := store.db.ExecContext(ctx, "PRAGMA synchronous=OFF"); err != nil {
+		b.Fatal(err)
 	}
 	inserted := 0
 	for startMin := 0; startMin < minutes; startMin += 60 {
@@ -254,6 +257,12 @@ func insertScalePairs(b *testing.B, store *SQLiteStore, nodes, minutes int, base
 		if (startMin/60)%24 == 0 {
 			b.Logf("inserted through minute %d/%d", endMin, minutes)
 		}
+	}
+	if _, err := store.db.ExecContext(ctx, "PRAGMA synchronous=NORMAL"); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		b.Fatal(err)
 	}
 	return inserted
 }
