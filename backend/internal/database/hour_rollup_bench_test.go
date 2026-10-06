@@ -37,8 +37,12 @@ func BenchmarkHourRollupScale(b *testing.B) {
 			loadStart := time.Now()
 			inserted := insertScalePairs(b, store, nodes, window.minutes, base)
 			b.Logf("loaded %d minute rows in %s", inserted, time.Since(loadStart).Round(time.Millisecond))
-			if _, err := store.db.ExecContext(ctx, "ANALYZE"); err != nil {
-				b.Fatal(err)
+			// ANALYZE on a week of rows samples the whole file. These queries
+			// are primary-key range scans either way, so the week run skips it.
+			if window.minutes <= 24*60 {
+				if _, err := store.db.ExecContext(ctx, "ANALYZE"); err != nil {
+					b.Fatal(err)
+				}
 			}
 			start := time.Unix(base, 0).UTC()
 			end := time.Unix(base+int64(window.minutes)*60, 0).UTC()
@@ -89,8 +93,10 @@ func BenchmarkHourRollupScale(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.Logf("rollup build %s", time.Since(rollStart).Round(time.Millisecond))
-			if _, err := store.db.ExecContext(ctx, "ANALYZE"); err != nil {
-				b.Fatal(err)
+			if window.minutes <= 24*60 {
+				if _, err := store.db.ExecContext(ctx, "ANALYZE"); err != nil {
+					b.Fatal(err)
+				}
 			}
 
 			var graphAfter []NodePairAggregate
