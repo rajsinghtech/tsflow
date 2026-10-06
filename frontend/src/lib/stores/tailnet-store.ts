@@ -12,20 +12,25 @@ import { uiStore } from './ui-store';
 import { dataSourceStore } from './data-source-store';
 import { clearNetworkData, loadNetworkData } from './network-store';
 import { clearPolicyData, fetchAndRenderPolicy } from './policy-store';
+import { clearRankingsData, loadRankings } from './rankings-store';
 import { clearStatsData, loadStats } from './stats-store';
 
 export const tailnets = writable<TailnetInfo[]>([]);
 export const selectedTailnetId = writable<string | null>(null);
 
 let readSearch = (): string => (typeof window === 'undefined' ? '' : window.location.search);
+let readPath = (): string => (typeof window === 'undefined' ? '/' : window.location.pathname);
 
 export function setTailnetSearchReader(reader: () => string) {
 	readSearch = reader;
 }
 
+export function setTailnetPathReader(reader: () => string) {
+	readPath = reader;
+}
+
 function currentPath(): string {
-	if (typeof window === 'undefined') return '/';
-	return window.location.pathname;
+	return readPath();
 }
 
 function normalizePoller(value: unknown): TailnetPollerStatus {
@@ -90,6 +95,7 @@ export function resetTailnetCaches(): void {
 	dataSourceStore.reset();
 	clearNetworkData();
 	clearStatsData();
+	clearRankingsData();
 	clearPolicyData();
 	uiStore.clearSelection();
 }
@@ -98,6 +104,10 @@ async function reloadCurrentView(): Promise<void> {
 	const path = currentPath();
 	if (path === '/analytics') {
 		await loadStats();
+		return;
+	}
+	if (path === '/rankings') {
+		await loadRankings();
 		return;
 	}
 	if (path === '/policy') {
@@ -121,6 +131,7 @@ export function resetTailnetStateForTests() {
 	tailnets.set([]);
 	selectedTailnetId.set(null);
 	readSearch = () => (typeof window === 'undefined' ? '' : window.location.search);
+	readPath = () => (typeof window === 'undefined' ? '/' : window.location.pathname);
 }
 
 setTailnetLoader(loadTailnets);

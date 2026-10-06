@@ -1,3 +1,5 @@
+import type { RankedPair, RankedTalker, RankMetadata, RankQueryParams } from '#lib/analytics/rank-query';
+import { rankQueryPath } from '#lib/analytics/rank-query';
 import { api } from './api-service';
 import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '#lib/types';
 
@@ -201,5 +203,19 @@ export const tailscaleService = {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
 		return api.get(`/stats/node/${encodeURIComponent(nodeId)}?start=${startISO}&end=${endISO}`);
+	},
+
+	async getRankedTalkers(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ talkers: RankedTalker[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('talkers', query), { signal });
+	},
+
+	async getRankedPairs(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ pairs: RankedPair[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('pairs', query), { signal });
 	}
 };

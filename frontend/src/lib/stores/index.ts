@@ -46,3 +46,14 @@ export {
 	statsLoading,
 	statsError
 } from './stats-store';
+export {
+	rankSort,
+	rankedTalkers,
+	rankedPairs,
+	loadRankings,
+	loadRankedTalkers,
+	loadRankedPairs,
+	setRankSort,
+	startRankingsRefresh,
+	stopRankingsRefresh
+} from './rankings-store';

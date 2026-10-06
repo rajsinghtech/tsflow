@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, ListOrdered, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
@@ -73,6 +73,7 @@
 	const primaryNav = [
 		{ href: '/', label: 'Traffic', icon: Network },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
+		{ href: '/rankings', label: 'Rankings', icon: ListOrdered },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
 
@@ -86,6 +87,11 @@
 
 	// Smart stats: use network store data when available, fall back to stats store
 	const hasNetworkData = $derived($networkStats.totalNodes > 0);
+	// Rankings has its own tables. Hide the graph counters until some other
+	// page has loaded them, so a direct visit does not show a row of zeros.
+	const showSummary = $derived(
+		currentPath !== '/rankings' || hasNetworkData || $statsSummary !== null || $topTalkers.length > 0
+	);
 
 	const displayNodes = $derived(hasNetworkData ? $networkStats.totalNodes : $topTalkers.length);
 	const displayFlows = $derived(hasNetworkData ? $networkStats.totalConnections : ($statsSummary?.totalFlows ?? 0));
@@ -145,7 +151,7 @@
 
 <header class="relative z-30 flex h-12 items-center justify-between gap-1 border-b border-border bg-card px-1 sm:h-14 sm:gap-2 sm:px-4">
 	<!-- Left section: Logo + primary navigation -->
-	<div class="flex shrink-0 items-center gap-2 sm:gap-3">
+	<div class="flex min-w-0 items-center gap-1 sm:gap-3">
 		<div class="relative about-flyout-container shrink-0">
 			<button
 				onclick={() => (showAbout = !showAbout)}
@@ -225,6 +231,7 @@
 	</div>
 
 	<!-- Center section: Network Stats (desktop only) -->
+	{#if showSummary}
 	<div class="hidden items-center gap-6 lg:flex">
 		<div class="flex items-center gap-2">
 			<Network class="h-4 w-4 text-muted-foreground" />
@@ -269,14 +276,18 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- Compact stats for mobile (<md) -->
+	{#if showSummary}
 	<div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap md:hidden">
 		<span class="text-[10px] font-semibold tabular-nums">{displayNodes}<span class="font-normal text-muted-foreground">n</span></span>
 		<span class="text-[10px] font-semibold tabular-nums text-primary">{formatBytes(displayBytes)}</span>
 	</div>
+	{/if}
 
 	<!-- Compact stats for tablet (md only) -->
+	{#if showSummary}
 	<div class="hidden items-center gap-3 md:flex lg:hidden">
 		<div class="text-xs">
 			<span class="font-semibold">{displayNodes}</span>
@@ -289,6 +300,7 @@
 			<div class="text-[10px] text-muted-foreground/60">{lastUpdatedLabel}</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- Right section: Actions -->
 	<div class="flex shrink-0 items-center gap-1 sm:gap-2">

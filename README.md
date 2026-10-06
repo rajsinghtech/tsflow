@@ -356,7 +356,7 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 
 ### Ranked talkers and pairs
 
-`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. This is the API behind a later table view. The existing graph and `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay as they are.
+`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. The Rankings page at `/rankings` shows both tables for the same window as the graph, with previous and next pages and a bytes or flows sort. The existing graph and `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay as they are.
 
 `start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use.
 
