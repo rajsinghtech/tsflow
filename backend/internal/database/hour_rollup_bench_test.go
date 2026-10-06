@@ -14,7 +14,8 @@ import (
 // flow per minute. The 1 hour and 24 hour windows are a median of three
 // runs. The 7 day window is one run: it is the same 20,000 nodes and one
 // row per minute (10,080 minutes), loaded with one INSERT SELECT per hour
-// instead of a statement per row. It is skipped under -short.
+// instead of a statement per row. That load leaves the secondary indexes
+// off because these queries scan the primary key. It is skipped under -short.
 func BenchmarkHourRollupScale(b *testing.B) {
 	if testing.Short() {
 		b.Skip("skipping hourly rollup scale benchmark in short mode")
@@ -332,11 +333,28 @@ func insertScalePairs(tb testing.TB, store *SQLiteStore, nodes, minutes int, bas
 			}
 		}
 	}
-	indexStart := time.Now()
+	// Graph, top talkers, and the stats recount scan the primary key for one
+	// tailnet and time range. Rebuilding the secondary indexes on a week of
+	// rows is a multi-hour sort that those queries do not use. Shorter windows
+	// still get the production indexes.
+	if minutes <= 24*60 {
+		indexStart := time.Now()
+		for _, stmt := range []string{
+			`CREATE INDEX idx_node_pairs_src ON node_pairs(tailnet_id, src_node_id, bucket)`,
+			`CREATE INDEX idx_node_pairs_dst ON node_pairs(tailnet_id, dst_node_id, bucket)`,
+			`CREATE INDEX idx_node_pairs_endpoints ON node_pairs(tailnet_id, src_node_id, dst_node_id, traffic_type, bucket)`,
+		} {
+			if _, err := conn.ExecContext(ctx, stmt); err != nil {
+				tb.Fatal(err)
+			}
+		}
+		if b, ok := tb.(*testing.B); ok {
+			b.Logf("rebuilt secondary indexes in %s", time.Since(indexStart).Round(time.Millisecond))
+		}
+	} else if b, ok := tb.(*testing.B); ok {
+		b.Logf("left secondary indexes off; the timed queries scan the primary key")
+	}
 	for _, stmt := range []string{
-		`CREATE INDEX idx_node_pairs_src ON node_pairs(tailnet_id, src_node_id, bucket)`,
-		`CREATE INDEX idx_node_pairs_dst ON node_pairs(tailnet_id, dst_node_id, bucket)`,
-		`CREATE INDEX idx_node_pairs_endpoints ON node_pairs(tailnet_id, src_node_id, dst_node_id, traffic_type, bucket)`,
 		"PRAGMA synchronous=NORMAL",
 		"PRAGMA cache_size=10000",
 		"PRAGMA wal_checkpoint(TRUNCATE)",
@@ -344,9 +362,6 @@ func insertScalePairs(tb testing.TB, store *SQLiteStore, nodes, minutes int, bas
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			tb.Fatal(err)
 		}
-	}
-	if b, ok := tb.(*testing.B); ok {
-		b.Logf("rebuilt secondary indexes in %s", time.Since(indexStart).Round(time.Millisecond))
 	}
 	return nodes * minutes
 }
