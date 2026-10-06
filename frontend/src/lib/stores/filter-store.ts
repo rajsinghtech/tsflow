@@ -57,7 +57,8 @@ const baseFilterState: FilterState = {
 	minConnections: 0,
 	showIpv4: true,
 	showIpv6: true,
-	selectedTags: []
+	selectedTags: [],
+	deviceScope: null
 };
 
 const defaultFilterState: FilterState = {
@@ -129,6 +130,8 @@ function createFilterStore() {
 			return next;
 		}),
 		setSelectedTags: (tags: string[]) => update((s) => ({ ...s, selectedTags: tags })),
+		setDeviceScope: (deviceScope: FilterState['deviceScope']) => update((s) => ({ ...s, deviceScope })),
+		clearDeviceScope: () => update((s) => ({ ...s, deviceScope: null })),
 		reset: () => {
 			set(baseFilterState);
 			persistFilters(baseFilterState);

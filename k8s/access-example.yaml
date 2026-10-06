@@ -1,0 +1,45 @@
+# Example only. This file is not part of kustomization.yaml.
+# Use it when tsflow sits behind a proxy that already authenticated
+# the viewer with Tailscale. Health checks stay open. Data routes
+# require a grant. Replace the CIDR with the proxy range.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tsflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tsflow
+  template:
+    metadata:
+      labels:
+        app: tsflow
+    spec:
+      containers:
+        - name: tsflow
+          image: ghcr.io/rajsinghtech/tsflow:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ENVIRONMENT
+              value: production
+            - name: PORT
+              value: "8080"
+            - name: TSFLOW_ACCESS_MODE
+              value: header
+            - name: TSFLOW_ACCESS_CAPABILITY
+              value: example.com/cap/tsflow
+            - name: TSFLOW_ACCESS_TRUSTED_PROXIES
+              value: 10.0.0.0/8
+            - name: TSFLOW_ACCESS_GROUPS_HEADER
+              value: X-Tsflow-Groups
+            - name: TSFLOW_ACCESS_GROUP_GRANTS
+              value: '{"group:eng":{"tailnets":["default"]},"group:ops":{}}'
+            - name: TSFLOW_ACCESS_AUTOSCOPE
+              value: user
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http

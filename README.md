@@ -180,6 +180,124 @@ docker run -d \
 
 TSFlow will be accessible at both `https://tsflow.<your-tailnet>.ts.net` and `http://tsflow.<your-tailnet>.ts.net`.
 
+#### Internal access control
+
+Access control is off unless you set it. With the variables below unset, every request behaves as it does today, including `GET /api/tailnets` and the data routes. Health checks stay open either way: `GET /health` and `GET /api/health`.
+
+When it is on, a viewer needs a Tailscale application capability, or membership in a mapped group, unless you set `TSFLOW_ACCESS_GRANTS=identity`. That setting is explicit: any resolved WhoIs identity, or a `Tailscale-User-Login` header from a trusted proxy, can see every configured tailnet, and no identity is 403. whoami and autoscope still work. Unset, or `required`, still requires a capability or a group grant, including when `TSFLOW_ACCESS_MODE` is set. The capability name is `TSFLOW_ACCESS_CAPABILITY`. The example below uses `example.com/cap/tsflow`. Each grant is a JSON object. The only field is optional:
+
+```json
+{"tailnets": ["default", "lab"]}
+```
+
+Omit `tailnets`, or include `"*"`, to allow every configured tailnet id. Those ids are the ones from `TSFLOW_TAILNETS_FILE` (`default` when you use the single-tailnet environment variables). A request with no matching capability and no mapped group is `403` with `missing access grant`. `GET /api/tailnets` lists only the tailnets that grant allows. Other data routes return `403` for a tailnet the grant does not include. If several grants match, the tailnet lists are unioned. One grant that allows every tailnet allows every tailnet.
+
+Identity is logged per request only when `TSFLOW_LOG_LEVEL=debug`.
+
+There are two front doors.
+
+**tsnet.** `TSFLOW_SERVE=true` with `TSFLOW_ACCESS_CAPABILITY` set. tsflow is already a node on the tailnet. Each request calls LocalAPI WhoIs on the connection's remote address and reads that peer's capability map. You can leave `TSFLOW_ACCESS_MODE` unset. Set it to `tsnet` if you want to be explicit. `TSFLOW_SERVE` must be true for that mode. Do not enable Funnel for this, because Funnel traffic has no tailnet identity and those requests are denied.
+
+Example grant in the tailnet policy file:
+
+```hujson
+{
+  "grants": [
+    {
+      "src": ["group:eng"],
+      "dst": ["tag:tsflow"],
+      "app": {
+        "example.com/cap/tsflow": [
+          {"tailnets": ["default", "lab"]}
+        ]
+      }
+    },
+    {
+      "src": ["group:ops"],
+      "dst": ["tag:tsflow"],
+      "app": {
+        "example.com/cap/tsflow": [{}]
+      }
+    }
+  ]
+}
+```
+
+The empty object allows every configured tailnet. `group:ops` can see all of them. `group:eng` can see `default` and `lab`.
+
+**Reverse proxy.** Use this when Tailscale Serve, or Caddy with the Tailscale plugin, already authenticated the viewer. Set `TSFLOW_ACCESS_MODE=header` and `TSFLOW_ACCESS_TRUSTED_PROXIES` to the proxy CIDRs. Identity headers are trusted only from those CIDRs. If the proxy dials localhost over IPv6, include `::1/128` next to `127.0.0.1/32`. The same rule applies to the groups header. A client that is not in the list cannot supply `Tailscale-User-Login`, `Tailscale-User-Name`, the capability header, or the groups header. Those values are ignored, and the request is denied.
+
+Tailscale Serve sends `Tailscale-User-Login` and `Tailscale-User-Name`. To also send capabilities, pass `--accept-app-caps` with the same capability name. Serve puts them in `Tailscale-App-Capabilities`. Override that name with `TSFLOW_ACCESS_CAPABILITY_HEADER` if your proxy uses another header.
+
+```bash
+tailscale serve --accept-app-caps=example.com/cap/tsflow --https=443 http://127.0.0.1:8080
+```
+
+```bash
+TSFLOW_ACCESS_MODE=header
+TSFLOW_ACCESS_CAPABILITY=example.com/cap/tsflow
+TSFLOW_ACCESS_TRUSTED_PROXIES=127.0.0.1/32
+```
+
+If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address is the peer. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
+
+Some proxies forward identity and a groups header, and do not forward app capabilities. Set `TSFLOW_ACCESS_GROUPS_HEADER` to that header name. Values are comma-separated and must match the keys in the grant map exactly. Load the map from `TSFLOW_ACCESS_GROUP_GRANTS` or `TSFLOW_ACCESS_GROUP_GRANTS_FILE`, not both. The values use the same grant object as the capability. A mapped group grants access. If a request has both a capability and mapped groups, the tailnet lists are unioned.
+
+```json
+{"group:eng": {"tailnets": ["default"]}, "group:ops": {}, "ops@example.com": {"tailnets": ["lab"]}}
+```
+
+Caddy, using the Tailscale plugin for identity. `tailscale_user` is the full login and `tailscale_name` is the display name. If the proxy also sends a groups header, forward that header under the name you set in `TSFLOW_ACCESS_GROUPS_HEADER`.
+
+```caddyfile
+{
+  order tailscale_auth before reverse_proxy
+}
+
+:443 {
+  bind tailscale/tsflow
+  tls {
+    get_certificate tailscale
+  }
+  tailscale_auth
+  reverse_proxy 127.0.0.1:8080 {
+    header_up Tailscale-User-Login {http.auth.user.tailscale_user}
+    header_up Tailscale-User-Name {http.auth.user.tailscale_name}
+  }
+}
+```
+
+```bash
+TSFLOW_ACCESS_MODE=header
+TSFLOW_ACCESS_TRUSTED_PROXIES=127.0.0.1/32
+TSFLOW_ACCESS_GROUPS_HEADER=X-Tsflow-Groups
+TSFLOW_ACCESS_GROUP_GRANTS={"group:eng":{"tailnets":["default"]},"group:ops":{}}
+```
+
+On Kubernetes, keep the Service reachable only from the proxy, and set the trusted CIDR to that proxy range. The default manifests in `k8s/` do not enable this. `k8s/access-example.yaml` is a starting point:
+
+```yaml
+env:
+  - name: TSFLOW_ACCESS_MODE
+    value: header
+  - name: TSFLOW_ACCESS_CAPABILITY
+    value: example.com/cap/tsflow
+  - name: TSFLOW_ACCESS_TRUSTED_PROXIES
+    value: 10.0.0.0/8
+  - name: TSFLOW_ACCESS_GROUPS_HEADER
+    value: X-Tsflow-Groups
+  - name: TSFLOW_ACCESS_GROUP_GRANTS
+    value: '{"group:eng":{"tailnets":["default"]}}'
+  - name: TSFLOW_ACCESS_AUTOSCOPE
+    value: user
+```
+
+Startup fails when the settings disagree. Header mode without trusted CIDRs is rejected. A capability with neither `TSFLOW_SERVE` nor header mode is rejected. A groups header without a grant map is rejected.
+
+`GET /api/whoami` returns the viewer when a grant matched. With access control off it returns `{"autoscope":"off"}`.
+
+`TSFLOW_ACCESS_AUTOSCOPE` is `off` by default. `user` preselects devices whose user matches the viewer login. `groups` preselects devices for the mapped groups the viewer is in: `group:eng` and `eng` match tag `tag:eng`, and a mapping key that contains `@` matches devices owned by that login. This is only the initial traffic view. The filter panel has a My devices chip with Clear. Clearing it shows the full view. The API does not enforce the device filter.
+
 #### Data Storage & Polling
 
 | Variable | Description | Default |
