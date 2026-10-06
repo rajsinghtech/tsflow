@@ -68,11 +68,13 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 		source = "database"
 
-		// Merge derived buckets for unfiltered requests so node_pairs can fill
-		// gaps in traffic_stats without replacing its authoritative values.
+		// traffic_stats is authoritative where it already has a bucket. Derive
+		// the missing buckets from node_pairs instead of scanning the window
+		// again. The unique-pair recount inside GetTrafficStats stays, so two
+		// polls that share a minute still use MAX(recount, stored).
 		if len(trafficTypes) == 0 {
 			var derivedBuckets []database.TrafficStats
-			derivedBuckets, err = h.store.GetTrafficStatsFromNodePairs(ctx, tn.id, startTime, endTime)
+			derivedBuckets, err = h.store.FillMissingTrafficStats(ctx, tn.id, startTime, endTime, buckets)
 			if err != nil {
 				if writeContextError(c, err) {
 					return

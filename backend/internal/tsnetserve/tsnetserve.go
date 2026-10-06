@@ -8,7 +8,13 @@ import (
 	"os"
 
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
+	"tailscale.com/feature"
 	"tailscale.com/tsnet"
+
+	// Register the tsnet workload identity hook. Without this import,
+	// TS_CLIENT_ID is copied onto the server and then ignored, and the node
+	// falls through to an interactive login instead of joining with WIF.
+	_ "tailscale.com/feature/identityfederation"
 )
 
 type Server struct {
@@ -30,6 +36,12 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	}
 
 	if cfg.TsnetClientID != "" {
+		// The feature init sets the auth-key hook only when registration
+		// succeeds. TS_DISABLE_FEATURE=identityfederation leaves the fields
+		// set and the hook unset, which would silently skip WIF.
+		if !feature.IsRegistered("identityfederation") {
+			return nil, fmt.Errorf("tsnet workload identity is not linked; TS_CLIENT_ID cannot join a tailnet without an auth key")
+		}
 		srv.ClientID = cfg.TsnetClientID
 		srv.IDToken = cfg.TsnetIDToken
 		srv.Audience = cfg.TsnetAudience

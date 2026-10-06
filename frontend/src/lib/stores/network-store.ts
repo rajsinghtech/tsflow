@@ -232,6 +232,21 @@ function scheduleRetry(attempt: number) {
 // AbortController for in-flight requests
 let activeController: AbortController | null = null;
 
+export function clearNetworkData() {
+	if (activeController) {
+		activeController.abort();
+		activeController = null;
+	}
+	clearRetryState();
+	devices.set([]);
+	networkLogs.set([]);
+	rawLogs.set([]);
+	services.set({});
+	records.set({});
+	lastUpdated.set(null);
+	uiStore.setError(null);
+}
+
 // Load network data
 export async function loadNetworkData(currentAttempt = 0) {
 	// Cancel any in-flight request
