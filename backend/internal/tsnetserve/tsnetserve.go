@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"tailscale.com/client/local"
@@ -43,8 +44,12 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 		if !feature.IsRegistered("identityfederation") {
 			return nil, fmt.Errorf("tsnet workload identity is not linked; TS_CLIENT_ID cannot join a tailnet without an auth key")
 		}
+		idToken, err := tsnetIDToken(cfg)
+		if err != nil {
+			return nil, err
+		}
 		srv.ClientID = cfg.TsnetClientID
-		srv.IDToken = cfg.TsnetIDToken
+		srv.IDToken = idToken
 		srv.Audience = cfg.TsnetAudience
 	} else {
 		srv.ClientSecret = cfg.TailscaleOAuthClientSecret
@@ -83,6 +88,24 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	}
 
 	return &Server{tsServer: srv, tlsListener: tlsLn, httpListener: httpLn}, nil
+}
+
+// tsnetIDToken returns TS_ID_TOKEN, or the contents of TS_ID_TOKEN_FILE.
+// The token is only used when the node registers, so the file is read
+// once here. A sidecar that refreshes the file covers later restarts.
+func tsnetIDToken(cfg *config.Config) (string, error) {
+	if cfg.TsnetIDToken != "" || cfg.TsnetIDTokenFile == "" {
+		return cfg.TsnetIDToken, nil
+	}
+	raw, err := os.ReadFile(cfg.TsnetIDTokenFile)
+	if err != nil {
+		return "", fmt.Errorf("reading TS_ID_TOKEN_FILE: %w", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", fmt.Errorf("TS_ID_TOKEN_FILE %s is empty", cfg.TsnetIDTokenFile)
+	}
+	return token, nil
 }
 
 func (s *Server) TLSListener() net.Listener  { return s.tlsListener }

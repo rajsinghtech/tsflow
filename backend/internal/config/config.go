@@ -36,10 +36,15 @@ type Config struct {
 	TsnetTags     []string
 	TsnetFunnel   bool
 	TsnetStateDir string
+	// TsnetHealthPort serves /health on a plain listener next to tsnet,
+	// for probes that cannot reach the tailnet. Empty means off.
+	TsnetHealthPort string
 	// tsnet workload identity federation
 	TsnetClientID string
 	TsnetIDToken  string
-	TsnetAudience string
+	// TsnetIDTokenFile is read once at startup when TsnetIDToken is empty.
+	TsnetIDTokenFile string
+	TsnetAudience    string
 	// flow log backend
 	FlowBackend               string
 	FlowObjectStoreBucket     string
@@ -94,6 +99,8 @@ func Load() *Config {
 		TsnetStateDir:              getEnvWithDefault("TSFLOW_STATE_DIR", filepath.Join(".", "data", "tsnet-state")),
 		TsnetClientID:              os.Getenv("TS_CLIENT_ID"),
 		TsnetIDToken:               os.Getenv("TS_ID_TOKEN"),
+		TsnetIDTokenFile:           strings.TrimSpace(os.Getenv("TS_ID_TOKEN_FILE")),
+		TsnetHealthPort:            strings.TrimSpace(os.Getenv("TSFLOW_HEALTH_PORT")),
 		TsnetAudience:              os.Getenv("TS_AUDIENCE"),
 		FlowBackend:                strings.ToLower(strings.TrimSpace(getEnvWithDefault("TSFLOW_FLOW_BACKEND", ""))),
 		FlowObjectStoreBucket:      getEnvWithDefault("TSFLOW_S3_BUCKET", getEnvWithDefault("TAILSCALE_LOGS_S3_BUCKET", "tailscale-logs")),
@@ -186,16 +193,35 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if c.TsnetIDTokenFile != "" && !hasTsnetWIF {
+		return errors.New("TS_ID_TOKEN_FILE requires TS_CLIENT_ID")
+	}
+	if c.TsnetHealthPort != "" {
+		if !c.TsnetServe {
+			return errors.New("TSFLOW_HEALTH_PORT is only used with TSFLOW_SERVE=true; PORT already serves /health")
+		}
+		hp, err := strconv.Atoi(c.TsnetHealthPort)
+		if err != nil || hp < 1 || hp > 65535 {
+			return errors.New("TSFLOW_HEALTH_PORT must be a number between 1 and 65535")
+		}
+	}
+
 	if c.TsnetServe {
 		if !hasOAuth && !hasTsnetWIF {
 			return errors.New("TSFLOW_SERVE=true requires either OAuth credentials or workload identity federation (TS_CLIENT_ID)")
 		}
 		if hasTsnetWIF {
-			if c.TsnetIDToken == "" && c.TsnetAudience == "" {
-				return errors.New("workload identity federation requires TS_ID_TOKEN or TS_AUDIENCE")
+			sources := 0
+			for _, v := range []string{c.TsnetIDToken, c.TsnetIDTokenFile, c.TsnetAudience} {
+				if v != "" {
+					sources++
+				}
 			}
-			if c.TsnetIDToken != "" && c.TsnetAudience != "" {
-				return errors.New("only one of TS_ID_TOKEN or TS_AUDIENCE should be set for workload identity federation")
+			if sources == 0 {
+				return errors.New("workload identity federation requires TS_ID_TOKEN, TS_ID_TOKEN_FILE, or TS_AUDIENCE")
+			}
+			if sources > 1 {
+				return errors.New("only one of TS_ID_TOKEN, TS_ID_TOKEN_FILE, or TS_AUDIENCE should be set for workload identity federation")
 			}
 			if len(c.TsnetTags) == 0 {
 				return errors.New("workload identity federation requires TSFLOW_TAGS to be set")
