@@ -110,6 +110,23 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 	}
 
+	countCtx, countCancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
+	defer countCancel()
+	activeIDs, err := h.store.ActiveNodeIDs(countCtx, tn.id, startTime, endTime, trafficTypes)
+	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
+		log.Printf("ERROR GetStatsOverview active nodes: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to count active nodes",
+		})
+		return
+	}
+	totalNodes := countDistinctNodes(activeIDs, func(id string) string {
+		return h.resolveNodeID(tn.poller, id)
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"summary": gin.H{
 			"tcpBytes":        tcpBytes,
@@ -121,6 +138,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,
 			"uniquePairs":     maxUniquePairs,
+			"totalNodes":      totalNodes,
 		},
 		"buckets": buckets,
 		"metadata": gin.H{
@@ -544,4 +562,18 @@ func mergeNodeDetails(nodeID string, parts []*database.NodeDetailStats, resolve 
 		return merged.TopPorts[i].Port < merged.TopPorts[j].Port
 	})
 	return merged
+}
+
+// countDistinctNodes counts stored node ids after resolving each to its
+// canonical device id, the same normalization top talkers applies. One device
+// can be stored under an address, its legacy numeric id, and its stable id.
+func countDistinctNodes(ids []string, resolve func(string) string) int64 {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if resolve != nil {
+			id = resolve(id)
+		}
+		seen[id] = struct{}{}
+	}
+	return int64(len(seen))
 }

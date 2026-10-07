@@ -414,6 +414,85 @@ func TestNodeBandwidthAndStatsDeriveFromPairsInsteadOfLegacyNodeRows(t *testing.
 	}
 }
 
+func TestCountActiveNodesIsDistinctAndUncapped(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	start := time.Unix(base, 0)
+	end := time.Unix(base+60, 0)
+
+	pairs := make([]NodePairAggregate, 0, 20)
+	// Twenty endpoints across ten pairs, plus one repeated pair and one self-pair.
+	for i := 0; i < 20; i += 2 {
+		pairs = append(pairs, NodePairAggregate{
+			Bucket: base, SrcNodeID: nodeName(i), DstNodeID: nodeName(i + 1), TrafficType: "virtual",
+			TxBytes: 10, RxBytes: 4, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":14}`, Ports: "[]",
+		})
+	}
+	pairs = append(pairs,
+		NodePairAggregate{
+			Bucket: base, SrcNodeID: "n0", DstNodeID: "n1", TrafficType: "subnet",
+			TxBytes: 3, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":4}`, Ports: "[]",
+		},
+		NodePairAggregate{
+			Bucket: base, SrcNodeID: "self", DstNodeID: "self", TrafficType: "virtual",
+			TxBytes: 8, RxBytes: 2, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":10}`, Ports: "[]",
+		},
+		NodePairAggregate{
+			Bucket: base, SrcNodeID: "exit-src", DstNodeID: "exit-dst", TrafficType: "exit",
+			TxBytes: 9, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":9}`, Ports: "[]",
+		},
+		NodePairAggregate{
+			Bucket: base + 120, SrcNodeID: "later", DstNodeID: "peer", TrafficType: "virtual",
+			TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]",
+		},
+	)
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, pairs); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodePairAggregates(ctx, "other", []NodePairAggregate{{
+		Bucket: base, SrcNodeID: "foreign", DstNodeID: "foreign-2", TrafficType: "virtual",
+		TxBytes: 100, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":100}`, Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 20 pair endpoints + self + exit-src + exit-dst. The repeated n0-n1 pair
+	// and the other tailnet do not add nodes. A top-talkers limit of 10 must
+	// not apply.
+	ids, err := store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := int64(len(ids))
+	if count != 23 {
+		t.Fatalf("active nodes = %d, want 23", count)
+	}
+
+	virtualIDs, err := store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, []string{"virtual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if virtualOnly := len(virtualIDs); virtualOnly != 21 {
+		t.Fatalf("virtual active nodes = %d, want 21", virtualOnly)
+	}
+
+	talkers, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(talkers) != 10 {
+		t.Fatalf("top talkers = %d, want the capped page of 10", len(talkers))
+	}
+	if int64(len(talkers)) == count {
+		t.Fatal("active node count collapsed to the top-talkers page")
+	}
+}
+
+func nodeName(i int) string {
+	return "n" + itoa(i)
+}
+
 func TestNodeBandwidthAndStatsUseCoarseBucketTotals(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
