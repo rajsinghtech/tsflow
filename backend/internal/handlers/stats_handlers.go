@@ -446,7 +446,31 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 
-	stats, err := h.store.GetNodeStats(ctx, tn.id, nodeID, startTime, endTime)
+	queryIDs := []string{nodeID}
+	if tn.poller != nil {
+		if equiv := tn.poller.GetDeviceCache().EquivalentIDs(nodeID); len(equiv) > 1 {
+			queryIDs = equiv
+		}
+	}
+	var stats *database.NodeDetailStats
+	if len(queryIDs) == 1 {
+		stats, err = h.store.GetNodeStats(ctx, tn.id, nodeID, startTime, endTime)
+	} else {
+		parts := make([]*database.NodeDetailStats, 0, len(queryIDs))
+		for _, id := range queryIDs {
+			var part *database.NodeDetailStats
+			part, err = h.store.GetNodeStats(ctx, tn.id, id, startTime, endTime)
+			if err != nil {
+				break
+			}
+			parts = append(parts, part)
+		}
+		if err == nil {
+			stats = mergeNodeDetails(nodeID, parts, func(id string) string {
+				return h.resolveNodeID(tn.poller, id)
+			})
+		}
+	}
 	if err != nil {
 		if writeContextError(c, err) {
 			return
@@ -459,4 +483,80 @@ func (h *Handlers) GetNodeDetailStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+func mergeNodeDetails(nodeID string, parts []*database.NodeDetailStats, resolve func(string) string) *database.NodeDetailStats {
+	merged := &database.NodeDetailStats{
+		NodeID:   nodeID,
+		TopPeers: make([]database.TopPair, 0),
+		TopPorts: make([]database.PortStat, 0),
+	}
+	type peerTotal struct {
+		tx, rx, total, flows int64
+	}
+	peers := make(map[string]*peerTotal)
+	ports := make(map[[2]int]int64)
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		merged.TotalTx += part.TotalTx
+		merged.TotalRx += part.TotalRx
+		merged.TCPBytes += part.TCPBytes
+		merged.UDPBytes += part.UDPBytes
+		merged.OtherBytes += part.OtherBytes
+		for _, peer := range part.TopPeers {
+			id := peer.DstNodeID
+			if resolve != nil {
+				id = resolve(id)
+			}
+			if id == "" || id == nodeID {
+				continue
+			}
+			total := peers[id]
+			if total == nil {
+				total = &peerTotal{}
+				peers[id] = total
+			}
+			total.tx += peer.TxBytes
+			total.rx += peer.RxBytes
+			total.total += peer.TotalBytes
+			total.flows += peer.FlowCount
+		}
+		for _, port := range part.TopPorts {
+			ports[[2]int{port.Proto, port.Port}] += port.Bytes
+		}
+	}
+	for id, total := range peers {
+		merged.TopPeers = append(merged.TopPeers, database.TopPair{
+			SrcNodeID:  nodeID,
+			DstNodeID:  id,
+			TxBytes:    total.tx,
+			RxBytes:    total.rx,
+			TotalBytes: total.total,
+			FlowCount:  total.flows,
+		})
+	}
+	sort.Slice(merged.TopPeers, func(i, j int) bool {
+		if merged.TopPeers[i].TotalBytes != merged.TopPeers[j].TotalBytes {
+			return merged.TopPeers[i].TotalBytes > merged.TopPeers[j].TotalBytes
+		}
+		return merged.TopPeers[i].DstNodeID < merged.TopPeers[j].DstNodeID
+	})
+	if len(merged.TopPeers) > 10 {
+		merged.TopPeers = merged.TopPeers[:10]
+	}
+	for key, bytes := range ports {
+		merged.TopPorts = append(merged.TopPorts, database.PortStat{Proto: key[0], Port: key[1], Bytes: bytes})
+	}
+	sort.Slice(merged.TopPorts, func(i, j int) bool {
+		if merged.TopPorts[i].Bytes != merged.TopPorts[j].Bytes {
+			return merged.TopPorts[i].Bytes > merged.TopPorts[j].Bytes
+		}
+		if merged.TopPorts[i].Proto != merged.TopPorts[j].Proto {
+			return merged.TopPorts[i].Proto < merged.TopPorts[j].Proto
+		}
+		return merged.TopPorts[i].Port < merged.TopPorts[j].Port
+	})
+	return merged
 }

@@ -5,6 +5,7 @@ import { convertAggregatedFlowsToNetworkLogs } from '#lib/utils/aggregate-logs';
 import { processNetworkLogs } from '#lib/utils/network-processor';
 import { isValidIPv4, isIPv6 } from '#lib/utils/ip-utils';
 import { nodeMatchesDeviceScope, hasDeviceScope } from '#lib/utils/device-scope';
+import { nodeMatchesSearch } from '#lib/utils/node-search';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
@@ -47,32 +48,6 @@ const nodesWithTrafficConnections = derived(trafficFilteredEdges, ($edges) => {
 	return nodeIds;
 });
 
-// Helper to check if a node matches the search query
-function nodeMatchesSearch(node: NetworkNode, query: string): boolean {
-	if (!query) return true;
-
-	const q = query.toLowerCase().trim();
-
-	if (q.startsWith('tag:')) {
-		const tagSearch = q.substring(4);
-		const nodeTagsLower = node.tags.map((t) => t.toLowerCase().replace('tag:', ''));
-		return nodeTagsLower.some((tag) => tag.includes(tagSearch));
-	} else if (q.startsWith('ip:')) {
-		const ipSearch = q.substring(3);
-		return node.ips.some((ip) => ip.toLowerCase().includes(ipSearch));
-	} else if (q.includes('@')) {
-		return node.user?.toLowerCase().includes(q.replace('user@', '')) || false;
-	} else {
-		const matchesIP = node.ips.some((ip) => ip.toLowerCase().includes(q));
-		const matchesName = node.displayName.toLowerCase().includes(q);
-		const matchesUser = node.user?.toLowerCase().includes(q) || false;
-		const matchesTags = node.tags.some((tag) =>
-			tag.toLowerCase().replace('tag:', '').includes(q)
-		);
-		return matchesIP || matchesName || matchesUser || matchesTags;
-	}
-}
-
 function viewIsNarrowed(search: string, scope: DeviceScope | null): boolean {
 	return search.trim() !== '' || hasDeviceScope(scope);
 }
@@ -85,6 +60,16 @@ export const primaryMatchedNodes = derived(
 			if (!$connectedNodeIds.has(node.id)) return false;
 			return nodeMatchesSearch(node, $filters.search) && nodeMatchesDeviceScope(node, $filters.deviceScope);
 		});
+	}
+);
+
+// Nodes the current search matched directly. Empty when the box is empty,
+// so a blank search does not highlight the whole graph.
+export const searchMatchedNodeIds = derived(
+	[primaryMatchedNodes, debouncedFilterStore],
+	([$primary, $filters]) => {
+		if (!$filters.search.trim()) return new Set<string>();
+		return new Set($primary.map((node) => node.id));
 	}
 );
 

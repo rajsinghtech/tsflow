@@ -12,7 +12,7 @@
 		type ColorMode
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { uiStore, themeStore } from '#lib/stores';
+	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import { highlightedEdgeIds, hasSelection } from '#lib/stores/ui-store';
 	import { applyElkLayout } from '#lib/utils/elk-layout';
 	import { edgeStyle as getEdgeStyle, toFlowElements } from '#lib/graph/full-graph';
@@ -88,6 +88,7 @@
 	// Store references to flow functions (set by child component)
 	let fitBoundsRef: ((bounds: { x: number; y: number; width: number; height: number }, options?: { duration?: number; padding?: number }) => void) | null = null;
 	let fitViewRef: ((options?: { duration?: number; padding?: number }) => void) | null = null;
+	let lastSearchFocus = '';
 
 	// Focus zoom on selected node and its connections
 	function focusOnSelection(nodeIds: string[]) {
@@ -287,6 +288,11 @@
 			flowNodesStore.set(layoutedNodes);
 
 			flowEdgesStore.set(layoutedEdges);
+			const matchIds = [...get(searchMatchedNodeIds)];
+			if (matchIds.length > 0) {
+				lastSearchFocus = matchIds.slice().sort().join(',');
+				setTimeout(() => focusOnSelection(matchIds), 50);
+			}
 		} catch (error) {
 			console.error('Layout failed:', error);
 			// Fallback: just set nodes with grid positions
@@ -306,6 +312,14 @@
 			isLayouting = false;
 		}
 	}
+
+	$effect(() => {
+		const ids = [...$searchMatchedNodeIds].sort();
+		const key = ids.join(',');
+		if (isLayouting || key === lastSearchFocus) return;
+		lastSearchFocus = key;
+		if (key) focusOnSelection(ids);
+	});
 
 	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
 		const nodeId = node?.id;

@@ -5,6 +5,7 @@ import {
 	buildRenderModel,
 	cullToViewport,
 	groupIdFor,
+	groupIdsContaining,
 	subnetLabel,
 	tagKey
 } from './aggregate';
@@ -97,6 +98,17 @@ describe('graph grouping', () => {
 					(edge.source === 'lone' && edge.target === 'web-a')
 			)?.totalBytes
 		).toBe(250);
+	});
+
+	it('names the collapsed group that hides a searched device', () => {
+		const model = buildRenderModel(nodes, edges, new Set());
+		const open = groupIdsContaining(model, new Set(['web-a', 'carol-b']));
+		expect(open).toContain(groupIdFor({ kind: 'tag', key: 'web', label: 'tag:web' }));
+		expect(open).toContain(groupIdFor({ kind: 'user', key: 'carol', label: 'carol' }));
+		expect(open).not.toContain('web-a');
+		const revealed = buildRenderModel(nodes, edges, new Set(open));
+		expect(revealed.nodes.map((node) => node.id)).toEqual(expect.arrayContaining(['web-a', 'web-b', 'carol-a', 'carol-b']));
+		expect(revealed.nodes.map((node) => node.id)).not.toContain('group:tag:web');
 	});
 
 	it('does not regroup an expanded tag by user', () => {
