@@ -6,6 +6,8 @@
 	import DonutChart from '#lib/components/charts/DonutChart.svelte';
 	import BarChart from '#lib/components/charts/BarChart.svelte';
 	import StatCard from '#lib/components/charts/StatCard.svelte';
+	import EmptyRange from '#lib/components/timeline/EmptyRange.svelte';
+	import { windowCoverage } from '#lib/stores/traffic-shape';
 	import {
 		startStatsRefresh,
 		stopStatsRefresh,
@@ -169,9 +171,15 @@
 			</div>
 		{:else}
 			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasStoredData}
-				<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
-					No traffic data in the selected window.
-				</div>
+				{#if $windowCoverage.kind === 'none'}
+					<div class="mb-4 rounded-lg border border-border bg-card sm:mb-6">
+						<EmptyRange compact />
+					</div>
+				{:else}
+					<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
+						No traffic data in the selected window for these filters.
+					</div>
+				{/if}
 			{/if}
 			<div class="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
 				<div>

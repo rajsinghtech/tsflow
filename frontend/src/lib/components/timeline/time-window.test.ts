@@ -175,3 +175,14 @@ describe('validateWindow', () => {
 		expect(validateWindow(new Date(latest - 2 * hour), new Date(latest), earliest, latest)).toBeNull();
 	});
 });
+
+describe('resolveCoverage start', () => {
+	it('never starts before the first stored minute, even when its hourly bucket does', () => {
+		const reported = Date.parse('2026-10-05T01:24:00.000Z');
+		const firstBucket = Date.parse('2026-10-05T01:00:00.000Z');
+		const end = Date.parse('2026-10-07T13:00:00.000Z');
+		const buckets = Array.from({ length: 10 }, (_, index) => firstBucket + index * 60 * 60 * 1000);
+		expect(resolveCoverage(reported, end, buckets).start).toBe(reported);
+	});
+});
+

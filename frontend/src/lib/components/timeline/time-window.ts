@@ -89,7 +89,8 @@ export function resolveCoverage(
 		return { start: reportedStart, end: reportedEnd };
 	}
 	const trimmed = continuousCoverageStart(sorted);
-	return { start: trimmed ?? reportedStart, end: reportedEnd };
+	// Buckets start on the hour; stored data can start later inside that hour.
+	return { start: Math.max(reportedStart, trimmed ?? reportedStart), end: reportedEnd };
 }
 
 export function overviewDomain(

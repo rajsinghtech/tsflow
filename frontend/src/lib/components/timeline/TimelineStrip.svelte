@@ -1,21 +1,19 @@
 <script lang="ts">
-	import { tailscaleService } from '#lib/services';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
 	import { commitIntent } from '#lib/stores/time-range-history';
+	import { trafficPoints, trafficShapeError } from '#lib/stores/traffic-shape';
 	import TrafficBrush from './TrafficBrush.svelte';
 	import {
 		binTraffic,
 		resolveCoverage,
-		sparklineWindows,
-		timelineViewDomain,
-		type TrafficPoint
+		timelineViewDomain
 	} from './time-window';
 	import { formatStamp, type TimeZoneMode } from './time-range-url';
 
 	let { zone }: { zone: TimeZoneMode } = $props();
 
-	let points = $state<TrafficPoint[]>([]);
-	let sparkNote = $state('');
+	const points = $derived($trafficPoints ?? []);
+	const sparkNote = $derived($trafficShapeError);
 
 	const source = $derived($dataSourceStore);
 	const reportedStart = $derived(source.dataRange ? new Date(source.dataRange.earliest).getTime() : 0);
@@ -30,63 +28,6 @@
 	const overviewBins = $derived(binTraffic(points, coverage.start, coverage.end, 120));
 	const ready = $derived(coverage.end > coverage.start && !!source.selectedStart && !!source.selectedEnd);
 
-	// Keyed on the coverage values, not the store object: the store is replaced
-	// on every range poll and window change, and the overview only depends on
-	// the coverage.
-	const coverageKey = $derived(
-		source.dataRange?.earliest && source.dataRange.latest
-			? `${source.dataRange.earliest}|${source.dataRange.latest}`
-			: ''
-	);
-
-	$effect(() => {
-		if (!coverageKey) {
-			points = [];
-			return;
-		}
-		const [earliest, latest] = coverageKey.split('|');
-		const start = new Date(earliest).getTime();
-		const end = new Date(latest).getTime();
-		if (!(end > start)) return;
-		const controller = new AbortController();
-		sparkNote = '';
-		void loadPoints(start, end, controller.signal)
-			.then((next) => {
-				if (!controller.signal.aborted) points = next;
-			})
-			.catch((err) => {
-				if (controller.signal.aborted) return;
-				console.error('Failed to load traffic overview:', err);
-				sparkNote = 'Traffic shape unavailable';
-				points = [];
-			});
-		return () => controller.abort();
-	});
-
-	async function loadPoints(start: number, end: number, signal: AbortSignal): Promise<TrafficPoint[]> {
-		const windows = sparklineWindows(start, end);
-		const responses = await Promise.all(
-			windows.map((window) =>
-				tailscaleService.getBandwidth(new Date(window.start), new Date(window.end), undefined, signal)
-			)
-		);
-		const merged = new Map<number, TrafficPoint>();
-		for (const response of responses) {
-			const durationMs = Math.max(60_000, (response.metadata?.bucketSeconds || 3600) * 1000);
-			for (const bucket of response.buckets || []) {
-				const time = new Date(bucket.time).getTime();
-				if (!Number.isFinite(time)) continue;
-				const existing = merged.get(time);
-				const bytes = bucket.txBytes + bucket.rxBytes;
-				merged.set(time, {
-					time,
-					bytes: (existing?.bytes || 0) + bytes,
-					durationMs: existing?.durationMs ? Math.min(existing.durationMs, durationMs) : durationMs
-				});
-			}
-		}
-		return [...merged.values()].sort((a, b) => a.time - b.time);
-	}
 
 	function commit(start: number, end: number) {
 		commitIntent({ kind: 'absolute', start: new Date(start), end: new Date(end) }, zone);

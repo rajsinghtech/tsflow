@@ -12,7 +12,8 @@
 	import DeviceTimeline from '#lib/components/charts/DeviceTimeline.svelte';
 	import EdgePolicyInfo from '#lib/components/logs/EdgePolicyInfo.svelte';
 	import Header from '#lib/components/layout/Header.svelte';
-	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
+	import EmptyRange from '#lib/components/timeline/EmptyRange.svelte';
+	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, filteredNodes, filteredEdges, networkLogs } from '#lib/stores/network-store';
 	import { uiStore } from '#lib/stores/ui-store';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
 	import { viewerReady, viewerStore, whenViewerReady } from '#lib/stores/viewer-store';
@@ -201,6 +202,9 @@
 						</button>
 					{/if}
 				</div>
+			<!-- Empty window: nothing stored for this range at all, before any filter -->
+			{:else if $networkLogs.length === 0}
+				<EmptyRange />
 			<!-- Graph -->
 			{:else}
 				<div class="flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">

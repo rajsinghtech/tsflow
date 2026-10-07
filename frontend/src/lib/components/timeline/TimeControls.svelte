@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Minus, RefreshCw } from 'lucide-svelte';
+	import { AlertTriangle, CalendarClock, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Minus, RefreshCw } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { get } from 'svelte/store';
 	import { page } from '$app/state';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
 	import { refreshVisibleData } from '#lib/stores/live-mode';
+	import { loadTrafficShape, storedCoverage, storedSpans, windowCoverage } from '#lib/stores/traffic-shape';
+	import { coverageNote } from './range-coverage';
 	import {
 		bootstrapRangeFromLocation,
 		commitIntent,
@@ -70,6 +72,14 @@
 	const atCoverageEnd = $derived.by(() => {
 		if (!source.dataRange || !source.selectedEnd) return false;
 		return source.selectedEnd.getTime() >= new Date(source.dataRange.latest).getTime() - 1000;
+	});
+
+	const note = $derived(coverageNote($windowCoverage, $storedCoverage, zone));
+
+	// The overview is cached per stored range, so this only fetches when the
+	// range moves.
+	$effect(() => {
+		loadTrafficShape(source.dataRange?.earliest, source.dataRange?.latest);
 	});
 
 	const freshness = $derived.by(() => {
@@ -220,7 +230,7 @@
 				<ChevronDown class="hidden h-3.5 w-3.5 shrink-0 text-muted-foreground sm:inline" />
 			</button>
 			{#if open}
-				<TimeRangePicker {zone} {recent} now={new Date()} onCommit={choose} onZone={toggleZone} />
+				<TimeRangePicker {zone} {recent} now={new Date()} coverage={$storedCoverage} spans={$storedSpans} onCommit={choose} onZone={toggleZone} />
 			{/if}
 		</div>
 
@@ -260,6 +270,25 @@
 					<div class="mt-1 flex justify-between gap-3"><span>Poll interval</span><span class="font-mono">{freshness.interval}</span></div>
 				</span>
 			</button>
+		{/if}
+
+		{#if note}
+			<span
+				role="status"
+				class="ml-1 flex min-w-0 items-center gap-1 truncate text-[11px] {note.tone === 'warning' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}"
+				title={note.detail}
+			>
+				{#if note.tone === 'warning'}
+					<AlertTriangle class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+				{/if}
+				{#if note.tone === 'warning'}
+					<span class="truncate sm:hidden">No data</span>
+					<span class="hidden truncate sm:inline">{note.text}</span>
+				{:else}
+					<span class="hidden truncate sm:inline">{note.text}</span>
+				{/if}
+				<span class="sr-only">{note.detail}</span>
+			</span>
 		{/if}
 
 		<div class="ml-auto flex items-center gap-1">

@@ -2,6 +2,10 @@
 	import { rawLogs, uiStore, filteredNodes, filteredEdges, processedNetwork, filterStore, debouncedFilterStore, devices, services, primaryMatchedNodes } from '#lib/stores';
 	import { formatBytes, formatTime, extractIP, extractPort, getProtocolName, isValidIPv4, isIPv6 } from '#lib/utils';
 	import { ArrowRight, ArrowUpDown } from 'lucide-svelte';
+	import { hasStoredData } from '#lib/stores';
+	import { storedCoverage } from '#lib/stores/traffic-shape';
+	import { storedRangeLabel } from '#lib/components/timeline/range-coverage';
+	import { loadTimeZone } from '#lib/components/timeline/time-range-url';
 	import type { NetworkLog, TrafficType } from '#lib/types';
 
 	type SortField = 'logged' | 'txBytes' | 'rxBytes' | 'trafficType' | 'protocol';
@@ -487,7 +491,12 @@
 
 		{#if flattenedEntries.length === 0}
 			<div class="flex h-32 flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-				{#if !hasRawLogs}
+				{#if !hasRawLogs && $hasStoredData}
+					<p>No flows in this range</p>
+					{#if $storedCoverage}
+						<p class="text-xs text-muted-foreground/60">Stored data: {storedRangeLabel($storedCoverage, loadTimeZone())}</p>
+					{/if}
+				{:else if !hasRawLogs}
 					<p>No traffic data available</p>
 					<p class="text-xs text-muted-foreground/60">Waiting for network flow logs from the poller</p>
 				{:else if $uiStore.selectedNodeId || $uiStore.selectedEdgeId}

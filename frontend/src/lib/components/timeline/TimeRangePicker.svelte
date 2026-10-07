@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { WINDOW_PRESETS } from './time-window';
+	import { coverageNote, intentRange, rangeCoverage, storedRangeLabel, type Span } from './range-coverage';
 	import {
 		decodeSearch,
 		parseRangeInput,
@@ -12,12 +13,16 @@
 		now = new Date(),
 		zone,
 		recent = [],
+		coverage = null,
+		spans = null,
 		onCommit,
 		onZone
 	}: {
 		now?: Date;
 		zone: TimeZoneMode;
 		recent?: RecentRange[];
+		coverage?: Span | null;
+		spans?: Span[] | null;
 		onCommit: (intent: RangeIntent) => void;
 		onZone: (zone: TimeZoneMode) => void;
 	} = $props();
@@ -25,6 +30,17 @@
 	let draft = $state('');
 	let error = $state('');
 	let inputEl: HTMLInputElement | null = $state(null);
+
+	// Checks typed text against stored data before it is applied. Enter still
+	// applies a range with no data; the note only says so.
+	const draftNote = $derived.by(() => {
+		if (!draft.trim()) return null;
+		const parsed = parseRangeInput(draft, now, zone);
+		if (!parsed.ok) return null;
+		const range = intentRange(parsed.intent, coverage);
+		if (!range) return null;
+		return coverageNote(rangeCoverage(range.start, range.end, coverage, spans), coverage, zone);
+	});
 
 	$effect(() => {
 		inputEl?.focus();
@@ -79,6 +95,17 @@
 		</p>
 		{#if error}
 			<p id="time-range-error" class="mt-1 text-xs text-destructive" role="alert">{error}</p>
+		{:else if draftNote}
+			<p
+				id="time-range-coverage"
+				class="mt-1 rounded-md px-2 py-1 text-xs {draftNote.tone === 'warning' ? 'border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}"
+				role="status"
+			>
+				{draftNote.text}. {draftNote.detail}
+				{#if draftNote.tone === 'warning' && coverage}
+					<span class="block">Stored data: {storedRangeLabel(coverage, zone)}</span>
+				{/if}
+			</p>
 		{/if}
 		<button type="submit" class="sr-only">Apply range</button>
 	</form>

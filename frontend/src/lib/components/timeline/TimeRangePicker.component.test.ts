@@ -99,4 +99,41 @@ describe('TrafficBrush', () => {
 		expect(commits).toHaveLength(1);
 		expect(commits[0][1]).toBeGreaterThan(commits[0][0]);
 	});
+
+	it('warns inline when a typed range has no stored data, and notes a partial one', async () => {
+		const H = 60 * 60 * 1000;
+		const start = Date.parse('2026-10-05T00:00:00.000Z');
+		const coverage = { start, end: start + 60 * H };
+		const spans = [
+			{ start, end: start + 24 * H },
+			{ start: start + 40 * H, end: start + 60 * H }
+		];
+		const commits: RangeIntent[] = [];
+		target = document.createElement('div');
+		document.body.appendChild(target);
+		component = mount(TimeRangePicker, {
+			target,
+			props: { now, zone: 'utc', recent: [], coverage, spans, onCommit: (intent: RangeIntent) => commits.push(intent), onZone: () => undefined }
+		});
+		const input = document.querySelector('#time-range-input') as HTMLInputElement;
+		const type = async (text: string) => {
+			input.value = text;
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			await tick();
+			return document.querySelector('#time-range-coverage')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+		};
+
+		expect(await type('2026-10-04T10:00:00Z to 2026-10-04T16:00:00Z')).toMatch(
+			/No stored data in this range\. This range ends before stored data starts\..*Stored data: Oct 5, 12:00 AM – Oct 7, 12:00 PM/
+		);
+		expect(await type('2026-10-06T04:00:00Z to 2026-10-06T10:00:00Z')).toMatch(/sits in a gap/);
+		expect(await type('2026-10-04T21:00:00Z to 2026-10-05T03:00:00Z')).toMatch(/^Data for 3h of 6h\. Stored data starts Oct 5, 12:00 AM\.$/);
+		expect(await type('2026-10-05T02:00:00Z to 2026-10-05T08:00:00Z')).toBe('');
+
+		// The warning does not block applying the range.
+		await type('2026-10-04T10:00:00Z to 2026-10-04T16:00:00Z');
+		[...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Apply range')?.click();
+		expect(commits.at(-1)).toMatchObject({ kind: 'absolute' });
+	});
 });
+
