@@ -418,7 +418,7 @@ func mergeMinutesIntoHour(ctx context.Context, tx *sql.Tx, tailnetID string, hou
 	if err != nil {
 		return 0, false, err
 	}
-	if err := readPairRows(seed, grouped, false); err != nil {
+	if err := readHourPairRows(seed, grouped); err != nil {
 		return 0, false, err
 	}
 	rows, err := tx.QueryContext(ctx, hourMinuteSQL, tailnetID, fromExclusive, toExclusive)
@@ -545,9 +545,9 @@ func execHourGroup(ctx context.Context, stmt *sql.Stmt, tailnetID string, hour i
 	_, err := stmt.ExecContext(ctx,
 		tailnetID, hour, key.src, key.dst, key.traffic,
 		sumArg(group.tx), sumArg(group.rx), sumArg(group.txPkts), sumArg(group.rxPkts), sumArg(group.flows),
-		formatProtocols(group.protocols), formatProtocolBytes(group.protocols), formatPortsLimit(group.ports, 0),
+		formatProtocols(group.protocols), formatHourProtocolBytes(group.protocols), formatPortsLimit(group.ports, 0),
 		formatPortsLimit(group.txPorts, 0), formatPortsLimit(group.rxPorts, 0),
-		formatProtocolBytes(group.txProto), formatProtocolBytes(group.rxProto),
+		formatHourProtocolBytes(group.txProto), formatHourProtocolBytes(group.rxProto),
 		group.directional, group.bucket,
 	)
 	if err != nil {
@@ -582,7 +582,7 @@ func mergeHourDelta(ctx context.Context, tx *sql.Tx, tailnetID string, minuteBuc
 	if err != nil {
 		return err
 	}
-	if err := readPairRows(rows, grouped, false); err != nil {
+	if err := readHourPairRows(rows, grouped); err != nil {
 		return err
 	}
 	key := pairGroupKey{src: values.src, dst: values.dst, traffic: values.traffic}

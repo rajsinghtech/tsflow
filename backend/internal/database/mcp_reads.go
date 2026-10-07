@@ -149,7 +149,7 @@ func (s *SQLiteStore) FlowsBetween(ctx context.Context, tailnetID string, srcIDs
 		if err != nil {
 			return nil, fmt.Errorf("failed to query flows between endpoints: %w", err)
 		}
-		if err := readPairRows(rows, grouped, false); err != nil {
+		if err := readHourPairRows(rows, grouped); err != nil {
 			return nil, err
 		}
 	}

@@ -407,7 +407,7 @@ func (s *SQLiteStore) readClosedSpan(ctx context.Context, tailnetID string, span
 		return fmt.Errorf("failed to query node pairs: %w", err)
 	}
 	grouped := make(map[pairGroupKey]*pairGroup)
-	if err := readPairRows(rows, grouped, false); err != nil {
+	if err := scanPairRows(rows, grouped, false, span.hours); err != nil {
 		return err
 	}
 	if cacheable {
