@@ -20,6 +20,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
+	"github.com/rajsinghtech/tsflow/backend/internal/mcpserver"
 	"github.com/rajsinghtech/tsflow/backend/internal/middleware"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 	"github.com/rajsinghtech/tsflow/backend/internal/tsnetserve"
@@ -148,8 +149,9 @@ func main() {
 
 	router.HandleMethodNotAllowed = true
 
-	// Add gzip compression middleware
-	router.Use(gzip.Gzip(gzip.DefaultCompression))
+	// Add gzip compression middleware. /mcp is left uncompressed so
+	// streamable HTTP responses are not wrapped.
+	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/mcp"})))
 
 	corsConfig := middleware.CORSConfig(cfg.Environment, cfg.AllowedCORSOrigins)
 	router.Use(cors.New(corsConfig))
@@ -208,6 +210,14 @@ func main() {
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
 	}
+
+	mcpserver.Mount(router, mcpserver.Options{
+		Enabled:  cfg.MCPEnabled,
+		Access:   cfg.Access,
+		WhoIs:    requestWhoIs,
+		Handlers: handlerService,
+		Version:  Version,
+	})
 
 	// Register embedded frontend (must be after API routes)
 	if err := frontend.RegisterFrontend(router); err != nil {
