@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // lockTailnet serializes writers for one tailnet. Readers do not call it.
@@ -40,10 +41,43 @@ func (s *SQLiteStore) beginWrite(ctx context.Context, tailnetID string) (*sql.Tx
 // then commits. A read issued from that hook, or from another goroutine,
 // uses the read pool and sees the previous commit until this one lands.
 func (s *SQLiteStore) commitWrite(tx *sql.Tx, tailnetID string) error {
+	seq := s.commitSeqFor(tailnetID)
+	seq.started.Add(1)
+	defer seq.finished.Add(1)
 	if s.beforeCommit != nil {
 		s.beforeCommit(tailnetID)
 	}
 	return tx.Commit()
+}
+
+// commitSeq counts one tailnet's commits. started moves before a commit can
+// become visible and finished moves after it is. A reader that finds no
+// commit in flight when it starts, and started unchanged after its last
+// snapshot, knows every snapshot it took holds the same rows for the
+// tailnet: every write commits through commitWrite with its own tailnet ID.
+type commitSeq struct {
+	started, finished atomic.Uint64
+}
+
+func (s *SQLiteStore) commitSeqFor(tailnetID string) *commitSeq {
+	if v, ok := s.commitSeqs.Load(tailnetID); ok {
+		return v.(*commitSeq)
+	}
+	v, _ := s.commitSeqs.LoadOrStore(tailnetID, &commitSeq{})
+	return v.(*commitSeq)
+}
+
+// quiet returns the started count and whether no commit is in flight. Read
+// finished first: a commit that starts between the two loads then shows as
+// in flight.
+func (c *commitSeq) quiet() (uint64, bool) {
+	finished := c.finished.Load()
+	started := c.started.Load()
+	return started, started == finished
+}
+
+func (c *commitSeq) unchangedSince(started uint64) bool {
+	return c.started.Load() == started
 }
 
 // commitWriteTouching commits, then drops the hours the transaction changed

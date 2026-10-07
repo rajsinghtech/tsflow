@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"runtime"
@@ -78,7 +79,7 @@ func listRolledHours(ctx context.Context, q queryRower, tailnetID string, ranges
 }
 
 // closedMinuteChunk is how many closed minutes one parallel work item reads.
-const closedMinuteChunk = 10 * minuteSeconds
+const closedMinuteChunk = 3 * minuteSeconds
 
 // splitClosedMinutes separates minute spans that end at or before the
 // rollup mark, which only a late write can change, from spans after the
@@ -114,10 +115,13 @@ func splitClosedMinutes(spans [][2]int64, mark int64) (closed, open [][2]int64) 
 }
 
 // closedSpan is one parallel read: a closed hour from node_pair_hours, or a
-// chunk of closed minutes from node_pairs.
+// chunk of closed minutes from node_pairs. An open span is the filling hour
+// or a chunk of minutes after the mark; it is never cached, and the read
+// only keeps it if no commit for the tailnet overlapped the read.
 type closedSpan struct {
 	lo, hi int64
 	hours  bool
+	open   bool
 }
 
 func closedSpans(hours []int64, minutes [][2]int64) []closedSpan {
@@ -130,6 +134,81 @@ func closedSpans(hours []int64, minutes [][2]int64) []closedSpan {
 	}
 	return spans
 }
+
+// openMinuteChunk is how many minutes after the mark one work item reads.
+// A live window has a few of them, each a full poll's worth of rows.
+const openMinuteChunk = 2 * minuteSeconds
+
+// maxOpenMinuteItems caps the work items for minutes after the mark. A long
+// minute span (no rollup yet, or a mark far behind) uses wider chunks.
+const maxOpenMinuteItems = 32
+
+// openSpans turns the snapshot-bound part of a plan into work items: each
+// filling-hour span as one item and the minutes after the mark in chunks.
+// minutes should already be clamped to the rows that exist.
+func openSpans(hours, minutes [][2]int64) []closedSpan {
+	var spans []closedSpan
+	for _, h := range hours {
+		spans = append(spans, closedSpan{lo: h[0], hi: h[1], hours: true, open: true})
+	}
+	var total int64
+	for _, m := range minutes {
+		total += m[1] - m[0]
+	}
+	chunk := int64(openMinuteChunk)
+	if total > chunk*maxOpenMinuteItems {
+		chunk = (total/maxOpenMinuteItems/minuteSeconds + 1) * minuteSeconds
+	}
+	for _, m := range minutes {
+		for lo := m[0]; lo < m[1]; lo += chunk {
+			hi := lo + chunk
+			if hi > m[1] {
+				hi = m[1]
+			}
+			spans = append(spans, closedSpan{lo: lo, hi: hi, open: true})
+		}
+	}
+	return spans
+}
+
+const minuteSeekMinSQL = `
+	SELECT MIN(bucket) FROM node_pairs
+	WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
+const minuteSeekMaxSQL = `
+	SELECT MAX(bucket) FROM node_pairs
+	WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
+// clampMinuteSpans narrows each span to the minute rows it holds, with two
+// primary-key seeks, and drops empty spans. A window that starts at the
+// epoch, or ends far in the future, then splits only the minutes that have
+// data.
+func clampMinuteSpans(ctx context.Context, q queryRower, tailnetID string, spans [][2]int64) ([][2]int64, error) {
+	var out [][2]int64
+	for _, span := range spans {
+		var lo, hi sql.NullInt64
+		if err := q.QueryRowContext(ctx, minuteSeekMinSQL, tailnetID, span[0], span[1]).Scan(&lo); err != nil {
+			return nil, fmt.Errorf("failed to bound minute span: %w", err)
+		}
+		if !lo.Valid {
+			continue
+		}
+		if err := q.QueryRowContext(ctx, minuteSeekMaxSQL, tailnetID, span[0], span[1]).Scan(&hi); err != nil {
+			return nil, fmt.Errorf("failed to bound minute span: %w", err)
+		}
+		if !hi.Valid {
+			continue
+		}
+		out = append(out, [2]int64{lo.Int64, hi.Int64 + 1})
+	}
+	return out, nil
+}
+
+// errSnapshotMoved reports that a commit for the tailnet overlapped a
+// parallel read of open spans, so its snapshots may differ.
+var errSnapshotMoved = errors.New("graph read overlapped a commit")
 
 func (s *SQLiteStore) closedHourSlots() chan struct{} {
 	s.closedHourOnce.Do(func() {
@@ -181,14 +260,17 @@ func splitByPartition(grouped map[pairGroupKey]*pairGroup, parts int) [][]keyedG
 // partition per worker, so no merge step is sequential. Sums, minimums and
 // map unions do not depend on order, and partitions share no keys, so the
 // result equals one sequential scan.
-func (s *SQLiteStore) aggregateWithClosedSpans(ctx context.Context, tailnetID string, spans []closedSpan, grouped map[pairGroupKey]*pairGroup) ([]NodePairAggregate, error) {
+// aggregateWithClosedSpans reads spans in parallel, merges them with
+// grouped and formats the result. When stable is set, it is checked after
+// every span is read; false returns errSnapshotMoved.
+func (s *SQLiteStore) aggregateWithClosedSpans(ctx context.Context, tailnetID string, spans []closedSpan, grouped map[pairGroupKey]*pairGroup, stable func() bool) ([]NodePairAggregate, error) {
 	if len(spans) == 0 {
 		return sortedPairAggregates(grouped)
 	}
 	parts := maxClosedHourReaders
 	results := make([]spanResult, len(spans))
 	for i := range spans {
-		if spans[i].hours {
+		if spans[i].hours && !spans[i].open {
 			results[i].entry = s.hourCache.get(tailnetID, spans[i].lo)
 		}
 	}
@@ -201,6 +283,9 @@ func (s *SQLiteStore) aggregateWithClosedSpans(ctx context.Context, tailnetID st
 		return s.readClosedSpan(ctx, tailnetID, spans[i], parts, &results[i])
 	}); err != nil {
 		return nil, err
+	}
+	if stable != nil && !stable() {
+		return nil, errSnapshotMoved
 	}
 	mainParts := splitByPartition(grouped, parts)
 	out := make([][]NodePairAggregate, parts)
@@ -307,7 +392,10 @@ func (s *SQLiteStore) readClosedSpan(ctx context.Context, tailnetID string, span
 	if span.hours {
 		query = nodePairHourScanSQL
 	}
-	cacheable := span.hours && s.hourCache != nil
+	if span.open && s.openSpanHook != nil {
+		s.openSpanHook()
+	}
+	cacheable := span.hours && !span.open && s.hourCache != nil
 	var epoch uint64
 	if cacheable {
 		// Take the epoch before the read starts, so a commit that lands
