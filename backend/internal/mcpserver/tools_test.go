@@ -367,3 +367,28 @@ func seedPair(t *testing.T, store *database.SQLiteStore, tailnet string, bucket 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
+
+func TestNewConnectionsLeaveOutSelfPairs(t *testing.T) {
+	svc, store, _ := setupMCP(t)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	row := func(src, dst string) database.NodePairAggregate {
+		return database.NodePairAggregate{Bucket: base.Unix(), SrcNodeID: src, DstNodeID: dst, TrafficType: "virtual", TxBytes: 10, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":10}`}
+	}
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, []database.NodePairAggregate{
+		row("ada", "ada"),
+		row("100.64.0.8", "ada"), // ada's address and ada's id are one device
+		row("ada", "carol"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := svc.newConnections(ctx, Viewer{}, newConnectionsIn{
+		Start: base.Format(time.RFC3339), End: base.Add(time.Minute).Format(time.RFC3339), Lookback: "1h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.Pairs) != 1 || fresh.Pairs[0].SrcNodeID != "ada" || fresh.Pairs[0].DstNodeID != "carol" {
+		t.Fatalf("new pairs = %+v, want only ada -> carol", fresh.Pairs)
+	}
+}
