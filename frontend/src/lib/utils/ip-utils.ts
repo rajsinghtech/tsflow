@@ -78,28 +78,24 @@ export function categorizeIP(ip: string): string[] {
 	// DERP servers
 	if (ip === '127.3.3.40') return ['derp'];
 
-	// IPv4 Tailscale addresses (100.64.0.0/10 CGNAT range used by Tailscale)
-	if (ip.startsWith('100.')) return ['tailscale'];
+	const v4 = isValidIPv4(ip) ? ip.split('.').map(Number) : null;
+
+	// IPv4 Tailscale addresses (100.64.0.0/10 CGNAT range used by Tailscale).
+	// The rest of 100.0.0.0/8 is ordinary public address space.
+	if (v4 && v4[0] === 100 && v4[1] >= 64 && v4[1] <= 127) return ['tailscale'];
 
 	// IPv6 Tailscale addresses (fd7a:115c:a1e0::/48 is Tailscale's IPv6 prefix)
-	if (ip.startsWith('fd7a:115c:a1e0:')) return ['tailscale'];
+	const lower = ip.toLowerCase();
+	if (lower.startsWith('fd7a:115c:a1e0:')) return ['tailscale'];
 
 	// IPv4 private addresses (RFC 1918)
-	if (
-		ip.startsWith('192.168.') ||
-		ip.startsWith('10.') ||
-		(ip.startsWith('172.') &&
-			parseInt(ip.split('.')[1]) >= 16 &&
-			parseInt(ip.split('.')[1]) <= 31)
-	) {
+	if (v4 && (v4[0] === 10 || (v4[0] === 172 && v4[1] >= 16 && v4[1] <= 31) || (v4[0] === 192 && v4[1] === 168))) {
 		return ['private'];
 	}
 
-	// IPv6 private/link-local addresses (RFC 4193, RFC 4291)
-	if (ip.startsWith('fe80:') || ip.startsWith('fc00:') || ip.startsWith('fd00:')) {
-		if (!ip.startsWith('fd7a:115c:a1e0:')) {
-			return ['private'];
-		}
+	// IPv6 unique local (fc00::/7, RFC 4193) and link-local (fe80::/10, RFC 4291)
+	if (lower.includes(':') && /^(f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/.test(lower)) {
+		return ['private'];
 	}
 
 	// IPv6 addresses (contains colons) - treat as public if not private or Tailscale
