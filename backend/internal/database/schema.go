@@ -58,6 +58,14 @@ type SQLiteStore struct {
 	// hourly rollups. A startup whose high-water mark already covers every
 	// closed minute does not increment it.
 	hourRollupBackfillScans atomic.Int64
+
+	// closedReadHook, when set, runs after the graph read's snapshot ends and
+	// before closed spans are read. Tests commit writes there.
+	closedReadHook func()
+
+	// closedHourSem bounds parallel closed-hour reads across requests.
+	closedHourOnce sync.Once
+	closedHourSem  chan struct{}
 }
 
 // NewSQLiteStore creates a new SQLite store.

@@ -78,8 +78,29 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if err != nil {
 		return nil, err
 	}
+	// Closed hours and closed minutes (at or before the mark) are read after
+	// this snapshot ends, in parallel. Only a late write can change them, and
+	// it updates the minute row and the hour row in one commit. Each bucket
+	// is read from exactly one of the two tables, so a newer snapshot cannot
+	// double count. The filling hour and minutes after the mark stay on this
+	// snapshot, because a moving mark would shift rows between the tables.
+	closedHourRanges, openHours := splitClosedHours(plan.hours, plan.mark)
+	closedHours, err := listRolledHours(ctx, tx, tailnetID, closedHourRanges)
+	if err != nil {
+		return nil, err
+	}
+	closedMinutes, openMinutes := splitClosedMinutes(plan.minutes, plan.mark)
 	grouped := make(map[pairGroupKey]*pairGroup)
-	if err := collectPairGroups(ctx, tx, tailnetID, plan, grouped); err != nil {
+	if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {
+		return nil, err
+	}
+	if err := tx.Rollback(); err != nil {
+		return nil, fmt.Errorf("failed to end read transaction: %w", err)
+	}
+	if s.closedReadHook != nil {
+		s.closedReadHook()
+	}
+	if err := s.readClosedSpans(ctx, tailnetID, closedSpans(closedHours, closedMinutes), grouped); err != nil {
 		return nil, err
 	}
 	return sortedPairAggregates(grouped)

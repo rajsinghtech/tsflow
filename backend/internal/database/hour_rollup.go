@@ -26,6 +26,10 @@ type hourPlan struct {
 	// fallback. Derived stats then read those minute rows for protocol bytes
 	// and leave the integer totals on the hourly rows.
 	legacy bool
+	// mark is the rollup mark the plan was built from, or -1 when none.
+	// Set by hourPlanWith; zero in plans built elsewhere, which closes
+	// nothing.
+	mark int64
 }
 
 func (p hourPlan) useHours() bool {
@@ -128,6 +132,7 @@ func (s *SQLiteStore) hourPlanWith(ctx context.Context, q queryRower, tailnetID 
 		return hourPlan{}, err
 	}
 	plan := planner(start, end, mark)
+	plan.mark = mark
 	if !plan.useHours() {
 		return plan, nil
 	}
