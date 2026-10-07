@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -161,28 +160,11 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		buckets = buckets[len(buckets)-MaxBuckets:] // Keep most recent
 	}
 
-	// Compute bucket duration from actual data to avoid mismatch when the DB
-	// falls back to a coarser tier than the range heuristic expects.
-	var bucketSeconds int64
-	if source == "cache" {
-		bucketSeconds = 60 // rolling cache uses 1-minute buckets
-	} else if len(buckets) >= 2 {
-		// Derive from minimum gap between consecutive data points
-		minGap := int64(math.MaxInt64)
-		for i := 1; i < len(buckets); i++ {
-			gap := buckets[i].Time.Unix() - buckets[i-1].Time.Unix()
-			if gap > 0 && gap < minGap {
-				minGap = gap
-			}
-		}
-		if minGap > 0 && minGap < int64(math.MaxInt64) {
-			bucketSeconds = minGap
-		} else {
-			bucketSeconds = 60
-		}
-	} else {
-		bucketSeconds = bucketSizeForRange(startTime, endTime)
-	}
+	// The store and the rolling cache both group by bucketSizeForRange, so
+	// the bucket width is known from the window. Deriving it from the gaps
+	// between returned buckets overstates it whenever some buckets have no
+	// traffic, which divides every rate by the gap instead of the bucket.
+	bucketSeconds := bucketSizeForRange(startTime, endTime)
 
 	applyBucketCoverage(buckets, startTime, endTime, bucketSeconds)
 
@@ -395,24 +377,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 		return allBuckets[i].Time.Before(allBuckets[j].Time)
 	})
 
-	// Derive bucket duration from actual data
-	var bucketSeconds int64
-	if len(allBuckets) >= 2 {
-		minGap := int64(math.MaxInt64)
-		for i := 1; i < len(allBuckets); i++ {
-			gap := allBuckets[i].Time.Unix() - allBuckets[i-1].Time.Unix()
-			if gap > 0 && gap < minGap {
-				minGap = gap
-			}
-		}
-		if minGap > 0 && minGap < int64(math.MaxInt64) {
-			bucketSeconds = minGap
-		} else {
-			bucketSeconds = 60
-		}
-	} else {
-		bucketSeconds = bucketSizeForRange(startTime, endTime)
-	}
+	bucketSeconds := bucketSizeForRange(startTime, endTime)
 
 	if allBuckets == nil {
 		allBuckets = []database.BandwidthBucket{}
