@@ -56,11 +56,11 @@
 <svelte:window onclick={handleWindowClick} />
 
 {#if $tailnets.length > 1 && selected}
-	<div class="tailnet-switcher relative">
+	<div class="tailnet-switcher relative min-w-0 shrink">
 		<button
 			type="button"
 			onclick={toggle}
-			class="flex h-8 max-w-36 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-sm hover:bg-secondary sm:h-9 sm:max-w-52"
+			class="flex h-8 min-w-0 max-w-36 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-sm hover:bg-secondary sm:h-9 sm:max-w-52"
 			aria-haspopup="listbox"
 			aria-expanded={open}
 			aria-label="Tailnet"
