@@ -14,9 +14,8 @@ const manyHourBase int64 = 1_699_999_200
 // manyHourTemplates mixes clean directional rows with the odd shapes the
 // legacy read has to match: NULL and invalid JSON, scalar JSON, null port
 // bytes, ties, more than 20 ports, delimiter characters in node ids, and
-// rows whose direction flag differs between minutes. A scalar
-// protocol_bytes value is left out: the hourly rollup already drops its null
-// protocol key on main, independent of how hours are read.
+// rows whose direction flag differs between minutes, and a scalar
+// protocol_bytes value, which gives a null protocol key.
 func manyHourTemplates() []rawNodePair {
 	var wide [][3]int64
 	for port := int64(1); port <= 23; port++ {
@@ -55,6 +54,8 @@ func manyHourTemplates() []rawNodePair {
 			txProto: "{}", rxProto: "{}"},
 		{src: "scalar-src", dst: "scalar-dst", traffic: "virtual", directional: 0,
 			protocols: "[6]", protocolBytes: `{"6":6}`, ports: "[6]", txPorts: "[]", rxPorts: "[]", txProto: "6", rxProto: "null"},
+		{src: "scalar-pb-src", dst: "scalar-pb-dst", traffic: "virtual", directional: 0,
+			protocols: "[6]", protocolBytes: "9", ports: "[]", txPorts: "[]", rxPorts: "[]", txProto: "9", rxProto: "{}"},
 		{src: "a|b", dst: "c|d", traffic: "virtual", directional: 0,
 			protocols: "[1]", protocolBytes: `{"1":8}`, ports: "[]", txPorts: "[]", rxPorts: "[]", txProto: "{}", rxProto: "{}"},
 	}
