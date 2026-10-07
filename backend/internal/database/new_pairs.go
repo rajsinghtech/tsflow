@@ -159,6 +159,8 @@ window_pairs AS (
 	       COALESCE(SUM(flow_count), 0) AS flows,
 	       MIN(seen) AS first_seen
 	FROM window_rows
+	-- A device talking to itself is not a new connection.
+	WHERE src_node_id != dst_node_id
 	GROUP BY src_node_id, dst_node_id
 )
 SELECT ranked.src_node_id,
