@@ -81,3 +81,24 @@ func sumTimeline(buckets []TimelineBucket) (virtual, subnet, exit, physical int6
 	}
 	return virtual, subnet, exit, physical
 }
+
+func TestDeviceTimelineLeavesTheDeviceOutOfItsPeers(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	const base int64 = 1_699_999_200
+	// A device can report flows to its own address. That row is not a peer.
+	insertRankPair(t, store, DefaultTailnetID, base+60, "bravo", "bravo", "virtual", 0, 0, 7)
+	insertRankPair(t, store, DefaultTailnetID, base+120, "bravo", "alpha", "virtual", 30, 3, 1)
+	start := time.Unix(base, 0).UTC()
+	timeline, err := store.GetDeviceTimeline(ctx, DefaultTailnetID, "bravo", start, start.Add(time.Hour), TimelineQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Peers) != 1 || timeline.Peers[0].PeerID != "alpha" || timeline.HasMore {
+		t.Fatalf("peers = %#v", timeline.Peers)
+	}
+	virtual, _, _, _ := sumTimeline(timeline.Buckets)
+	if virtual != 33 {
+		t.Fatalf("virtual bytes = %d", virtual)
+	}
+}
