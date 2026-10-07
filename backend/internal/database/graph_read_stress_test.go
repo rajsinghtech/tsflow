@@ -129,11 +129,11 @@ func runGraphReadStress(t *testing.T, cacheBytes int64) {
 					Key: fmt.Sprintf("late-%s-%d", tn, step), LastModified: time.Unix(hour, 0),
 					NodePairs: []NodePairAggregate{pair(hour+7*minuteSeconds, "a|b", "c|d", int64(13+step), 53)},
 				})
-			case 4: // a direct upsert into a closed hour
+			case 4: // a direct upsert into a closed hour, with scalar protocol bytes
 				hour := manyHourBase + int64(2+rng.Intn(25))*hourSeconds
-				err = store.UpsertNodePairAggregates(ctx, tn, []NodePairAggregate{
-					pair(hour+31*minuteSeconds, "tie-src", "tie-dst", int64(17+step), 22),
-				})
+				row := pair(hour+31*minuteSeconds, "tie-src", "tie-dst", int64(17+step), 22)
+				row.ProtocolBytes = strconv.Itoa(5 + step) // a bare number keeps a null protocol key
+				err = store.UpsertNodePairAggregates(ctx, tn, []NodePairAggregate{row})
 			case 5: // retention moves forward, through the middle of an hour
 				retentionCut += 37 * minuteSeconds
 				_, err = store.Cleanup(ctx, tn, time.Since(time.Unix(retentionCut, 0)))
