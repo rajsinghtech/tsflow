@@ -44,6 +44,11 @@ func PollerConfigFrom(cfg *config.Config) (PollerConfig, error) {
 	if pc.InitialBackfill, err = time.ParseDuration(cfg.InitialBackfill); err != nil {
 		return PollerConfig{}, fmt.Errorf("TSFLOW_INITIAL_BACKFILL: %w", err)
 	}
+	if strings.TrimSpace(cfg.PollDelay) != "" {
+		if pc.PollDelay, err = time.ParseDuration(strings.TrimSpace(cfg.PollDelay)); err != nil {
+			return PollerConfig{}, fmt.Errorf("TSFLOW_POLL_DELAY: %w", err)
+		}
+	}
 	if cfg.Retention != "" {
 		if pc.Retention, err = time.ParseDuration(cfg.Retention); err != nil {
 			return PollerConfig{}, fmt.Errorf("TSFLOW_RETENTION: %w", err)

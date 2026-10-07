@@ -69,7 +69,9 @@ type Config struct {
 	FlowObjectStoreWebIdentityTokenFile string
 	PollInterval                        string
 	InitialBackfill                     string
-	Retention                           string
+	// PollDelay is how far behind now API polls end (TSFLOW_POLL_DELAY).
+	PollDelay string
+	Retention string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
@@ -123,6 +125,7 @@ func Load() *Config {
 		FlowObjectStoreRoleARN:     strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_ROLE_ARN")),
 		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
+		PollDelay:                  getEnvWithDefault("TSFLOW_POLL_DELAY", "2m"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
@@ -174,6 +177,11 @@ func (c *Config) Validate() error {
 	}
 	if err := validateDuration("TSFLOW_INITIAL_BACKFILL", c.InitialBackfill, false); err != nil {
 		return err
+	}
+	if strings.TrimSpace(c.PollDelay) != "" {
+		if err := validateDuration("TSFLOW_POLL_DELAY", c.PollDelay, true); err != nil {
+			return err
+		}
 	}
 	if c.Retention != "" {
 		if err := validateDuration("TSFLOW_RETENTION", c.Retention, true); err != nil {
