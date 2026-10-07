@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
+	import { Activity, Network, Link, ArrowUpDown, Loader2, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import DonutChart from '#lib/components/charts/DonutChart.svelte';
 	import BarChart from '#lib/components/charts/BarChart.svelte';
@@ -38,7 +38,7 @@
 			if (range?.count) {
 				dataSourceStore.showLatestWindow(range);
 			}
-			startStatsRefresh(60_000);
+			startStatsRefresh();
 		}
 
 		bootstrapAnalytics();
@@ -195,7 +195,7 @@
 	}
 
 	function showLatestStoredWindow() {
-		dataSourceStore.showLatestWindow();
+		dataSourceStore.showLatestWindow($dataSourceStore.dataRange, $dataSourceStore.latestWindowMs);
 		loadStats();
 	}
 </script>
@@ -216,33 +216,16 @@
 			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasStoredData}
 				<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
 					No traffic data in the selected window.
-					Switch to <button
+					<button
 						class="rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary hover:text-foreground"
 						onclick={showLatestStoredWindow}
-					>latest stored window</button> to browse stored data.
+					>Back to live</button> to browse the latest data.
 				</div>
 			{/if}
 			<div class="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
 				<div>
 					<h2 class="text-base font-semibold">Analytics</h2>
 					<p class="text-xs text-muted-foreground">{timeWindowLabel}</p>
-				</div>
-				<div class="flex items-center gap-2">
-					{#if $hasStoredData && !$dataSourceStore.followLatest}
-						<button
-							class="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
-							onclick={showLatestStoredWindow}
-						>
-							Latest
-						</button>
-					{/if}
-					<button
-						class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
-						onclick={() => loadStats()}
-					>
-						<RefreshCw class="h-3.5 w-3.5" />
-						Refresh
-					</button>
 				</div>
 			</div>
 

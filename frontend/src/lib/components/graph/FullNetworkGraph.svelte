@@ -13,7 +13,8 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
-	import { highlightedEdgeIds, hasSelection } from '#lib/stores/ui-store';
+	import { hasSelection } from '#lib/stores/ui-store';
+	import { highlightedEdgeIds } from '#lib/stores/selection-highlight';
 	import { applyElkLayout } from '#lib/utils/elk-layout';
 	import { edgeStyle as getEdgeStyle, toFlowElements } from '#lib/graph/full-graph';
 	import type { NetworkNode as NetworkNodeType, NetworkLink } from '#lib/types';

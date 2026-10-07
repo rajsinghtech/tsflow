@@ -9,6 +9,7 @@ import { nodeMatchesSearch } from '#lib/utils/node-search';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
+import { createLiveRefresh } from './live-refresh';
 
 // Last updated timestamp
 export const lastUpdated = writable<Date | null>(null);
@@ -346,14 +347,15 @@ export function retryLoadNetworkData() {
 	loadNetworkData(0);
 }
 
-// Centralized auto-refresh interval (5 minutes)
+// Centralized auto-refresh interval (5 minutes, the default poll cadence)
 export const AUTO_REFRESH_INTERVAL = 300_000;
 
-// Auto-refresh state
+// Auto-refresh state. True only while the window is live and this page armed the timer.
 export const isAutoRefreshing = writable(false);
 
-// Refresh data periodically
-let refreshInterval: ReturnType<typeof setInterval> | null = null;
+const networkLive = createLiveRefresh(() => {
+	void loadNetworkData(0);
+}, (running) => isAutoRefreshing.set(running));
 
 // Clean up on page unload to prevent memory leaks
 if (typeof window !== 'undefined') {
@@ -364,23 +366,23 @@ if (typeof window !== 'undefined') {
 }
 
 export function startAutoRefresh(intervalMs = AUTO_REFRESH_INTERVAL) {
-	stopAutoRefresh();
-	refreshInterval = setInterval(() => loadNetworkData(0), intervalMs);
-	isAutoRefreshing.set(true);
+	networkLive.start(intervalMs);
 }
 
 export function stopAutoRefresh() {
-	if (refreshInterval) {
-		clearInterval(refreshInterval);
-		refreshInterval = null;
-	}
-	isAutoRefreshing.set(false);
+	networkLive.stop();
 }
 
+// Pin the current window, or return to a live window of the same length.
+// Kept so existing callers still pause and resume from the time window.
 export function toggleAutoRefresh() {
-	if (get(isAutoRefreshing)) {
-		stopAutoRefresh();
-	} else {
-		startAutoRefresh();
+	const state = get(dataSourceStore);
+	if (state.followLatest) {
+		if (state.selectedStart && state.selectedEnd) {
+			dataSourceStore.setSelectedRange(state.selectedStart, state.selectedEnd);
+		}
+		return;
 	}
+	dataSourceStore.showLatestWindow(state.dataRange, state.latestWindowMs);
+	void loadNetworkData(0);
 }

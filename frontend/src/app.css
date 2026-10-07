@@ -164,3 +164,23 @@ button:disabled {
 	background-color: var(--color-primary);
 	color: var(--color-primary-foreground);
 }
+
+@keyframes tsflow-live-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+.live-pulse {
+	animation: tsflow-live-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.live-pulse {
+		animation: none;
+	}
+}

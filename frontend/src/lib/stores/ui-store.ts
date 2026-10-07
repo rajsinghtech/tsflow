@@ -1,6 +1,5 @@
 import { writable, derived } from 'svelte/store';
 import type { UIState } from '#lib/types';
-import { filteredEdges } from './network-store';
 
 const defaultUIState: UIState = {
 	showFilterPanel: true,
@@ -43,55 +42,5 @@ function createUIStore() {
 
 export const uiStore = createUIStore();
 
-// Derived store for highlighted nodes based on selection
-export const highlightedNodeIds = derived(
-	[uiStore, filteredEdges],
-	([$ui, $edges]) => {
-		const highlighted = new Set<string>();
-
-		if ($ui.selectedNodeId) {
-			// Highlight selected node and all connected nodes
-			highlighted.add($ui.selectedNodeId);
-			$edges.forEach((edge) => {
-				if (edge.source === $ui.selectedNodeId || edge.target === $ui.selectedNodeId) {
-					highlighted.add(edge.source);
-					highlighted.add(edge.target);
-				}
-			});
-		} else if ($ui.selectedEdgeId) {
-			// Highlight nodes connected by selected edge
-			const selectedEdge = $edges.find((e) => e.id === $ui.selectedEdgeId);
-			if (selectedEdge) {
-				highlighted.add(selectedEdge.source);
-				highlighted.add(selectedEdge.target);
-			}
-		}
-
-		return highlighted;
-	}
-);
-
 // Check if there's any selection
 export const hasSelection = derived(uiStore, ($ui) => $ui.selectedNodeId !== null || $ui.selectedEdgeId !== null);
-
-// Derived store for highlighted edges based on selection
-export const highlightedEdgeIds = derived(
-	[uiStore, filteredEdges],
-	([$ui, $edges]) => {
-		const highlighted = new Set<string>();
-
-		if ($ui.selectedNodeId) {
-			// Highlight edges connected to selected node
-			$edges.forEach((edge) => {
-				if (edge.source === $ui.selectedNodeId || edge.target === $ui.selectedNodeId) {
-					highlighted.add(edge.id);
-				}
-			});
-		} else if ($ui.selectedEdgeId) {
-			// Highlight the selected edge
-			highlighted.add($ui.selectedEdgeId);
-		}
-
-		return highlighted;
-	}
-);
