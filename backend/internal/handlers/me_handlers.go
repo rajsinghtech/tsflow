@@ -135,6 +135,14 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 	var flows int64
 	timelines := make([]database.DeviceTimeline, 0, len(devices))
 	peerTotals := map[string]*database.TimelinePeer{}
+	// Top peers are the devices the viewer talks to, not the viewer's own.
+	owned := map[string]bool{}
+	for _, device := range devices {
+		owned[device.NodeID] = true
+		for _, id := range device.IDs {
+			owned[id] = true
+		}
+	}
 	for _, device := range devices {
 		traffic.TxBytes += device.TxBytes
 		traffic.RxBytes += device.RxBytes
@@ -143,7 +151,8 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 			continue
 		}
 		timeline, timelineErr := h.store.GetDeviceTimeline(ctx, tn.id, device.NodeID, startTime, endTime, database.TimelineQuery{
-			Limit:        5,
+			// Room for peers that are the viewer's own devices, which are skipped.
+			Limit:        10,
 			TrafficTypes: trafficTypes,
 		})
 		if timelineErr != nil {
@@ -161,6 +170,9 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 		labelTimelinePeers(timeline.Peers)
 		timelines = append(timelines, *timeline)
 		for _, peer := range timeline.Peers {
+			if owned[peer.PeerID] || peer.TotalBytes == 0 {
+				continue
+			}
 			item := peerTotals[peer.PeerID]
 			if item == nil {
 				copyPeer := peer

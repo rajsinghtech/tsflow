@@ -188,3 +188,60 @@ func TestViewerSummaryOrdersDevicesByTraffic(t *testing.T) {
 		t.Fatalf("new-pair coverage: %s", body)
 	}
 }
+
+func TestViewerSummaryLeavesOutOwnDevicesAndSelfPairs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	base := start.Unix()
+	ctx := context.Background()
+	if err := store.UpsertNodeMetadata(ctx, database.DefaultTailnetID, []database.NodeMetadata{
+		{NodeID: "nAdaLaptopCNTRL", Hostname: "ada-laptop", Owner: "ada@example.com"},
+		{NodeID: "nAdaServerCNTRL", Hostname: "ada-server", Owner: "ada@example.com"},
+		{NodeID: "nShared001CNTRL", Hostname: "shared-db", Owner: "bob@example.com"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row := func(at int64, src, dst string, tx int64) database.NodePairAggregate {
+		return database.NodePairAggregate{Bucket: base + at, SrcNodeID: src, DstNodeID: dst, TrafficType: "virtual", TxBytes: tx, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]"}
+	}
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, []database.NodePairAggregate{
+		row(60, "nAdaLaptopCNTRL", "nAdaLaptopCNTRL", 700),  // talks to itself
+		row(120, "nAdaLaptopCNTRL", "nAdaServerCNTRL", 900), // between the viewer's own devices
+		row(180, "nAdaLaptopCNTRL", "nShared001CNTRL", 300),
+		row(240, "nAdaServerCNTRL", "quiet-peer", 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := serve(dataRouter(h, asViewer("ada@example.com")), http.MethodGet, "/api/analytics/me"+rankWindow(start, end))
+	if code != http.StatusOK {
+		t.Fatalf("viewer summary: %d %s", code, body)
+	}
+	var summary struct {
+		Peers []struct {
+			PeerID string `json:"peerId"`
+		} `json:"peers"`
+		NewPairs []struct {
+			Src string `json:"srcNodeId"`
+			Dst string `json:"dstNodeId"`
+		} `json:"newPairs"`
+	}
+	if err := json.Unmarshal(body, &summary); err != nil {
+		t.Fatal(err)
+	}
+	// Own devices and 0 B peers stay out of top peers.
+	if len(summary.Peers) != 1 || summary.Peers[0].PeerID != "nShared001CNTRL" {
+		t.Fatalf("top peers: %s", body)
+	}
+	// A connection between two own devices is still new. A device talking to itself is not.
+	for _, pair := range summary.NewPairs {
+		if pair.Src == pair.Dst {
+			t.Fatalf("self pair in new connections: %s", body)
+		}
+	}
+	if len(summary.NewPairs) != 3 {
+		t.Fatalf("new connections: %s", body)
+	}
+}
