@@ -3,7 +3,13 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Edge, Node } from '@xyflow/svelte';
 import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
 import type { NetworkLink, NetworkNode, TrafficType } from '#lib/types';
-import { buildElkLayoutInput, calculateNodeDimensions } from './elk-input';
+import {
+	buildElkLayoutInput,
+	calculateNodeDimensions,
+	QUALITY_LAYOUT_MAX_EDGES,
+	QUALITY_LAYOUT_MAX_NODES,
+	usesQualityLayout
+} from './elk-input';
 import { edgeStyle, toFlowElements } from './full-graph';
 import { realisticTailnet, syntheticTailnet } from './synthetic-tailnet';
 import { FULL_GRAPH_NODE_THRESHOLD, usesFullGraph } from './threshold';
@@ -185,26 +191,40 @@ describe('full graph layout input', () => {
 		);
 	});
 
-	it('matches the legacy flow and ELK input for a 500 node tailnet', () => {
+	it('keeps the legacy ELK input for a 500 node tailnet except the faster placer', () => {
 		const graph = syntheticTailnet(500);
 		expect(usesFullGraph(graph.nodes.length)).toBe(true);
+		expect(usesQualityLayout(graph.nodes.length, graph.edges.length)).toBe(false);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
 		expect(flow).toEqual(legacy);
-		expect(buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 })).toEqual(
-			legacyElkInput(legacy.nodes, legacy.edges)
-		);
+		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
+		const previous = legacyElkInput(legacy.nodes, legacy.edges);
+		expect(current.children).toEqual(previous.children);
+		expect(current.edges).toEqual(previous.edges);
+		expect(current.layoutOptions).toEqual({
+			...previous.layoutOptions,
+			'elk.edgeRouting': 'POLYLINE',
+			'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF'
+		});
 	});
 
-	it('matches the legacy flow and ELK input for a realistic 1000 node tailnet', () => {
+	it('keeps the legacy ELK input for a realistic 1000 node tailnet except the faster placer', () => {
 		const graph = realisticTailnet(1000);
 		expect(usesFullGraph(graph.nodes.length)).toBe(true);
+		expect(graph.nodes.length).toBeGreaterThan(QUALITY_LAYOUT_MAX_NODES);
+		expect(graph.edges.length).toBeGreaterThan(QUALITY_LAYOUT_MAX_EDGES);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
 		expect(flow).toEqual(legacy);
-		expect(buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 })).toEqual(
-			legacyElkInput(legacy.nodes, legacy.edges)
-		);
+		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
+		const previous = legacyElkInput(legacy.nodes, legacy.edges);
+		expect(current.children).toEqual(previous.children);
+		expect(current.edges).toEqual(previous.edges);
+		expect(current.layoutOptions?.['elk.direction']).toBe('DOWN');
+		expect(current.layoutOptions?.['elk.layered.crossingMinimization.strategy']).toBe('LAYER_SWEEP');
+		expect(current.layoutOptions?.['elk.layered.nodePlacement.strategy']).toBe('BRANDES_KOEPF');
+		expect(current.layoutOptions?.['elk.edgeRouting']).toBe('POLYLINE');
 	});
 
 	it('gives ELK the same positions for a realistic 250 node tailnet', async () => {

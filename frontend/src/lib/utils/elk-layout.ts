@@ -4,8 +4,13 @@ import { FULL_GRAPH_NODE_THRESHOLD } from '#lib/graph/threshold';
 import {
 	buildElkLayoutInput,
 	calculateNodeDimensions,
+	usesQualityLayout,
 	type ElkLayoutOptions
 } from '#lib/graph/elk-input';
+import { compactBands, compactLayers } from '#lib/graph/layer-compaction';
+import { rememberLayout, tryReuseLayout, type LayoutMemory } from '#lib/graph/layout-reuse';
+
+export type { LayoutMemory };
 
 export type { ElkLayoutOptions };
 
@@ -33,11 +38,17 @@ const elk = new ELK({
 });
 
 const ELK_NODE_LIMIT = FULL_GRAPH_NODE_THRESHOLD;
-const ELK_EDGE_LIMIT = 2500;
+
+export interface LaidOutGraph {
+	nodes: Node[];
+	edges: Edge[];
+	reused: boolean;
+}
 
 function nodesWithElkPositions(nodes: Node[], layoutedGraph: ElkNode): Node[] {
+	const byId = new Map((layoutedGraph.children ?? []).map((child) => [child.id, child]));
 	return nodes.map((node) => {
-		const layoutedNode = layoutedGraph.children?.find((n) => n.id === node.id);
+		const layoutedNode = byId.get(node.id);
 
 		if (!layoutedNode) {
 			return {
@@ -58,29 +69,78 @@ function nodesWithElkPositions(nodes: Node[], layoutedGraph: ElkNode): Node[] {
 	});
 }
 
-// Apply ELK layout to nodes and edges
+// Gap between neighbors in a band after a large layout is compacted.
+export const LARGE_LAYOUT_GAP = 100;
+// Most room between bands after compaction: the layered layer spacing.
+const LARGE_LAYER_GAP = 200;
+// Width to height the squeezed layout aims for, about a wide graph panel.
+const LARGE_LAYOUT_ASPECT = 2.5;
+
+function compactPlacedNodes(nodes: Node[], gap: number): Node[] {
+	const boxes = nodes.map((node) => {
+		const size = calculateNodeDimensions(node);
+		return { x: node.position.x, y: node.position.y, width: node.width ?? size.width, height: node.height ?? size.height };
+	});
+	const xs = compactLayers(boxes, gap);
+	const left = Math.min(...xs);
+	const right = Math.max(...boxes.map((box, index) => xs[index] + box.width));
+	const ys = compactBands(boxes, LARGE_LAYER_GAP, (right - left) / LARGE_LAYOUT_ASPECT);
+	return nodes.map((node, index) =>
+		xs[index] === node.position.x && ys[index] === node.position.y ? node : { ...node, position: { x: xs[index], y: ys[index] } }
+	);
+}
+
+function reusedLayout(
+	nodes: Node[],
+	edges: Edge[],
+	options: ElkLayoutOptions,
+	memory: LayoutMemory | undefined
+): LaidOutGraph | null {
+	if (!memory) return null;
+	const reused = tryReuseLayout(nodes, edges, memory, options.nodeSpacing ?? 150);
+	if (!reused) return null;
+	return { ...reused, reused: true };
+}
+
+// Apply ELK layout to nodes and edges.
+// Graphs larger than the grouped-view threshold are not laid out here; the
+// caller switches views. Dense graphs stay on the layered algorithm instead
+// of dropping to a grid.
 export async function applyElkLayout(
 	nodes: Node[],
 	edges: Edge[],
-	options: ElkLayoutOptions = {}
-): Promise<{ nodes: Node[]; edges: Edge[] }> {
+	options: ElkLayoutOptions = {},
+	memory?: LayoutMemory
+): Promise<LaidOutGraph> {
 	if (nodes.length === 0) {
-		return { nodes: [], edges: [] };
+		return { nodes: [], edges: [], reused: false };
 	}
 
-	if (nodes.length > ELK_NODE_LIMIT || edges.length > ELK_EDGE_LIMIT) {
-		return applyFallbackLayout(nodes, edges, options.nodeSpacing || 150);
+	const reused = reusedLayout(nodes, edges, options, memory);
+	if (reused) {
+		if (memory) rememberLayout(memory, reused.nodes);
+		return reused;
+	}
+
+	if (nodes.length > ELK_NODE_LIMIT) {
+		return { ...applyFallbackLayout(nodes, edges, options.nodeSpacing || 150), reused: false };
 	}
 
 	const elkGraph = buildElkLayoutInput(nodes, edges, options);
 
 	try {
 		const layoutedGraph = await elk.layout(elkGraph);
-		return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
+		let placed = nodesWithElkPositions(nodes, layoutedGraph);
+		if (!usesQualityLayout(nodes.length, edges.length)) {
+			placed = compactPlacedNodes(placed, LARGE_LAYOUT_GAP);
+		}
+		const laid = { nodes: placed, edges, reused: false };
+		if (memory) rememberLayout(memory, laid.nodes);
+		return laid;
 	} catch (error) {
 		const errorContext = workerInitFailed ? ' (worker initialization failed)' : '';
 		console.error(`ELK layout failed${errorContext}, using fallback grid layout:`, error);
-		return applyFallbackLayout(nodes, edges, options.nodeSpacing || 150);
+		return { ...applyFallbackLayout(nodes, edges, options.nodeSpacing || 150), reused: false };
 	}
 }
 
@@ -126,12 +186,16 @@ export async function runElkGraph(graph: ElkNode): Promise<ElkNode> {
 export async function runElkLayout(
 	nodes: Node[],
 	edges: Edge[],
-	options: ElkLayoutOptions = {}
-): Promise<{ nodes: Node[]; edges: Edge[] }> {
+	options: ElkLayoutOptions = {},
+	memory?: LayoutMemory
+): Promise<LaidOutGraph> {
 	if (nodes.length === 0) {
-		return { nodes: [], edges: [] };
+		return { nodes: [], edges: [], reused: false };
 	}
 
+	const reused = reusedLayout(nodes, edges, options, memory);
+	if (reused) return reused;
+
 	const layoutedGraph = await runElkGraph(buildElkLayoutInput(nodes, edges, options));
-	return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
+	return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges, reused: false };
 }
