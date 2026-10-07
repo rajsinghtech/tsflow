@@ -1,7 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import { tailscaleService } from '#lib/services/tailscale-service';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
-import { filterStore } from './filter-store';
+import { analyticsIdentityQuery } from '#lib/analytics/identity-query';
+import { filterStore, debouncedFilterStore } from './filter-store';
 import { extractIP, ipMatches } from '#lib/utils/ip-utils';
 import type { TrafficStatsSummary, TrafficStatsBucket, TopTalker, TopPair, PortStat } from '#lib/types';
 
@@ -91,6 +92,7 @@ export async function loadStats(currentAttempt = 0) {
 		}
 		const { start, end } = get(queryTimeWindow);
 		const trafficTypes = get(filterStore).trafficTypes;
+		const identity = analyticsIdentityQuery(get(debouncedFilterStore).search);
 
 		if (trafficTypes.length === 0) {
 			statsState.set({
@@ -116,10 +118,40 @@ export async function loadStats(currentAttempt = 0) {
 			return;
 		}
 
-		let [overviewRes, talkersRes, pairsRes, servicesRes] = await Promise.all([
+		const [overviewRes, talkers, pairs, servicesRes] = await Promise.all([
 			tailscaleService.getStatsOverview(start, end, signal, trafficTypes),
-			tailscaleService.getTopTalkers(start, end, 15, signal, trafficTypes),
-			tailscaleService.getTopPairs(start, end, 15, signal, trafficTypes),
+			identity
+				? tailscaleService
+						.getRankedTalkers(start, end, { limit: 100, trafficTypes, signal, ...identity })
+						.then((res) =>
+							(res.talkers || []).map((talker) => ({
+								nodeId: talker.nodeId,
+								displayName: talker.hostname || undefined,
+								owner: talker.owner,
+								txBytes: talker.txBytes,
+								rxBytes: talker.rxBytes,
+								totalBytes: talker.totalBytes
+							}))
+						)
+				: tailscaleService.getTopTalkers(start, end, 15, signal, trafficTypes).then((res) => res.talkers || []),
+			identity
+				? tailscaleService
+						.getRankedPairs(start, end, { limit: 100, trafficTypes, signal, ...identity })
+						.then((res) =>
+							(res.pairs || []).map((pair) => ({
+								srcNodeId: pair.srcNodeId,
+								srcDisplayName: pair.srcHostname || undefined,
+								srcOwner: pair.srcOwner,
+								dstNodeId: pair.dstNodeId,
+								dstDisplayName: pair.dstHostname || undefined,
+								dstOwner: pair.dstOwner,
+								txBytes: pair.txBytes,
+								rxBytes: pair.rxBytes,
+								totalBytes: pair.totalBytes,
+								flowCount: pair.flowCount
+							}))
+						)
+				: tailscaleService.getTopPairs(start, end, 15, signal, trafficTypes).then((res) => res.pairs || []),
 			tailscaleService.getServicesRecords(signal).catch(() => ({ services: {}, records: {} }))
 		]);
 
@@ -129,11 +161,11 @@ export async function loadStats(currentAttempt = 0) {
 		statsState.set({
 			summary: overviewRes.summary,
 			buckets: overviewRes.buckets || [],
-			topTalkers: (talkersRes.talkers || []).map((talker) => ({
+			topTalkers: talkers.map((talker) => ({
 				...talker,
 				displayName: resolveDisplayName(talker.nodeId, talker.displayName)
 			})),
-			topPairs: (pairsRes.pairs || []).map((pair) => ({
+			topPairs: pairs.map((pair) => ({
 				...pair,
 				srcDisplayName: resolveDisplayName(pair.srcNodeId, pair.srcDisplayName),
 				dstDisplayName: resolveDisplayName(pair.dstNodeId, pair.dstDisplayName)

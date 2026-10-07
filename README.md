@@ -364,6 +364,8 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 
 `start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use.
 
+Optional `tag` and `user` limit the page to devices in that tailnet. `tag:prod` and `prod` both match an ACL tag whose name contains `prod`. `user` matches a login, including the creator login recorded for a tagged device. `q` matches a login, tag, hostname, device name, or address. With no tag, user, or `q`, the response is unchanged. The graph search box uses the same `tag:` and login syntax.
+
 A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `hostname` is the stored device hostname, or the stored device name when the hostname is blank. A pair row has `srcNodeId`, `srcHostname`, `dstNodeId`, `dstHostname`, the same byte fields, and `flowCount`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
