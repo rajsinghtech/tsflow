@@ -250,7 +250,7 @@ func queryTimelinePeers(ctx context.Context, q queryRower, source string, args [
 			FROM (
 				SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS flows
 				FROM pair_rows
-				WHERE src_node_id = ?
+				WHERE src_node_id = ? AND dst_node_id != src_node_id
 				GROUP BY dst_node_id
 				UNION ALL
 				SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS flows
