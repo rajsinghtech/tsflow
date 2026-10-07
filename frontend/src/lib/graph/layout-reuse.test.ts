@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, Node } from '@xyflow/svelte';
-import { maxReusableChurn, rememberLayout, tryReuseLayout, type LayoutMemory } from './layout-reuse';
+import { keepGroupViewport, maxReusableChurn, refitAfterLayout, rememberLayout, tryReuseLayout, type LayoutMemory } from './layout-reuse';
 
 function flowNode(id: string, x: number, y: number): Node {
 	return {
@@ -82,5 +82,24 @@ describe('layout reuse', () => {
 		const memory = memoryFrom(nodes);
 		const fresh = ['c', 'd', 'e', 'f'].map((id, index) => flowNode(id, 0, index));
 		expect(tryReuseLayout(fresh, [], memory, 150)).toBeNull();
+	});
+});
+
+describe('viewport after a layout', () => {
+	it('fits a fresh layout that replaces a picture, and keeps the view for reused positions', () => {
+		expect(refitAfterLayout({ hadPicture: true, reused: false, focusing: false })).toBe(true);
+		expect(refitAfterLayout({ hadPicture: true, reused: true, focusing: false })).toBe(false);
+		// The canvas fits the first picture when it mounts.
+		expect(refitAfterLayout({ hadPicture: false, reused: false, focusing: false })).toBe(false);
+		// A search focus moves the view itself.
+		expect(refitAfterLayout({ hadPicture: true, reused: false, focusing: true })).toBe(false);
+	});
+
+	it('keeps the grouped viewport only between collapsed renders', () => {
+		expect(keepGroupViewport({ reused: true, collapsedNow: true, collapsedBefore: true })).toBe(true);
+		// After an expanded render the viewport fits that picture, so refit.
+		expect(keepGroupViewport({ reused: true, collapsedNow: true, collapsedBefore: false })).toBe(false);
+		expect(keepGroupViewport({ reused: false, collapsedNow: true, collapsedBefore: true })).toBe(false);
+		expect(keepGroupViewport({ reused: true, collapsedNow: false, collapsedBefore: true })).toBe(false);
 	});
 });

@@ -16,7 +16,7 @@
 	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import type { NetworkLink, NetworkNode as NetworkNodeType } from '#lib/types';
 	import { runElkGraph, runElkLayout, type LayoutMemory } from '#lib/utils/elk-layout';
-	import { rememberLayout } from '#lib/graph/layout-reuse';
+	import { keepGroupViewport, rememberLayout } from '#lib/graph/layout-reuse';
 	import { boundsOf, buildRenderModel, cullToViewport, groupIdsContaining } from '#lib/graph/aggregate';
 	import {
 		GROUP_LAYOUT_OPTIONS,
@@ -68,6 +68,7 @@
 	let fitTimer: ReturnType<typeof setTimeout> | null = null;
 	let layoutTimer: ReturnType<typeof setTimeout> | null = null;
 	const collapsedMemory: LayoutMemory = { boxes: new Map() };
+	let lastRenderCollapsed = false;
 
 	let flowApi: {
 		setViewport: (viewport: { x: number; y: number; zoom: number }, options?: { duration?: number }) => Promise<boolean>;
@@ -189,7 +190,12 @@
 			laid = await runElkLayout(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
 			if (token !== requestToken) return;
 		}
-		const keptPositions = flow === collapsedFlow && collapsedLaid.reused;
+		const keptPositions = keepGroupViewport({
+			reused: collapsedLaid.reused,
+			collapsedNow: flow === collapsedFlow,
+			collapsedBefore: lastRenderCollapsed
+		});
+		lastRenderCollapsed = flow === collapsedFlow;
 		const boxes = absoluteBoxes(laid.nodes);
 		const focusIds = new Set(matched);
 		for (const node of laid.nodes) {
@@ -285,6 +291,7 @@
 		deviceCount = model.deviceCount;
 		groupCount = model.groupCount;
 		expanded = [...expanded, { id: groupId, label: data.displayName || groupId }];
+		lastRenderCollapsed = false;
 		expandMs = Math.round(performance.now() - started);
 		await tick();
 		cameraFor(
@@ -303,6 +310,7 @@
 		const model = buildRenderModel(nodes, edges, new Set());
 		groupCount = model.groupCount;
 		expanded = [];
+		lastRenderCollapsed = true;
 		cameraFor(
 			sceneNodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
 			400

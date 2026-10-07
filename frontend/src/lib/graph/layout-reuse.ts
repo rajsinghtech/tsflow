@@ -116,3 +116,19 @@ export function rememberLayout(memory: LayoutMemory, nodes: Node[]) {
 		});
 	}
 }
+
+// refitAfterLayout says whether the full graph should fit the view after new
+// positions arrive. The previous picture stays up during a layout, so a fresh
+// layout of a different graph would otherwise keep the old viewport and crop
+// it. Reused positions keep the viewer's pan and zoom. A search focus moves the
+// view itself. The first picture is fitted when the canvas mounts.
+export function refitAfterLayout(input: { hadPicture: boolean; reused: boolean; focusing: boolean }): boolean {
+	return input.hadPicture && !input.reused && !input.focusing;
+}
+
+// keepGroupViewport says whether the grouped view keeps the current viewport.
+// Only a reused collapsed layout that follows a collapsed render keeps it. After
+// an expanded render, the viewport fits the expanded picture, not this one.
+export function keepGroupViewport(input: { reused: boolean; collapsedNow: boolean; collapsedBefore: boolean }): boolean {
+	return input.reused && input.collapsedNow && input.collapsedBefore;
+}

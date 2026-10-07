@@ -15,6 +15,7 @@
 	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import { highlightedEdgeIds, hasSelection } from '#lib/stores/ui-store';
 	import { applyElkLayout, type LayoutMemory } from '#lib/utils/elk-layout';
+	import { refitAfterLayout } from '#lib/graph/layout-reuse';
 	import { edgeStyle as getEdgeStyle, toFlowElements } from '#lib/graph/full-graph';
 	import type { NetworkNode as NetworkNodeType, NetworkLink } from '#lib/types';
 	import NetworkNode from './NetworkNode.svelte';
@@ -277,12 +278,16 @@
 	async function layoutOnce() {
 		const built = toFlowElements(nodes, edges);
 		const laid = await applyElkLayout(built.nodes, built.edges, { algorithm: 'layered', nodeSpacing: 150 }, layoutMemory);
+		const hadPicture = get(flowNodesStore).length > 0;
 		flowNodesStore.set(laid.nodes);
 		flowEdgesStore.set(laid.edges);
 		const matchIds = [...get(searchMatchedNodeIds)];
 		if (matchIds.length > 0) {
 			lastSearchFocus = matchIds.slice().sort().join(',');
 			setTimeout(() => focusOnSelection(matchIds), 50);
+		}
+		if (refitAfterLayout({ hadPicture, reused: laid.reused, focusing: matchIds.length > 0 })) {
+			requestAnimationFrame(() => fitViewRef?.({ duration: 300, padding: 0.1 }));
 		}
 	}
 
