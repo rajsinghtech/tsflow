@@ -481,7 +481,7 @@ func (s *SQLiteStore) prepareFilteredRank(ctx context.Context, tailnetID string,
 		read.close()
 		return nil, err
 	}
-	matched := matchingDevices(devices, identity)
+	matched := narrowByRankFilter(matchingDevices(devices, identity), query)
 	if len(matched) == 0 {
 		read.close()
 		return nil, nil
@@ -509,4 +509,28 @@ func (s *SQLiteStore) prepareFilteredRank(ctx context.Context, tailnetID string,
 	)
 	read.byID = indexMerged(matched)
 	return read, nil
+}
+
+// narrowByRankFilter keeps the devices that also match the request's q search
+// (NodeIDs and Match). The viewer scope uses it so q narrows the viewer's own
+// devices instead of being ignored.
+func narrowByRankFilter(devices []*mergedDevice, query RankQuery) []*mergedDevice {
+	if !query.Filtered() || len(devices) == 0 {
+		return devices
+	}
+	ids := make(map[string]struct{}, len(query.NodeIDs))
+	for _, id := range query.NodeIDs {
+		ids[id] = struct{}{}
+	}
+	match := strings.ToLower(query.Match)
+	out := make([]*mergedDevice, 0, len(devices))
+	for _, device := range devices {
+		for _, id := range device.ids {
+			if _, ok := ids[id]; ok || (match != "" && strings.Contains(strings.ToLower(id), match)) {
+				out = append(out, device)
+				break
+			}
+		}
+	}
+	return out
 }
