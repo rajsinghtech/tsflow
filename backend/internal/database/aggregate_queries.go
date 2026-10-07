@@ -1405,22 +1405,24 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 	return results, nil
 }
 
-// CountActiveNodes counts distinct nodes that sent or received traffic in the
-// window. Self-pairs count once. This is the population the top-talkers
-// ranking is drawn from, before its limit.
-func (s *SQLiteStore) CountActiveNodes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error) {
+// ActiveNodeIDs lists the distinct node ids that sent or received traffic in
+// the window. A self-pair lists its node once. This is the population the
+// top-talkers ranking is drawn from, before its limit. The same device can be
+// stored under more than one id (an address before the device was known, or
+// the legacy numeric id), so callers resolve ids before counting.
+func (s *SQLiteStore) ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
-		return 0, err
+		return nil, err
 	}
 	startUnix := start.UTC().Unix()
 	endUnix := end.UTC().Unix()
 	if startUnix >= endUnix {
-		return 0, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
+		return nil, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
 	}
 
 	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	clause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	source, args := plan.unionPairRows(tailnetID,
@@ -1429,23 +1431,33 @@ func (s *SQLiteStore) CountActiveNodes(ctx context.Context, tailnetID string, st
 		clause, typeArgs,
 	)
 	if source == "" {
-		return 0, nil
+		return nil, nil
 	}
 
 	query := fmt.Sprintf(`
 		WITH pair_rows AS (%s)
-		SELECT COUNT(*) FROM (
-			SELECT src_node_id AS node_id FROM pair_rows
-			UNION
-			SELECT dst_node_id AS node_id FROM pair_rows
-			WHERE src_node_id != dst_node_id
-		)
+		SELECT src_node_id AS node_id FROM pair_rows
+		UNION
+		SELECT dst_node_id AS node_id FROM pair_rows
+		WHERE src_node_id != dst_node_id
 	`, source)
-	var count int64
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("failed to count active nodes: %w", err)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active nodes: %w", err)
 	}
-	return count, nil
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan active node: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list active nodes: %w", err)
+	}
+	return ids, nil
 }
 
 // GetTopTalkers returns nodes ranked by total traffic volume.

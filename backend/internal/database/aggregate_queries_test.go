@@ -460,19 +460,20 @@ func TestCountActiveNodesIsDistinctAndUncapped(t *testing.T) {
 	// 20 pair endpoints + self + exit-src + exit-dst. The repeated n0-n1 pair
 	// and the other tailnet do not add nodes. A top-talkers limit of 10 must
 	// not apply.
-	count, err := store.CountActiveNodes(ctx, DefaultTailnetID, start, end, nil)
+	ids, err := store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	count := int64(len(ids))
 	if count != 23 {
 		t.Fatalf("active nodes = %d, want 23", count)
 	}
 
-	virtualOnly, err := store.CountActiveNodes(ctx, DefaultTailnetID, start, end, []string{"virtual"})
+	virtualIDs, err := store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, []string{"virtual"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if virtualOnly != 21 {
+	if virtualOnly := len(virtualIDs); virtualOnly != 21 {
 		t.Fatalf("virtual active nodes = %d, want 21", virtualOnly)
 	}
 

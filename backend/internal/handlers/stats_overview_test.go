@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
 // TestStatsOverviewMatchesLegacyMerge seeds two tailnets and compares the
@@ -380,5 +381,47 @@ func TestStatsOverviewReportsDistinctActiveNodes(t *testing.T) {
 	filtered := readOverview(t, store, base, base.Add(time.Minute), "virtual")
 	if filtered.Summary.TotalNodes != 3 {
 		t.Fatalf("virtual totalNodes = %d, want 3", filtered.Summary.TotalNodes)
+	}
+}
+
+func TestStatsOverviewCountsOneDeviceStoredUnderSeveralIDs(t *testing.T) {
+	// Rows written before and after the stable-id switch, and before the
+	// device was known by address, all belong to one device.
+	store := setupHandlerTestDB(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
+	row := func(bucket int64, src, dst string) database.NodePairAggregate {
+		return database.NodePairAggregate{Bucket: bucket, SrcNodeID: src, DstNodeID: dst, TrafficType: "virtual",
+			TxBytes: 10, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":11}`, Ports: "[]"}
+	}
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, []database.NodePairAggregate{
+		row(base.Unix(), "1002", "nPeer0001CNTRL"),
+		row(base.Unix()+60, "nBuild001CNTRL", "nPeer0001CNTRL"),
+		row(base.Unix()+120, "100.64.0.20", "203.0.113.7"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	poller := services.NewPoller(nil, store, services.DefaultPollerConfig())
+	poller.GetDeviceCache().Update([]services.Device{
+		{ID: "nBuild001CNTRL", NodeID: "nBuild001CNTRL", LegacyID: "1002", Addresses: []string{"100.64.0.20"}},
+		{ID: "nPeer0001CNTRL", NodeID: "nPeer0001CNTRL", Addresses: []string{"100.64.0.21"}},
+	})
+	h := &Handlers{store: store, poller: poller}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/stats/overview?start="+base.Format(time.RFC3339)+
+		"&end="+base.Add(5*time.Minute).Format(time.RFC3339), nil)
+	h.GetStatsOverview(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body overviewBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// build (three stored ids), peer, and the external address.
+	if body.Summary.TotalNodes != 3 {
+		t.Fatalf("totalNodes = %d, want 3", body.Summary.TotalNodes)
 	}
 }
