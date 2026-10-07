@@ -12,11 +12,14 @@ export interface RankQueryParams {
 	limit?: number;
 	offset?: number;
 	sort?: RankSort;
+	// Search text: a name, owner email, address, tag:x, ip:x, or user@x.
+	q?: string;
 }
 
 export interface RankedTalker {
 	nodeId: string;
 	hostname: string;
+	owner?: string;
 	txBytes: number;
 	rxBytes: number;
 	totalBytes: number;
@@ -26,8 +29,10 @@ export interface RankedTalker {
 export interface RankedPair {
 	srcNodeId: string;
 	srcHostname: string;
+	srcOwner?: string;
 	dstNodeId: string;
 	dstHostname: string;
+	dstOwner?: string;
 	txBytes: number;
 	rxBytes: number;
 	totalBytes: number;
@@ -44,13 +49,23 @@ export interface RankMetadata {
 	hasMore: boolean;
 	sort: RankSort | string;
 	trafficTypes?: string[];
+	q?: string;
 }
 
 export function rankQueryPath(resource: 'talkers' | 'pairs', query: RankQueryParams): string {
 	const limit = query.limit ?? RANK_PAGE_SIZE;
 	const offset = query.offset ?? 0;
 	const sort = query.sort ?? 'bytes';
-	return `/analytics/${resource}?start=${query.start.toISOString()}&end=${query.end.toISOString()}&limit=${limit}&offset=${offset}&sort=${sort}`;
+	const q = query.q?.trim() ?? '';
+	const search = q ? `&q=${encodeURIComponent(q)}` : '';
+	return `/analytics/${resource}?start=${query.start.toISOString()}&end=${query.end.toISOString()}&limit=${limit}&offset=${offset}&sort=${sort}${search}`;
+}
+
+// trafficSearchFor is the traffic-graph search that finds a ranked node: its
+// name when the device is known, otherwise the stored id (an address).
+export function trafficSearchFor(hostname: string | undefined, nodeId: string): string {
+	const name = hostname?.trim() ?? '';
+	return name || nodeId;
 }
 
 // Previous or next page offset. Null means that direction is not available.

@@ -8,7 +8,9 @@ import {
 	rankSort,
 	rankedPairs,
 	rankedTalkers,
+	rankSearch,
 	resetRankingsForTests,
+	setRankSearch,
 	setRankSort
 } from '#lib/stores/rankings-store';
 import {
@@ -146,6 +148,28 @@ describe('ranked analytics requests', () => {
 		expect(get(rankSort)).toBe('flows');
 		expect(get(rankedTalkers).offset).toBe(0);
 		expect(get(rankedPairs).offset).toBe(0);
+	});
+
+	it('searches both tables from the first page and keeps the search on later pages', async () => {
+		await loadRankedTalkers(20);
+		calls.length = 0;
+		await setRankSearch(' bob@example.com ');
+
+		const ranked = calls.filter((url) => url.includes('/api/analytics/'));
+		expect(ranked).toHaveLength(2);
+		expect(ranked.every((url) => url.includes('q=bob%40example.com') && url.includes('offset=0'))).toBe(true);
+		expect(get(rankSearch)).toBe('bob@example.com');
+
+		calls.length = 0;
+		await loadRankedTalkers(20);
+		expect(calls.find((url) => url.includes('/analytics/talkers'))).toContain('q=bob%40example.com');
+
+		calls.length = 0;
+		await setRankSearch('bob@example.com');
+		expect(calls).toEqual([]);
+
+		await setRankSearch('');
+		expect(calls.filter((url) => url.includes('/api/analytics/')).every((url) => !url.includes('q='))).toBe(true);
 	});
 
 	it('does not refetch when the sort is already selected', async () => {

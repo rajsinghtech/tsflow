@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageStep, rankNodeLabel, rankPageLabel, rankQueryPath } from './rank-query';
+import { pageStep, rankNodeLabel, rankPageLabel, rankQueryPath, trafficSearchFor } from './rank-query';
 
 const start = new Date('2026-03-01T12:00:00.000Z');
 const end = new Date('2026-03-01T14:00:00.000Z');
@@ -13,6 +13,12 @@ describe('rank query paths', () => {
 			'/analytics/pairs?start=2026-03-01T12:00:00.000Z&end=2026-03-01T14:00:00.000Z&limit=20&offset=40&sort=flows'
 		);
 		expect(rankQueryPath('talkers', { start, end }).includes('tailnet=')).toBe(false);
+	});
+
+	it('adds an encoded search only when there is one', () => {
+		expect(rankQueryPath('talkers', { start, end, q: '  bob@example.com ' })).toContain('&q=bob%40example.com');
+		expect(rankQueryPath('pairs', { start, end, q: 'tag:ci & web' })).toContain('&q=tag%3Aci%20%26%20web');
+		expect(rankQueryPath('talkers', { start, end, q: '   ' })).not.toContain('q=');
 	});
 
 	it('defaults limit, offset, and sort', () => {
@@ -48,5 +54,12 @@ describe('rank node labels', () => {
 		expect(rankNodeLabel('laptop', 'a')).toEqual({ text: 'laptop', mono: false });
 		expect(rankNodeLabel('  ', '12345678901')).toEqual({ text: '12345678\u2026', mono: true });
 		expect(rankNodeLabel('', 'node-a')).toEqual({ text: 'node-a', mono: true });
+	});
+});
+
+describe('traffic search for a ranked node', () => {
+	it('uses the device name, or the stored address when there is none', () => {
+		expect(trafficSearchFor('build', 'nBuild001CNTRL')).toBe('build');
+		expect(trafficSearchFor('', '10.20.0.5')).toBe('10.20.0.5');
 	});
 });

@@ -71,6 +71,7 @@ const pairsSlot: LoadSlot<RankedPair> = {
 };
 
 export const rankSort = writable<RankSort>('bytes');
+export const rankSearch = writable('');
 export const rankedTalkers = talkerState;
 export const rankedPairs = pairState;
 
@@ -92,7 +93,7 @@ async function loadSlot<T>(slot: LoadSlot<T>, offset: number): Promise<void> {
 		if (gen !== slot.gen || signal.aborted) return;
 		const { start, end } = get(queryTimeWindow);
 		const response = await slot.fetchRows(
-			{ start, end, limit: RANK_PAGE_SIZE, offset, sort: get(rankSort) },
+			{ start, end, limit: RANK_PAGE_SIZE, offset, sort: get(rankSort), q: get(rankSearch) },
 			signal
 		);
 		if (gen !== slot.gen || signal.aborted) return;
@@ -149,6 +150,14 @@ export async function setRankSort(next: RankSort): Promise<void> {
 	await loadRankings(true);
 }
 
+// setRankSearch filters both tables and returns them to the first page.
+export async function setRankSearch(next: string): Promise<void> {
+	const q = next.trim();
+	if (get(rankSearch) === q) return;
+	rankSearch.set(q);
+	await loadRankings(true);
+}
+
 export function clearRankingsData(): void {
 	invalidate(talkersSlot);
 	invalidate(pairsSlot);
@@ -176,6 +185,7 @@ export function stopRankingsRefresh(): void {
 export function resetRankingsForTests(): void {
 	stopRankingsRefresh();
 	rankSort.set('bytes');
+	rankSearch.set('');
 	rankedTalkers.set(emptyTable());
 	rankedPairs.set(emptyTable());
 }

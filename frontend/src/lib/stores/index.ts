@@ -49,6 +49,8 @@ export {
 } from './stats-store';
 export {
 	rankSort,
+	rankSearch,
+	setRankSearch,
 	rankedTalkers,
 	rankedPairs,
 	loadRankings,

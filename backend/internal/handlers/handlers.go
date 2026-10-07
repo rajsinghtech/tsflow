@@ -181,25 +181,6 @@ func derpRelayLabel(nodeIDOrIP string) (string, bool) {
 	return "", false
 }
 
-func labelRankedTalkers(talkers []database.RankedTalker) {
-	for i := range talkers {
-		if name, ok := derpRelayLabel(talkers[i].NodeID); ok {
-			talkers[i].Hostname = name
-		}
-	}
-}
-
-func labelRankedPairs(pairs []database.RankedPair) {
-	for i := range pairs {
-		if name, ok := derpRelayLabel(pairs[i].SrcNodeID); ok {
-			pairs[i].SrcHostname = name
-		}
-		if name, ok := derpRelayLabel(pairs[i].DstNodeID); ok {
-			pairs[i].DstHostname = name
-		}
-	}
-}
-
 // resolveNodeName returns a human-readable name for a node ID or IP using the device cache.
 func (h *Handlers) resolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
 	if name, ok := derpRelayLabel(nodeIDOrIP); ok {

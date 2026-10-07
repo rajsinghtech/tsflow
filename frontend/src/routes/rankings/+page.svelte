@@ -1,28 +1,54 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { get } from 'svelte/store';
-	import { ArrowUpDown, CalendarClock, Link, Loader2, Network, RefreshCw } from 'lucide-svelte';
+	import { ArrowUpDown, CalendarClock, Link, Loader2, Network, RefreshCw, Search, X } from 'lucide-svelte';
+	import { goto } from '$app/navigation';
 	import Header from '#lib/components/layout/Header.svelte';
 	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
-	import { pageStep, rankNodeLabel, rankPageLabel } from '#lib/analytics/rank-query';
+	import { pageStep, rankNodeLabel, rankPageLabel, trafficSearchFor } from '#lib/analytics/rank-query';
 	import type { RankSort } from '#lib/analytics/rank-query';
 	import {
 		dataSourceStore,
+		filterStore,
 		hasStoredData,
 		loadRankedPairs,
 		loadRankedTalkers,
 		loadRankings,
 		queryTimeWindow,
+		rankSearch,
 		rankSort,
 		rankedPairs,
 		rankedTalkers,
+		setRankSearch,
 		setRankSort,
+		uiStore,
 		startRankingsRefresh,
 		stopRankingsRefresh
 	} from '#lib/stores';
 	import { formatBytes } from '#lib/utils';
 
 	let showWindowControls = $state(false);
+	let searchText = $state(get(rankSearch));
+	let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function onSearchInput() {
+		if (searchTimer) clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => void setRankSearch(searchText), 300);
+	}
+
+	function clearSearch() {
+		if (searchTimer) clearTimeout(searchTimer);
+		searchText = '';
+		void setRankSearch('');
+	}
+
+	// Open a ranked device on the traffic graph: select it and search for it
+	// so the graph highlights and centers it.
+	function openInTraffic(hostname: string, nodeId: string) {
+		filterStore.setSearch(trafficSearchFor(hostname, nodeId));
+		uiStore.selectNode(nodeId);
+		void goto('/');
+	}
 
 	onMount(() => {
 		let cancelled = false;
@@ -49,6 +75,7 @@
 	});
 
 	onDestroy(() => {
+		if (searchTimer) clearTimeout(searchTimer);
 		stopRankingsRefresh();
 	});
 
@@ -85,10 +112,19 @@
 
 {#snippet nodeName(hostname: string, nodeId: string)}
 	{@const label = rankNodeLabel(hostname, nodeId)}
-	{#if label.mono}
-		<span class="font-mono text-xs text-muted-foreground" title={nodeId}>{label.text}</span>
-	{:else}
-		<span class="font-medium" title={nodeId}>{label.text}</span>
+	<button
+		type="button"
+		class="max-w-full truncate text-left hover:underline {label.mono ? 'font-mono text-xs text-muted-foreground' : 'font-medium'}"
+		title={`${nodeId}: open on the traffic graph`}
+		onclick={() => openInTraffic(hostname, nodeId)}
+	>
+		{label.text}
+	</button>
+{/snippet}
+
+{#snippet ownerLine(owner: string | undefined)}
+	{#if owner}
+		<div class="truncate text-[10px] text-muted-foreground" title={owner}>{owner}</div>
 	{/if}
 {/snippet}
 
@@ -211,6 +247,29 @@
 						Flows
 					</button>
 				</div>
+
+				<div class="relative ml-auto w-full min-w-0 sm:w-72">
+					<Search class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+					<input
+						type="search"
+						class="h-8 w-full rounded-md border border-border bg-background pl-7 pr-7 text-xs placeholder:text-muted-foreground"
+						placeholder="Search name, owner email, IP, tag:x"
+						aria-label="Search rankings"
+						bind:value={searchText}
+						oninput={onSearchInput}
+						onkeydown={(event) => event.key === 'Escape' && clearSearch()}
+					/>
+					{#if searchText}
+						<button
+							type="button"
+							class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+							aria-label="Clear search"
+							onclick={clearSearch}
+						>
+							<X class="h-3.5 w-3.5" />
+						</button>
+					{/if}
+				</div>
 			</div>
 
 			{#if showWindowControls}
@@ -255,7 +314,9 @@
 				{:else if $rankedTalkers.rows.length === 0}
 					<div class="flex flex-col items-center justify-center py-8 text-center">
 						<Network class="mb-2 h-8 w-8 text-muted-foreground/30" />
-						<p class="text-sm text-muted-foreground">No device traffic in this window</p>
+						<p class="text-sm text-muted-foreground">
+							{$rankSearch ? `No devices match "${$rankSearch}" in this window` : 'No device traffic in this window'}
+						</p>
 					</div>
 				{:else}
 					<div class="hidden overflow-x-auto sm:block">
@@ -264,6 +325,7 @@
 								<tr class="border-b border-border text-left text-muted-foreground">
 									<th class="pb-2 pr-4">#</th>
 									<th class="pb-2 pr-4">Device</th>
+									<th class="pb-2 pr-4">Owner</th>
 									<th class="pb-2 pr-4 text-right">TX</th>
 									<th class="pb-2 pr-4 text-right">RX</th>
 									{@render metricHeader('Total', 'bytes', true)}
@@ -276,6 +338,9 @@
 										<td class="py-1.5 pr-4 text-muted-foreground tabular-nums">{$rankedTalkers.offset + i + 1}</td>
 										<td class="max-w-[180px] truncate py-1.5 pr-4">
 											{@render nodeName(talker.hostname, talker.nodeId)}
+										</td>
+										<td class="max-w-[180px] truncate py-1.5 pr-4 text-xs text-muted-foreground" title={talker.owner}>
+											{talker.owner ?? ''}
 										</td>
 										<td class="py-1.5 pr-4 text-right tabular-nums">{formatBytes(talker.txBytes)}</td>
 										<td class="py-1.5 pr-4 text-right tabular-nums">{formatBytes(talker.rxBytes)}</td>
@@ -293,7 +358,10 @@
 								<div class="flex items-center justify-between gap-2">
 									<div class="flex min-w-0 items-center gap-2">
 										<span class="text-xs text-muted-foreground tabular-nums">{$rankedTalkers.offset + i + 1}.</span>
-										<span class="truncate">{@render nodeName(talker.hostname, talker.nodeId)}</span>
+										<div class="min-w-0">
+											{@render nodeName(talker.hostname, talker.nodeId)}
+											{@render ownerLine(talker.owner)}
+										</div>
 									</div>
 									<span class="shrink-0 text-sm font-medium tabular-nums">{formatBytes(talker.totalBytes)}</span>
 								</div>
@@ -342,7 +410,9 @@
 				{:else if $rankedPairs.rows.length === 0}
 					<div class="flex flex-col items-center justify-center py-8 text-center">
 						<Link class="mb-2 h-8 w-8 text-muted-foreground/30" />
-						<p class="text-sm text-muted-foreground">No communication pairs in this window</p>
+						<p class="text-sm text-muted-foreground">
+							{$rankSearch ? `No pairs match "${$rankSearch}" in this window` : 'No communication pairs in this window'}
+						</p>
 					</div>
 				{:else}
 					<div class="hidden overflow-x-auto sm:block">
@@ -362,9 +432,11 @@
 										<td class="py-1.5 pr-4 text-muted-foreground tabular-nums">{$rankedPairs.offset + i + 1}</td>
 										<td class="max-w-[160px] truncate py-1.5 pr-4">
 											{@render nodeName(pair.srcHostname, pair.srcNodeId)}
+											{@render ownerLine(pair.srcOwner)}
 										</td>
 										<td class="max-w-[160px] truncate py-1.5 pr-4">
 											{@render nodeName(pair.dstHostname, pair.dstNodeId)}
+											{@render ownerLine(pair.dstOwner)}
 										</td>
 										<td class="py-1.5 pr-4 text-right font-medium tabular-nums">{formatBytes(pair.totalBytes)}</td>
 										<td class="py-1.5 text-right tabular-nums">{pair.flowCount.toLocaleString()}</td>
