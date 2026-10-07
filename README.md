@@ -144,6 +144,7 @@ JSON uses the same fields:
 |----------|-------------|---------|
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
+| `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
 | `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
 | `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 

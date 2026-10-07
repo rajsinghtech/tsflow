@@ -391,8 +391,18 @@ func (c *DeviceCache) mergeLocked(existing, incoming *DeviceCacheEntry, legacy s
 	if incoming.flowSeen.After(existing.flowSeen) {
 		existing.flowSeen = incoming.flowSeen
 	}
-	existing.IPs = unionStrings(existing.IPs, incoming.IPs)
-	existing.Tags = unionStrings(existing.Tags, incoming.Tags)
+	// The device list is the current state. Flow-log metadata is a snapshot
+	// kept for the whole retention window, so it must not add tags or
+	// addresses an API device no longer has. Older addresses still resolve to
+	// the device so historical flows keep their attribution.
+	if !existing.fromAPI {
+		existing.IPs = unionStrings(existing.IPs, incoming.IPs)
+		existing.Tags = unionStrings(existing.Tags, incoming.Tags)
+	} else {
+		for _, ip := range incoming.IPs {
+			c.mapIPLocked(ip, existing)
+		}
+	}
 	if next := preferredID(existing.ID, incoming.ID); next != existing.ID {
 		c.rekeyLocked(existing, next)
 	}
@@ -582,7 +592,7 @@ func (c *DeviceCache) Devices() []Device {
 			Tags:               append([]string(nil), entry.Tags...),
 		})
 	}
-	return devices
+	return withEmptyLists(devices)
 }
 
 // EquivalentIDs returns the canonical id and every alias for the same node.
