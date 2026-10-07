@@ -1,5 +1,7 @@
+import type { RankedPair, RankedTalker, RankMetadata, RankQueryParams } from '#lib/analytics/rank-query';
+import { rankQueryPath } from '#lib/analytics/rank-query';
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '#lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, NodeDetailStats } from '#lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];
@@ -174,32 +176,6 @@ export const tailscaleService = {
 		return api.get(url, { signal });
 	},
 
-	async getTopTalkers(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		talkers: TopTalker[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
-	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-talkers?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
-		}
-		return api.get(url, { signal });
-	},
-
-	async getTopPairs(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		pairs: TopPair[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
-	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-pairs?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
-		}
-		return api.get(url, { signal });
-	},
-
 	async getNewPairs(
 		start: Date,
 		end: Date,
@@ -249,5 +225,19 @@ export const tailscaleService = {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
 		return api.get(`/stats/node/${encodeURIComponent(nodeId)}?start=${startISO}&end=${endISO}`);
+	},
+
+	async getRankedTalkers(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ talkers: RankedTalker[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('talkers', query), { signal });
+	},
+
+	async getRankedPairs(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ pairs: RankedPair[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('pairs', query), { signal });
 	}
 };

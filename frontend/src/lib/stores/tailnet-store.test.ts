@@ -110,8 +110,8 @@ describe('single tailnet requests', () => {
 		await tailscaleService.getPollerStatus();
 		await tailscaleService.getBandwidth(start, end);
 		await tailscaleService.getStatsOverview(start, end);
-		await tailscaleService.getTopTalkers(start, end);
-		await tailscaleService.getTopPairs(start, end);
+		await tailscaleService.getRankedTalkers({ start, end });
+		await tailscaleService.getRankedPairs({ start, end, trafficTypes: ['virtual', 'subnet'] });
 		await tailscaleService.getNodeStats('node-a', start, end);
 
 		expect(calls[0]).toBe('/api/tailnets');
@@ -125,8 +125,8 @@ describe('single tailnet requests', () => {
 			'/api/poller/status',
 			`/api/bandwidth?start=${startISO}&end=${endISO}`,
 			`/api/stats/overview?start=${startISO}&end=${endISO}`,
-			`/api/stats/top-talkers?start=${startISO}&end=${endISO}&limit=10`,
-			`/api/stats/top-pairs?start=${startISO}&end=${endISO}&limit=10`,
+			`/api/analytics/talkers?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes`,
+			`/api/analytics/pairs?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes&trafficTypes=virtual,subnet`,
 			`/api/stats/node/node-a?start=${startISO}&end=${endISO}`
 		]);
 		expect(calls.some((url) => url.includes('tailnet='))).toBe(false);
