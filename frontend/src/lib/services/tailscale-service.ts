@@ -1,5 +1,7 @@
+import type { RankedPair, RankedTalker, RankMetadata, RankQueryParams } from '#lib/analytics/rank-query';
+import { rankQueryPath } from '#lib/analytics/rank-query';
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '#lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, NodeDetailStats } from '#lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];
@@ -174,30 +176,52 @@ export const tailscaleService = {
 		return api.get(url, { signal });
 	},
 
-	async getTopTalkers(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		talkers: TopTalker[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
-	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-talkers?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+	async getNewPairs(
+		start: Date,
+		end: Date,
+		options?: {
+			lookback?: string;
+			limit?: number;
+			offset?: number;
+			trafficTypes?: string[];
+			signal?: AbortSignal;
 		}
-		return api.get(url, { signal });
-	},
-
-	async getTopPairs(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		pairs: TopPair[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
+	): Promise<{
+		pairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			dstNodeId: string;
+			dstHostname: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+			firstSeen: string;
+		}>;
+		metadata: {
+			start: string;
+			end: string;
+			lookback: string;
+			limit: number;
+			offset: number;
+			count: number;
+			hasMore: boolean;
+			lookbackStart?: string;
+			dataStart?: string;
+			lookbackComplete?: boolean;
+		};
 	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-pairs?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 20),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.lookback) params.set('lookback', options.lookback);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
 		}
-		return api.get(url, { signal });
+		return api.get(`/analytics/new-pairs?${params.toString()}`, { signal: options?.signal });
 	},
 
 	async getDeviceTimeline(
@@ -244,5 +268,19 @@ export const tailscaleService = {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
 		return api.get(`/stats/node/${encodeURIComponent(nodeId)}?start=${startISO}&end=${endISO}`);
+	},
+
+	async getRankedTalkers(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ talkers: RankedTalker[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('talkers', query), { signal });
+	},
+
+	async getRankedPairs(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ pairs: RankedPair[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('pairs', query), { signal });
 	}
 };

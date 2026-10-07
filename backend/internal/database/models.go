@@ -107,6 +107,7 @@ const (
 type RankedTalker struct {
 	NodeID     string `json:"nodeId"`
 	Hostname   string `json:"hostname"`
+	Owner      string `json:"owner"`
 	TxBytes    int64  `json:"txBytes"`
 	RxBytes    int64  `json:"rxBytes"`
 	TotalBytes int64  `json:"totalBytes"`
@@ -117,8 +118,10 @@ type RankedTalker struct {
 type RankedPair struct {
 	SrcNodeID   string `json:"srcNodeId"`
 	SrcHostname string `json:"srcHostname"`
+	SrcOwner    string `json:"srcOwner"`
 	DstNodeID   string `json:"dstNodeId"`
 	DstHostname string `json:"dstHostname"`
+	DstOwner    string `json:"dstOwner"`
 	TxBytes     int64  `json:"txBytes"`
 	RxBytes     int64  `json:"rxBytes"`
 	TotalBytes  int64  `json:"totalBytes"`
@@ -132,6 +135,24 @@ type RankQuery struct {
 	Offset       int
 	Sort         string
 	TrafficTypes []string
+	// NodeIDs and Match narrow the ranking before it is paged. A talker is
+	// kept when its stored id is in NodeIDs or contains Match; a pair is kept
+	// when either endpoint is. Both empty means no filter. The request's q
+	// search sets them.
+	NodeIDs []string
+	Match   string
+	// Search is the caller's search text, echoed back in metadata.
+	Search string
+	// Tag, User, and Q scope the read on the server through the merged node
+	// metadata (identity.go). They are not request parameters.
+	Tag  string
+	User string
+	Q    string
+}
+
+// Filtered reports whether the query narrows the ranking to some nodes.
+func (q RankQuery) Filtered() bool {
+	return len(q.NodeIDs) > 0 || q.Match != ""
 }
 
 // PortStat represents traffic volume for a specific port/protocol
@@ -261,6 +282,10 @@ type Store interface {
 	// another row exists after this page.
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
+	// ListNewPairs lists src/dst pairs first seen in the window. Complete
+	// hours come from the hourly rollup. The bool is true when another row
+	// exists after this page. An empty traffic type list leaves out physical.
+	ListNewPairs(ctx context.Context, tailnetID string, start, end time.Time, query NewPairQuery) ([]NewPair, bool, error)
 	// GetDeviceTimeline is one device's bytes over time, split by traffic
 	// type, plus one page of peers. Complete hours come from the rollup.
 	// An empty traffic type list leaves out physical.

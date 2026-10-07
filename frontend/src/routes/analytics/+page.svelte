@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
+	import RankedTables from '#lib/components/analytics/RankedTables.svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import DonutChart from '#lib/components/charts/DonutChart.svelte';
 	import BarChart from '#lib/components/charts/BarChart.svelte';
@@ -12,15 +13,16 @@
 		loadStats,
 		statsSummary,
 		statsBuckets,
-		topTalkers,
-		topPairs,
 		topPorts,
 		statsLoading,
 		statsError,
 		queryTimeWindow,
 		hasStoredData,
 		dataSourceStore,
-		filterStore
+		filterStore,
+		loadRankings,
+		startRankingsRefresh,
+		stopRankingsRefresh
 	} from '#lib/stores';
 	import { formatBytes, resolveActiveNodeCount } from '#lib/utils';
 	import { getPortLabel } from '#lib/utils/protocol';
@@ -39,6 +41,7 @@
 				dataSourceStore.showLatestWindow(range);
 			}
 			startStatsRefresh(60_000);
+			startRankingsRefresh(60_000);
 		}
 
 		bootstrapAnalytics();
@@ -49,14 +52,9 @@
 
 	onDestroy(() => {
 		stopStatsRefresh();
+		stopRankingsRefresh();
 	});
 
-	type TalkerField = 'totalBytes' | 'txBytes' | 'rxBytes';
-	type PairField = 'totalBytes' | 'flowCount';
-	let talkerSort: TalkerField = $state('totalBytes');
-	let talkerSortDir: 'asc' | 'desc' = $state('desc');
-	let pairSort: PairField = $state('totalBytes');
-	let pairSortDir: 'asc' | 'desc' = $state('desc');
 	let showWindowControls = $state(false);
 	const trafficTypes: { value: TrafficType; label: string; colorClass: string }[] = [
 		{ value: 'virtual', label: 'Virtual', colorClass: 'bg-blue-500' },
@@ -66,27 +64,9 @@
 	];
 	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
 
-	function toggleTalkerSort(field: TalkerField) {
-		if (talkerSort === field) {
-			talkerSortDir = talkerSortDir === 'desc' ? 'asc' : 'desc';
-		} else {
-			talkerSort = field;
-			talkerSortDir = 'desc';
-		}
-	}
-
-	function togglePairSort(field: PairField) {
-		if (pairSort === field) {
-			pairSortDir = pairSortDir === 'desc' ? 'asc' : 'desc';
-		} else {
-			pairSort = field;
-			pairSortDir = 'desc';
-		}
-	}
-
 	function setAnalyticsTrafficTypes(types: TrafficType[]) {
 		filterStore.setTrafficTypes(types);
-		loadStats();
+		reloadAll(true);
 	}
 
 	function toggleTrafficType(type: TrafficType) {
@@ -107,22 +87,12 @@
 		setAnalyticsTrafficTypes([]);
 	}
 
-	function sortArrow(active: boolean, dir: 'asc' | 'desc'): string {
-		if (!active) return '';
-		return dir === 'desc' ? ' \u25BE' : ' \u25B4';
+	// Reload the overview and the ranked tables. Window and filter changes
+	// return the tables to their first page; a refresh keeps the page.
+	function reloadAll(resetPages: boolean) {
+		loadStats();
+		void loadRankings(resetPages);
 	}
-
-	const sortedTalkers = $derived.by(() => {
-		const list = [...$topTalkers];
-		const mul = talkerSortDir === 'desc' ? -1 : 1;
-		return list.sort((a, b) => mul * (a[talkerSort] - b[talkerSort]));
-	});
-
-	const sortedPairs = $derived.by(() => {
-		const list = [...$topPairs];
-		const mul = pairSortDir === 'desc' ? -1 : 1;
-		return list.sort((a, b) => mul * (a[pairSort] - b[pairSort]));
-	});
 
 	const protoSegments = $derived.by(() => {
 		const s = $statsSummary;
@@ -188,15 +158,9 @@
 	const flowsSparkline = $derived($statsBuckets.map((b) => b.totalFlows));
 	const pairsSparkline = $derived($statsBuckets.map((b) => b.uniquePairs));
 
-	function nodeLabel(id: string, displayName?: string): string {
-		if (displayName) return displayName;
-		if (/^\d{10,}$/.test(id)) return id.slice(0, 8) + '\u2026';
-		return id;
-	}
-
 	function showLatestStoredWindow() {
 		dataSourceStore.showLatestWindow();
-		loadStats();
+		reloadAll(true);
 	}
 </script>
 
@@ -238,7 +202,7 @@
 					{/if}
 					<button
 						class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
-						onclick={() => loadStats()}
+						onclick={() => reloadAll(false)}
 					>
 						<RefreshCw class="h-3.5 w-3.5" />
 						Refresh
@@ -292,7 +256,7 @@
 
 				{#if showWindowControls}
 					<div class="mt-2 border-t border-border pt-2">
-						<TimelineSlider onWindowChange={loadStats} />
+						<TimelineSlider onWindowChange={() => reloadAll(true)} />
 					</div>
 				{/if}
 			</div>
@@ -351,236 +315,7 @@
 				{/if}
 			</div>
 
-			<!-- Rankings -->
-			<div class="mb-4 grid grid-cols-1 gap-3 sm:mb-5 lg:grid-cols-2">
-				<!-- Top Talkers -->
-				<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
-					<h3 class="mb-3 text-sm font-medium text-muted-foreground">Top Talkers</h3>
-
-					{#if sortedTalkers.length === 0}
-						<div class="flex flex-col items-center justify-center py-8 text-center">
-							<Network class="mb-2 h-8 w-8 text-muted-foreground/30" />
-							<p class="text-sm text-muted-foreground">No device traffic recorded yet</p>
-							<p class="mt-1 text-xs text-muted-foreground/60">Traffic data will appear here once devices start communicating</p>
-						</div>
-					{:else}
-					<!-- Desktop/Tablet table -->
-					<div class="hidden overflow-x-auto sm:block">
-						<table class="w-full text-sm">
-							<thead>
-								<tr class="border-b border-border text-left text-muted-foreground">
-									<th class="pb-2 pr-4">#</th>
-									<th class="pb-2 pr-4">Device</th>
-									<th class="pb-2 pr-4 text-muted-foreground">Owner</th>
-									<th
-										class="cursor-pointer select-none pb-2 pr-4 text-right transition-colors hover:text-foreground"
-										onclick={() => toggleTalkerSort('txBytes')}
-										aria-sort={talkerSort === 'txBytes' ? (talkerSortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-										aria-label="Sort by transmitted bytes"
-									>
-										TX{sortArrow(talkerSort === 'txBytes', talkerSortDir)}
-									</th>
-									<th
-										class="cursor-pointer select-none pb-2 pr-4 text-right transition-colors hover:text-foreground"
-										onclick={() => toggleTalkerSort('rxBytes')}
-										aria-sort={talkerSort === 'rxBytes' ? (talkerSortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-										aria-label="Sort by received bytes"
-									>
-										RX{sortArrow(talkerSort === 'rxBytes', talkerSortDir)}
-									</th>
-									<th
-										class="cursor-pointer select-none pb-2 text-right transition-colors hover:text-foreground"
-										onclick={() => toggleTalkerSort('totalBytes')}
-										aria-sort={talkerSort === 'totalBytes' ? (talkerSortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-										aria-label="Sort by total bytes"
-									>
-										Total{sortArrow(talkerSort === 'totalBytes', talkerSortDir)}
-									</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each sortedTalkers as talker, i}
-									<tr class="border-b border-border/50 transition-colors hover:bg-secondary/50">
-										<td class="py-1.5 pr-4 text-muted-foreground">{i + 1}</td>
-										<td class="max-w-[180px] truncate py-1.5 pr-4" title={talker.nodeId}>
-											{#if talker.displayName}
-												<span class="font-medium">{talker.displayName}</span>
-											{:else}
-												<span class="font-mono text-xs text-muted-foreground">
-													{nodeLabel(talker.nodeId)}
-												</span>
-											{/if}
-										</td>
-										<td class="max-w-[160px] truncate py-1.5 pr-4 text-xs text-muted-foreground" title={talker.owner ?? ''}>
-											{talker.owner ?? '—'}
-										</td>
-										<td class="py-1.5 pr-4 text-right tabular-nums"
-											>{formatBytes(talker.txBytes)}</td
-										>
-										<td class="py-1.5 pr-4 text-right tabular-nums"
-											>{formatBytes(talker.rxBytes)}</td
-										>
-										<td class="py-1.5 text-right font-medium tabular-nums"
-											>{formatBytes(talker.totalBytes)}</td
-										>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-
-					<!-- Mobile card view -->
-					<div class="divide-y divide-border/50 sm:hidden">
-						{#each sortedTalkers as talker, i}
-							<div class="py-2">
-								<div class="flex items-center justify-between">
-									<div class="flex items-center gap-2">
-										<span class="text-xs text-muted-foreground">{i + 1}.</span>
-										{#if talker.displayName}
-											<span class="text-sm font-medium">{talker.displayName}</span>
-										{:else}
-											<span class="font-mono text-xs text-muted-foreground">
-												{nodeLabel(talker.nodeId)}
-											</span>
-										{/if}
-									</div>
-									<span class="text-sm font-medium tabular-nums">{formatBytes(talker.totalBytes)}</span>
-								</div>
-								<div class="mt-0.5 flex gap-3 pl-5 text-xs text-muted-foreground">
-									<span class="tabular-nums">TX {formatBytes(talker.txBytes)}</span>
-									<span class="tabular-nums">RX {formatBytes(talker.rxBytes)}</span>
-								</div>
-								{#if talker.owner}
-									<div class="mt-0.5 truncate pl-5 text-xs text-muted-foreground/70">{talker.owner}</div>
-								{/if}
-							</div>
-						{/each}
-					</div>
-					{/if}
-				</div>
-
-				<!-- Top Pairs -->
-				<div class="rounded-lg border border-border bg-card p-3 sm:p-4">
-					<h3 class="mb-3 text-sm font-medium text-muted-foreground">Top Pairs</h3>
-
-					{#if sortedPairs.length === 0}
-						<div class="flex flex-col items-center justify-center py-8 text-center">
-							<Link class="mb-2 h-8 w-8 text-muted-foreground/30" />
-							<p class="text-sm text-muted-foreground">No communication pairs detected</p>
-							<p class="mt-1 text-xs text-muted-foreground/60">Pairs will appear once traffic flows between devices</p>
-						</div>
-					{:else}
-					<!-- Desktop/Tablet table -->
-					<div class="hidden overflow-x-auto sm:block">
-						<table class="w-full text-sm">
-							<thead>
-								<tr class="border-b border-border text-left text-muted-foreground">
-									<th class="pb-2 pr-4">#</th>
-									<th class="pb-2 pr-4">Source</th>
-									<th class="pb-2 pr-4">Destination</th>
-									<th
-										class="cursor-pointer select-none pb-2 pr-4 text-right transition-colors hover:text-foreground"
-										onclick={() => togglePairSort('totalBytes')}
-										aria-sort={pairSort === 'totalBytes' ? (pairSortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-										aria-label="Sort by traffic volume"
-									>
-										Traffic{sortArrow(pairSort === 'totalBytes', pairSortDir)}
-									</th>
-									<th
-										class="cursor-pointer select-none pb-2 text-right transition-colors hover:text-foreground"
-										onclick={() => togglePairSort('flowCount')}
-										aria-sort={pairSort === 'flowCount' ? (pairSortDir === 'desc' ? 'descending' : 'ascending') : 'none'}
-										aria-label="Sort by flow count"
-									>
-										Flows{sortArrow(pairSort === 'flowCount', pairSortDir)}
-									</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each sortedPairs as pair, i}
-									<tr class="border-b border-border/50 transition-colors hover:bg-secondary/50">
-										<td class="py-1.5 pr-4 text-muted-foreground">{i + 1}</td>
-										<td class="max-w-[140px] py-1.5 pr-4" title={pair.srcNodeId}>
-											<div class="truncate">
-												{#if pair.srcDisplayName}
-													<span class="font-medium">{pair.srcDisplayName}</span>
-												{:else}
-													<span class="font-mono text-xs text-muted-foreground">
-														{nodeLabel(pair.srcNodeId)}
-													</span>
-												{/if}
-											</div>
-											{#if pair.srcOwner}
-												<div class="truncate text-xs text-muted-foreground/70">{pair.srcOwner}</div>
-											{/if}
-										</td>
-										<td class="max-w-[140px] py-1.5 pr-4" title={pair.dstNodeId}>
-											<div class="truncate">
-												{#if pair.dstDisplayName}
-													<span class="font-medium">{pair.dstDisplayName}</span>
-												{:else}
-													<span class="font-mono text-xs text-muted-foreground">
-														{nodeLabel(pair.dstNodeId)}
-													</span>
-												{/if}
-											</div>
-											{#if pair.dstOwner}
-												<div class="truncate text-xs text-muted-foreground/70">{pair.dstOwner}</div>
-											{/if}
-										</td>
-										<td class="py-1.5 pr-4 text-right font-medium tabular-nums"
-											>{formatBytes(pair.totalBytes)}</td
-										>
-										<td class="py-1.5 text-right tabular-nums"
-											>{pair.flowCount.toLocaleString()}</td
-										>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-
-					<!-- Mobile card view -->
-					<div class="divide-y divide-border/50 sm:hidden">
-						{#each sortedPairs as pair, i}
-							<div class="py-2">
-								<div class="flex items-center justify-between">
-									<span class="text-xs text-muted-foreground">{i + 1}.</span>
-									<span class="text-sm font-medium tabular-nums">{formatBytes(pair.totalBytes)}</span>
-								</div>
-								<div class="mt-0.5 flex items-center gap-1 text-xs">
-									<span class="truncate">
-										{#if pair.srcDisplayName}
-											<span class="font-medium">{pair.srcDisplayName}</span>
-										{:else}
-											<span class="font-mono text-[10px] text-muted-foreground">{nodeLabel(pair.srcNodeId)}</span>
-										{/if}
-									</span>
-									<span class="shrink-0 text-muted-foreground">&rarr;</span>
-									<span class="truncate">
-										{#if pair.dstDisplayName}
-											<span class="font-medium">{pair.dstDisplayName}</span>
-										{:else}
-											<span class="font-mono text-[10px] text-muted-foreground">{nodeLabel(pair.dstNodeId)}</span>
-										{/if}
-									</span>
-								</div>
-								{#if pair.srcOwner || pair.dstOwner}
-									<div class="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/70">
-										<span class="truncate">{pair.srcOwner ?? '—'}</span>
-										<span class="shrink-0">&rarr;</span>
-										<span class="truncate">{pair.dstOwner ?? '—'}</span>
-									</div>
-								{/if}
-								<div class="mt-0.5 text-[10px] text-muted-foreground">
-									{pair.flowCount.toLocaleString()} flows
-								</div>
-							</div>
-						{/each}
-					</div>
-					{/if}
-				</div>
-			</div>
+			<RankedTables />
 
 		{/if}
 	</main>
