@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import type { DeviceScope } from '#lib/types';
 import { filterStore } from './filter-store';
 
@@ -16,6 +16,24 @@ export const viewerStore = writable<ViewerIdentity | null>(null);
 // viewerReady is true after the whoami lookup finishes, including when
 // there is no login. The traffic page waits for it before choosing a landing tab.
 export const viewerReady = writable(false);
+
+// whenViewerReady resolves once whoami has answered, or after timeoutMs so a
+// slow lookup cannot hold up the page that waits on it.
+export function whenViewerReady(timeoutMs = 2000): Promise<void> {
+	if (get(viewerReady)) return Promise.resolve();
+	return new Promise((resolve) => {
+		let unsubscribe: (() => void) | undefined;
+		const finish = () => {
+			clearTimeout(timer);
+			unsubscribe?.();
+			resolve();
+		};
+		const timer = setTimeout(finish, timeoutMs);
+		unsubscribe = viewerReady.subscribe((ready) => {
+			if (ready) queueMicrotask(finish);
+		});
+	});
+}
 
 // loadViewerIdentity asks whoami once. No identity, an error, or
 // autoscope off leaves the current filters alone.

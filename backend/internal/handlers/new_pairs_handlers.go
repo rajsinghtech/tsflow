@@ -76,14 +76,7 @@ func (h *Handlers) GetNewPairs(c *gin.Context) {
 		pairs = []database.NewPair{}
 	}
 	labelNewPairs(pairs)
-	lookbackStart := startTime.Add(-query.Lookback)
-	var dataStart *time.Time
-	if dataRange, rangeErr := h.store.GetDataRange(ctx, tn.id); rangeErr != nil {
-		log.Printf("WARN GetNewPairs data range: %v", rangeErr)
-	} else if dataRange != nil && dataRange.Count > 0 {
-		earliest := dataRange.Earliest
-		dataStart = &earliest
-	}
+	lookbackStart, dataStart, lookbackComplete := h.lookbackCoverage(ctx, tn.id, startTime, query.Lookback)
 	c.JSON(http.StatusOK, gin.H{
 		"pairs": pairs,
 		"metadata": newPairMetadata{
@@ -98,7 +91,7 @@ func (h *Handlers) GetNewPairs(c *gin.Context) {
 			TrafficTypes:     query.TrafficTypes,
 			LookbackStart:    lookbackStart,
 			DataStart:        dataStart,
-			LookbackComplete: dataStart != nil && !dataStart.After(lookbackStart),
+			LookbackComplete: lookbackComplete,
 		},
 	})
 }
@@ -178,4 +171,18 @@ func labelNewPairs(pairs []database.NewPair) {
 			pairs[i].DstHostname = name
 		}
 	}
+}
+
+// lookbackCoverage reports where a new-pair lookback begins, the oldest
+// stored minute, and whether stored data covers the whole lookback.
+func (h *Handlers) lookbackCoverage(ctx context.Context, tailnetID string, start time.Time, lookback time.Duration) (time.Time, *time.Time, bool) {
+	lookbackStart := start.Add(-lookback)
+	var dataStart *time.Time
+	if dataRange, err := h.store.GetDataRange(ctx, tailnetID); err != nil {
+		log.Printf("WARN new pairs data range: %v", err)
+	} else if dataRange != nil && dataRange.Count > 0 {
+		earliest := dataRange.Earliest
+		dataStart = &earliest
+	}
+	return lookbackStart, dataStart, dataStart != nil && !dataStart.After(lookbackStart)
 }

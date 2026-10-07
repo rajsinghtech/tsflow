@@ -129,6 +129,7 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 		pairs = []database.NewPair{}
 	}
 	labelNewPairs(pairs)
+	lookbackStart, dataStart, lookbackComplete := h.lookbackCoverage(ctx, tn.id, startTime, lookback)
 
 	var traffic database.TrafficByteTotal
 	var flows int64
@@ -194,6 +195,10 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 			"tailnet":      tn.id,
 			"lookback":     lookbackLabel,
 			"trafficTypes": trafficTypes,
+			// Same coverage fields as /analytics/new-pairs, for newPairs.
+			"lookbackStart":    lookbackStart,
+			"dataStart":        dataStart,
+			"lookbackComplete": lookbackComplete,
 		},
 	})
 }

@@ -183,4 +183,8 @@ func TestViewerSummaryOrdersDevicesByTraffic(t *testing.T) {
 	if len(summary.Peers) == 0 || summary.Peers[0].PeerID != "big-peer" {
 		t.Fatalf("top peers miss the busiest device: %s", body)
 	}
+	// Stored data starts inside the default 7d lookback, as on /new.
+	if !strings.Contains(string(body), `"lookbackComplete":false`) || !strings.Contains(string(body), `"dataStart":"2026-03-02T12:01:00Z"`) {
+		t.Fatalf("new-pair coverage: %s", body)
+	}
 }

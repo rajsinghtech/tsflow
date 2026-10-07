@@ -26,7 +26,7 @@ export function newPairPath(
 
 export interface NewPairCoverage {
 	lookbackStart?: string;
-	dataStart?: string;
+	dataStart?: string | null;
 	lookbackComplete?: boolean;
 }
 

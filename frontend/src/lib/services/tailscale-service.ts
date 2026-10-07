@@ -306,6 +306,14 @@ export const tailscaleService = {
 			flowCount: number;
 			firstSeen: string;
 		}>;
+		metadata?: {
+			start: string;
+			end: string;
+			lookback: string;
+			lookbackStart?: string;
+			dataStart?: string | null;
+			lookbackComplete?: boolean;
+		};
 	}> {
 		const params = new URLSearchParams({
 			start: start.toISOString(),

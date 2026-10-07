@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { landingTarget, showMeTab } from './landing';
+import { landingTarget, meAccess, showMeTab } from './landing';
 
 describe('Me tab landing', () => {
 	it('hides Me and stays on Traffic when identity is unknown', () => {
@@ -34,5 +34,13 @@ describe('Me tab landing', () => {
 		expect(
 			landingTarget({ login: 'ada@example.com', pathname: '/', search: '', stored: '/nope' })
 		).toBe('/me');
+	});
+
+	it('keeps the Me page waiting for whoami, then shows it or sends the viewer to Traffic', () => {
+		expect(meAccess(false, undefined)).toBe('wait');
+		expect(meAccess(false, 'ada@example.com')).toBe('wait');
+		expect(meAccess(true, 'ada@example.com')).toBe('show');
+		expect(meAccess(true, null)).toBe('redirect');
+		expect(meAccess(true, '  ')).toBe('redirect');
 	});
 });

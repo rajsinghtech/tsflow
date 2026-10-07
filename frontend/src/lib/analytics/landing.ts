@@ -24,6 +24,13 @@ export function landingTarget(input: {
 	return '/me';
 }
 
+// meAccess is what the Me page should do. Before whoami answers it waits.
+// Without a login there is no Me tab, so the page sends the viewer to Traffic.
+export function meAccess(ready: boolean, login: string | null | undefined): 'wait' | 'redirect' | 'show' {
+	if (!ready) return 'wait';
+	return showMeTab(login) ? 'show' : 'redirect';
+}
+
 export function readLastTab(): string | null {
 	if (typeof localStorage === 'undefined') return null;
 	return localStorage.getItem(LAST_TAB_KEY);
