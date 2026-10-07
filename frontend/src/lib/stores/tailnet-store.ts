@@ -110,6 +110,13 @@ async function reloadCurrentView(): Promise<void> {
 		await fetchAndRenderPolicy();
 		return;
 	}
+	if (path === '/new') {
+		// The page reloads its list when the window changes; only the new
+		// tailnet's stored range is needed, not the traffic graph.
+		const range = await dataSourceStore.fetchDataRange();
+		if (range?.count) dataSourceStore.showLatestWindow(range);
+		return;
+	}
 	await loadNetworkData();
 }
 

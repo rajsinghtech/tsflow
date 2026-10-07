@@ -17,6 +17,7 @@ import {
 	resetTailnetStateForTests,
 	selectTailnet,
 	selectedTailnetId,
+	setTailnetPathReader,
 	setTailnetSearchReader
 } from '#lib/stores/tailnet-store';
 
@@ -215,5 +216,18 @@ describe('tailnet url and cache', () => {
 		expect(get(devices).some((device) => device.id === 'old-device')).toBe(false);
 		expect(calls.some((url) => url === '/api/devices?tailnet=lab')).toBe(true);
 		expect(calls.some((url) => url.includes('tailnet=default'))).toBe(false);
+	});
+
+	it('reloads the new connections range for the new tailnet without loading the graph', async () => {
+		tailnetList = several;
+		await tailscaleService.getDevices();
+		calls.length = 0;
+		setTailnetPathReader(() => '/new');
+
+		await selectTailnet('lab');
+
+		expect(calls).toContain('/api/flow-logs/range?tailnet=lab');
+		expect(calls.some((url) => url.includes('/flow-logs/aggregated'))).toBe(false);
+		expect(calls.some((url) => url.includes('/api/devices'))).toBe(false);
 	});
 });
