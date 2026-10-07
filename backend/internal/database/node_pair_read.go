@@ -209,8 +209,19 @@ func (s *sumState) add(n int64, numeric bool) {
 	s.numeric = true
 }
 
+// smallSumsLimit is how many keys a sum set scans linearly before it builds
+// an index. Most pairs carry one to three protocols and a few ports, and a
+// map per set was most of the read's allocations.
+const smallSumsLimit = 16
+
+type protoEntry struct {
+	key int
+	st  sumState
+}
+
 type protoSums struct {
-	byKey   map[int]sumState
+	items   []protoEntry
+	index   map[int]int // position in items, once len(items) > smallSumsLimit
 	nullKey sumState
 	hasNull bool
 }
@@ -221,13 +232,32 @@ func (p *protoSums) add(key int, keyNull bool, n int64, numeric bool) {
 		p.hasNull = true
 		return
 	}
-	if p.byKey == nil {
-		p.byKey = make(map[int]sumState)
-	}
-	state := p.byKey[key]
-	state.add(n, numeric)
 	// A JSON null value still creates the key, with a null sum until a number arrives.
-	p.byKey[key] = state
+	p.slot(key).add(n, numeric)
+}
+
+func (p *protoSums) slot(key int) *sumState {
+	if p.index != nil {
+		if i, ok := p.index[key]; ok {
+			return &p.items[i].st
+		}
+	} else {
+		for i := range p.items {
+			if p.items[i].key == key {
+				return &p.items[i].st
+			}
+		}
+	}
+	p.items = append(p.items, protoEntry{key: key})
+	if p.index != nil {
+		p.index[key] = len(p.items) - 1
+	} else if len(p.items) > smallSumsLimit {
+		p.index = make(map[int]int, len(p.items)*2)
+		for i, item := range p.items {
+			p.index[item.key] = i
+		}
+	}
+	return &p.items[len(p.items)-1].st
 }
 
 type portKey struct {
@@ -237,17 +267,42 @@ type portKey struct {
 	proto     int
 }
 
+type portEntry struct {
+	key portKey
+	st  sumState
+}
+
 type portSums struct {
-	byKey map[portKey]sumState
+	items []portEntry
+	index map[portKey]int // position in items, once len(items) > smallSumsLimit
 }
 
 func (p *portSums) add(key portKey, n int64, numeric bool) {
-	if p.byKey == nil {
-		p.byKey = make(map[portKey]sumState)
+	p.slot(key).add(n, numeric)
+}
+
+func (p *portSums) slot(key portKey) *sumState {
+	if p.index != nil {
+		if i, ok := p.index[key]; ok {
+			return &p.items[i].st
+		}
+	} else {
+		for i := range p.items {
+			if p.items[i].key == key {
+				return &p.items[i].st
+			}
+		}
 	}
-	state := p.byKey[key]
-	state.add(n, numeric)
-	p.byKey[key] = state
+	p.items = append(p.items, portEntry{key: key})
+	if p.index != nil {
+		p.index[key] = len(p.items) - 1
+	} else if len(p.items) > smallSumsLimit {
+		p.index = make(map[portKey]int, len(p.items)*2)
+		for i, item := range p.items {
+			p.index[item.key] = i
+		}
+	}
+	return &p.items[len(p.items)-1].st
 }
 
 type pairGroup struct {
@@ -400,33 +455,30 @@ func formatProtocols(sums protoSums) string {
 }
 
 func formatProtocolBytes(sums protoSums) string {
-	if len(sums.byKey) == 0 {
+	if len(sums.items) == 0 {
 		return "{}"
 	}
-	keys := make([]int, 0, len(sums.byKey))
-	for key := range sums.byKey {
-		keys = append(keys, key)
-	}
-	sort.Ints(keys)
+	items := append([]protoEntry(nil), sums.items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].key < items[j].key })
 	var b strings.Builder
 	b.WriteByte('{')
-	for i, key := range keys {
+	for i, item := range items {
 		if i > 0 {
 			b.WriteByte(',')
 		}
 		b.WriteByte('"')
-		b.WriteString(strconv.Itoa(key))
+		b.WriteString(strconv.Itoa(item.key))
 		b.WriteString(`":`)
-		writeSum(&b, sums.byKey[key])
+		writeSum(&b, item.st)
 	}
 	b.WriteByte('}')
 	return b.String()
 }
 
 func protoItems(sums protoSums) []protoItem {
-	items := make([]protoItem, 0, len(sums.byKey)+1)
-	for key, state := range sums.byKey {
-		items = append(items, protoItem{key: key, n: state.n, numeric: state.numeric})
+	items := make([]protoItem, 0, len(sums.items)+1)
+	for _, item := range sums.items {
+		items = append(items, protoItem{key: item.key, n: item.st.n, numeric: item.st.numeric})
 	}
 	if sums.hasNull {
 		items = append(items, protoItem{keyNull: true, n: sums.nullKey.n, numeric: sums.nullKey.numeric})
@@ -445,12 +497,12 @@ func formatPorts(sums portSums) string {
 }
 
 func formatPortsLimit(sums portSums, limit int) string {
-	if len(sums.byKey) == 0 {
+	if len(sums.items) == 0 {
 		return "[]"
 	}
-	items := make([]portItem, 0, len(sums.byKey))
-	for key, state := range sums.byKey {
-		items = append(items, portItem{key: key, n: state.n, numeric: state.numeric})
+	items := make([]portItem, 0, len(sums.items))
+	for _, item := range sums.items {
+		items = append(items, portItem{key: item.key, n: item.st.n, numeric: item.st.numeric})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		a, b := items[i], items[j]
