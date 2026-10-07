@@ -274,7 +274,7 @@ TSFLOW_ACCESS_CAPABILITY=example.com/cap/tsflow
 TSFLOW_ACCESS_TRUSTED_PROXIES=127.0.0.1/32
 ```
 
-If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address is the peer. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
+If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address, across every `X-Forwarded-For` line, is the peer. If that entry is not an IP address the request is denied. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
 
 Some proxies forward identity and a groups header, and do not forward app capabilities. Set `TSFLOW_ACCESS_GROUPS_HEADER` to that header name. Values are comma-separated and must match the keys in the grant map exactly. Load the map from `TSFLOW_ACCESS_GROUP_GRANTS` or `TSFLOW_ACCESS_GROUP_GRANTS_FILE`, not both. The values use the same grant object as the capability. A mapped group grants access. If a request has both a capability and mapped groups, the tailnet lists are unioned.
 
