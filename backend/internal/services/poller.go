@@ -406,8 +406,15 @@ func (p *Poller) poll(ctx context.Context) error {
 	}
 
 	if p.objectStore != nil {
+		// Objects ingested before a restart hold flows logged up to about
+		// now, so only buckets after this poll are fully in the cache.
+		p.rollingCache.CoverFrom(end)
 		return p.pollObjectStore(ctx, start, end)
 	}
+	// Everything from the cursor on is written by this process, so it also
+	// lands in the cache. The minute holding the cursor may already be
+	// partly in the database from before a restart.
+	p.rollingCache.CoverFrom(start)
 	if !end.After(start) {
 		// The cursor is already inside the delay window, for example right
 		// after a restart or when the delay was raised. Wait for it to settle.
