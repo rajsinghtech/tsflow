@@ -421,6 +421,9 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 	if err := s.commitWrite(tx, tailnetID); err != nil {
 		return 0, fmt.Errorf("failed to commit cleanup: %w", err)
 	}
+	// pruneHourRollups deleted every hour before the cutoff's hour and
+	// rebuilt that hour.
+	s.hourCache.invalidateBelow(tailnetID, (cutoff/hourSeconds)*hourSeconds+hourSeconds)
 	return total, nil
 }
 

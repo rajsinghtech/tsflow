@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"hash/maphash"
 	"runtime"
 	"sync"
 )
@@ -137,52 +138,149 @@ func (s *SQLiteStore) closedHourSlots() chan struct{} {
 	return s.closedHourSem
 }
 
-// readClosedSpans reads closed hours and closed minute chunks with bounded
-// parallel workers and merges each worker's partial groups into grouped.
-// Sums, minimums and map unions do not depend on order, so the result equals
-// one sequential scan.
-func (s *SQLiteStore) readClosedSpans(ctx context.Context, tailnetID string, hours []closedSpan, grouped map[pairGroupKey]*pairGroup) error {
-	if len(hours) == 0 {
-		return nil
+// keyedGroup is one partial group tagged with its key.
+type keyedGroup struct {
+	key   pairGroupKey
+	group *pairGroup
+}
+
+// spanResult is what one closed span contributed: a packed hour (from the
+// cache or freshly read) or, for minute chunks and hours that do not pack,
+// partial groups split by partition.
+type spanResult struct {
+	entry *hourEntry
+	parts [][]keyedGroup
+}
+
+var partitionSeed = maphash.MakeSeed()
+
+// keyPartitionHash places a pair key in a merge partition. Packed hours
+// store it per pair, so it must not change within a process.
+func keyPartitionHash(key pairGroupKey) uint32 {
+	var h maphash.Hash
+	h.SetSeed(partitionSeed)
+	h.WriteString(key.src)
+	h.WriteByte(0)
+	h.WriteString(key.dst)
+	h.WriteByte(0)
+	h.WriteString(key.traffic)
+	return uint32(h.Sum64())
+}
+
+func splitByPartition(grouped map[pairGroupKey]*pairGroup, parts int) [][]keyedGroup {
+	out := make([][]keyedGroup, parts)
+	for key, group := range grouped {
+		p := int(keyPartitionHash(key) % uint32(parts))
+		out[p] = append(out[p], keyedGroup{key: key, group: group})
 	}
-	workers := maxClosedHourReaders
-	if workers > len(hours) {
-		workers = len(hours)
+	return out
+}
+
+// aggregateWithClosedSpans reads closed spans with bounded parallel
+// workers, then merges them with grouped (the snapshot's rows) one key
+// partition per worker, so no merge step is sequential. Sums, minimums and
+// map unions do not depend on order, and partitions share no keys, so the
+// result equals one sequential scan.
+func (s *SQLiteStore) aggregateWithClosedSpans(ctx context.Context, tailnetID string, spans []closedSpan, grouped map[pairGroupKey]*pairGroup) ([]NodePairAggregate, error) {
+	if len(spans) == 0 {
+		return sortedPairAggregates(grouped)
 	}
-	if workers <= 1 {
-		for _, h := range hours {
-			if err := s.readClosedSpan(ctx, tailnetID, h, grouped); err != nil {
-				return err
-			}
+	parts := maxClosedHourReaders
+	results := make([]spanResult, len(spans))
+	for i := range spans {
+		if spans[i].hours {
+			results[i].entry = s.hourCache.get(tailnetID, spans[i].lo)
 		}
-		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	work := make(chan closedSpan)
-	partials := make([]map[pairGroupKey]*pairGroup, workers)
+	if err := runParallel(ctx, cancel, len(spans), parts, func(i int) error {
+		if results[i].entry != nil {
+			return nil
+		}
+		return s.readClosedSpan(ctx, tailnetID, spans[i], parts, &results[i])
+	}); err != nil {
+		return nil, err
+	}
+	mainParts := splitByPartition(grouped, parts)
+	out := make([][]NodePairAggregate, parts)
+	if err := runParallel(ctx, cancel, parts, parts, func(p int) error {
+		merged := make(map[pairGroupKey]*pairGroup, len(mainParts[p])*2)
+		for _, kg := range mainParts[p] {
+			merged[kg.key] = kg.group
+		}
+		for i := range results {
+			if results[i].entry != nil {
+				results[i].entry.mergePartition(merged, uint32(p), uint32(parts))
+				continue
+			}
+			for _, kg := range results[i].parts[p] {
+				if existing := merged[kg.key]; existing != nil {
+					existing.merge(kg.group)
+				} else {
+					merged[kg.key] = kg.group
+				}
+			}
+		}
+		aggs := make([]NodePairAggregate, 0, len(merged))
+		for key, group := range merged {
+			agg, err := group.aggregate(key)
+			if err != nil {
+				return err
+			}
+			aggs = append(aggs, agg)
+		}
+		out[p] = aggs
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	total := 0
+	for _, aggs := range out {
+		total += len(aggs)
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	all := make([]NodePairAggregate, 0, total)
+	for _, aggs := range out {
+		all = append(all, aggs...)
+	}
+	sortPairAggregates(all)
+	return all, nil
+}
+
+// runParallel calls fn(0..n-1) on up to workers goroutines and returns the
+// first error. A failure cancels the rest.
+func runParallel(ctx context.Context, cancel context.CancelFunc, n, workers int, fn func(int) error) error {
+	if workers > n {
+		workers = n
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	work := make(chan int)
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		partials[i] = make(map[pairGroupKey]*pairGroup)
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func(i int) {
+		go func(w int) {
 			defer wg.Done()
-			for h := range work {
-				if errs[i] != nil {
+			for i := range work {
+				if errs[w] != nil {
 					continue
 				}
-				if err := s.readClosedSpan(ctx, tailnetID, h, partials[i]); err != nil {
-					errs[i] = err
+				if err := fn(i); err != nil {
+					errs[w] = err
 					cancel()
 				}
 			}
-		}(i)
+		}(w)
 	}
 feed:
-	for _, h := range hours {
+	for i := 0; i < n; i++ {
 		select {
-		case work <- h:
+		case work <- i:
 		case <-ctx.Done():
 			break feed
 		}
@@ -194,16 +292,10 @@ feed:
 			return err
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	for _, partial := range partials {
-		mergePairGroupMaps(grouped, partial)
-	}
-	return nil
+	return ctx.Err()
 }
 
-func (s *SQLiteStore) readClosedSpan(ctx context.Context, tailnetID string, span closedSpan, grouped map[pairGroupKey]*pairGroup) error {
+func (s *SQLiteStore) readClosedSpan(ctx context.Context, tailnetID string, span closedSpan, parts int, result *spanResult) error {
 	slots := s.closedHourSlots()
 	select {
 	case slots <- struct{}{}:
@@ -215,21 +307,31 @@ func (s *SQLiteStore) readClosedSpan(ctx context.Context, tailnetID string, span
 	if span.hours {
 		query = nodePairHourScanSQL
 	}
+	cacheable := span.hours && s.hourCache != nil
+	var epoch uint64
+	if cacheable {
+		// Take the epoch before the read starts, so a commit that lands
+		// during the read keeps these rows out of the cache.
+		epoch = s.hourCache.start()
+	}
 	rows, err := s.db.QueryContext(ctx, query, tailnetID, span.lo, span.hi)
 	if err != nil {
 		return fmt.Errorf("failed to query node pairs: %w", err)
 	}
-	return readPairRows(rows, grouped, false)
-}
-
-func mergePairGroupMaps(dst, src map[pairGroupKey]*pairGroup) {
-	for key, group := range src {
-		if existing := dst[key]; existing != nil {
-			existing.merge(group)
-		} else {
-			dst[key] = group
-		}
+	grouped := make(map[pairGroupKey]*pairGroup)
+	if err := readPairRows(rows, grouped, false); err != nil {
+		return err
 	}
+	if cacheable {
+		if entry := packHour(tailnetID, span.lo, grouped); entry != nil {
+			s.hourCache.put(entry, epoch)
+			result.entry = entry
+			return nil
+		}
+		s.hourCache.uncacheable.Add(1)
+	}
+	result.parts = splitByPartition(grouped, parts)
+	return nil
 }
 
 // merge adds another partial group, as if its rows had been added here.

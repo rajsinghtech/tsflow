@@ -83,7 +83,7 @@ func TestLoadParsesValidatedEnvironmentValues(t *testing.T) {
 		"TAILSCALE_TAILNET", "VITE_TAILSCALE_TAILNET", "TSFLOW_TAILNETS_FILE",
 		"PORT", "VITE_PORT", "TSFLOW_SERVE", "TSFLOW_FUNNEL", "TSFLOW_S3_PATH_STYLE",
 		"TSFLOW_S3_MAX_OBJECTS_PER_POLL", "TAILSCALE_OAUTH_SCOPES", "TSFLOW_TAGS",
-		"TSFLOW_POLL_INTERVAL", "TSFLOW_INITIAL_BACKFILL", "TSFLOW_POLL_DELAY", "TSFLOW_RETENTION", "TSFLOW_S3_LOOKBACK",
+		"TSFLOW_POLL_INTERVAL", "TSFLOW_INITIAL_BACKFILL", "TSFLOW_POLL_DELAY", "TSFLOW_GRAPH_CACHE_MB", "TSFLOW_RETENTION", "TSFLOW_S3_LOOKBACK",
 		"TSFLOW_ACCESS_CAPABILITY", "TSFLOW_ACCESS_MODE", "TSFLOW_ACCESS_TRUSTED_PROXIES",
 		"TSFLOW_ACCESS_CAPABILITY_HEADER", "TSFLOW_ACCESS_USER_HEADER", "TSFLOW_ACCESS_NAME_HEADER",
 		"TSFLOW_ACCESS_GROUPS_HEADER", "TSFLOW_ACCESS_GROUP_GRANTS",
@@ -149,6 +149,9 @@ func TestValidateRejectsUnsafeDurationsAndObjectStoreValues(t *testing.T) {
 		{name: "negative backfill", mutate: func(c *Config) { c.InitialBackfill = "-1m" }, want: "TSFLOW_INITIAL_BACKFILL"},
 		{name: "zero backfill", mutate: func(c *Config) { c.InitialBackfill = "0s" }, want: "TSFLOW_INITIAL_BACKFILL"},
 		{name: "negative retention", mutate: func(c *Config) { c.Retention = "-1m" }, want: "TSFLOW_RETENTION"},
+		{name: "negative graph cache", mutate: func(c *Config) { c.GraphCacheMB = "-1" }, want: "TSFLOW_GRAPH_CACHE_MB"},
+		{name: "fractional graph cache", mutate: func(c *Config) { c.GraphCacheMB = "1.5" }, want: "TSFLOW_GRAPH_CACHE_MB"},
+		{name: "huge graph cache", mutate: func(c *Config) { c.GraphCacheMB = "99999999" }, want: "TSFLOW_GRAPH_CACHE_MB"},
 		{name: "negative poll delay", mutate: func(c *Config) { c.PollDelay = "-1m" }, want: "TSFLOW_POLL_DELAY"},
 		{name: "invalid poll delay", mutate: func(c *Config) { c.PollDelay = "later" }, want: "TSFLOW_POLL_DELAY"},
 		{name: "invalid S3 lookback", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreLookback = "nope" }, want: "TSFLOW_S3_LOOKBACK"},
@@ -203,5 +206,20 @@ func TestPollDelayDefaultsAndAllowsZero(t *testing.T) {
 	cfg.PollDelay = "0"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("TSFLOW_POLL_DELAY=0 rejected: %v", err)
+	}
+}
+
+func TestGraphCacheBytes(t *testing.T) {
+	t.Setenv("TSFLOW_GRAPH_CACHE_MB", "")
+	cfg := Load()
+	if cfg.GraphCacheMB != "256" {
+		t.Fatalf("default TSFLOW_GRAPH_CACHE_MB = %q, want 256", cfg.GraphCacheMB)
+	}
+	for raw, want := range map[string]int64{"": 256 << 20, "256": 256 << 20, "0": 0, " 64 ": 64 << 20} {
+		cfg.GraphCacheMB = raw
+		got, err := cfg.GraphCacheBytes()
+		if err != nil || got != want {
+			t.Fatalf("GraphCacheBytes(%q) = %d, %v; want %d", raw, got, err, want)
+		}
 	}
 }
