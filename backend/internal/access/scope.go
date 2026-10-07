@@ -15,6 +15,48 @@ type DeviceScope struct {
 	Tags   []string `json:"tags"`
 }
 
+// Matches reports whether a device belongs in this view.
+// A nil scope matches every device. Comparison follows the UI filter:
+// an owner login matches exactly, ignoring case, and a tag matches with
+// or without a tag: prefix. A scope with no owners and no tags matches nothing.
+func (s *DeviceScope) Matches(user string, tags []string) bool {
+	if s == nil {
+		return true
+	}
+	user = strings.ToLower(strings.TrimSpace(user))
+	for _, owner := range s.Owners {
+		want := strings.ToLower(strings.TrimSpace(owner))
+		if want != "" && user == want {
+			return true
+		}
+	}
+	have := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag == "" {
+			continue
+		}
+		have[tag] = struct{}{}
+	}
+	for _, tag := range s.Tags {
+		raw := strings.ToLower(strings.TrimSpace(tag))
+		if raw == "" {
+			continue
+		}
+		bare := strings.TrimPrefix(raw, "tag:")
+		if _, ok := have[raw]; ok {
+			return true
+		}
+		if _, ok := have["tag:"+bare]; ok {
+			return true
+		}
+		if _, ok := have[bare]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // DeviceScopeFor builds the optional UI default.
 // user matches the viewer login. groups matches tags and owners
 // derived from mapping keys the viewer belongs to.

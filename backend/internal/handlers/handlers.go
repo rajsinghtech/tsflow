@@ -170,6 +170,12 @@ func (h *Handlers) parseLimitParam(c *gin.Context, defaultLimit, maxLimit int) i
 
 // derpRelayLabel names Tailscale's DERP pseudo-address. The port on that
 // address is a DERP region, not a device.
+// DERPRelayName labels Tailscale's DERP pseudo-address. The port on that
+// address is a DERP region, not a device.
+func DERPRelayName(nodeIDOrIP string) (string, bool) {
+	return derpRelayLabel(nodeIDOrIP)
+}
+
 func derpRelayLabel(nodeIDOrIP string) (string, bool) {
 	if nodeIDOrIP == derpRelayIP {
 		return derpRelayName, true
@@ -268,4 +274,27 @@ func (h *Handlers) resolveNodeOwner(poller *services.Poller, nodeIDOrIP string) 
 		return ""
 	}
 	return entry.Owner
+}
+
+// ResolveNodeName returns the display name used by the stats routes.
+func (h *Handlers) ResolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeName(poller, nodeIDOrIP)
+}
+
+// ResolveNodeID returns the canonical device id for a stored id or address.
+func (h *Handlers) ResolveNodeID(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeID(poller, nodeIDOrIP)
+}
+
+// ResolveNodeOwner returns the device owner login, or empty when unknown.
+func (h *Handlers) ResolveNodeOwner(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeOwner(poller, nodeIDOrIP)
+}
+
+// Store returns the flow store. It is nil when the process has no database.
+func (h *Handlers) Store() database.Store {
+	if h == nil {
+		return nil
+	}
+	return h.store
 }

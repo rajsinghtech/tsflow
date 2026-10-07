@@ -144,6 +144,7 @@ JSON uses the same fields:
 |----------|-------------|---------|
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
+| `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 
 #### tsnet Serve Mode
 
@@ -367,6 +368,37 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `hostname` is the stored device hostname, or the stored device name when the hostname is blank. A pair row has `srcNodeId`, `srcHostname`, `dstNodeId`, `dstHostname`, the same byte fields, and `flowCount`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
+
+### MCP server
+
+`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
+
+Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes. The REST API still does not enforce the device filter.
+
+Tools are `list_tailnets`, `search_devices`, `get_device`, `top_talkers`, `top_pairs`, `flows_between`, `device_peers`, `device_timeline`, `new_connections`, and `stats_overview`. They read stored rollups. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Windows default to the last hour and stop at 7 days. List results default to 20 rows and stop at 100.
+
+Claude and Cursor can attach the endpoint as a remote MCP server. Point the client at the tailnet URL when tsflow is served with `TSFLOW_SERVE`, or at the trusted proxy when header access is on. The client does not get a new privilege path.
+
+```json
+{
+  "mcpServers": {
+    "tsflow": {
+      "type": "http",
+      "url": "https://tsflow.example.ts.net/mcp"
+    }
+  }
+}
+```
+
+The repository has Kubernetes manifests, not a Helm chart. Set the variable on the container:
+
+```yaml
+env:
+  - name: TSFLOW_MCP_ENABLED
+    value: "true"
+```
+
+`k8s/deployment.yaml` leaves it `false`. `k8s/access-example.yaml` shows it next to the access settings. Keep the Service reachable only from the tailnet or the trusted proxy. The health port used with `TSFLOW_SERVE` does not expose `/mcp`.
 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
