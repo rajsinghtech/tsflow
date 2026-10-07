@@ -25,13 +25,8 @@
 			]);
 			if (cancelled) return;
 
-			const latest = range?.latest ? new Date(range.latest) : null;
-			const earliest = range?.earliest ? new Date(range.earliest) : null;
-			const hasStoredData = !!range && range.count > 0 && earliest && latest;
-
-			if (hasStoredData) {
-				dataSourceStore.showLatestWindow(range);
-			}
+			// Opens the latest window, or keeps the one Analytics handed off.
+			dataSourceStore.enterLatestWindow(range);
 			startAutoRefresh();
 
 			await loadNetworkData();

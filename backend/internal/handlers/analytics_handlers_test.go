@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
 func TestRankedAnalyticsSingleTailnetAndEmpty(t *testing.T) {
@@ -179,7 +180,7 @@ func TestRankedAnalyticsSelectsTailnet(t *testing.T) {
 	}
 }
 
-func TestRankedAnalyticsFiltersTagAndUser(t *testing.T) {
+func TestRankedAnalyticsSearchByTagAndLogin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := setupHandlerTestDB(t)
 	h := &Handlers{store: store}
@@ -203,28 +204,51 @@ func TestRankedAnalyticsFiltersTagAndUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, body := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&user="+url.QueryEscape("ada@example.com"))
+	// The cache sees the API device (tagged, no user) and is hydrated from the
+	// stored metadata, as the poller does on each device refresh.
+	poller := services.NewPoller(nil, store, services.DefaultPollerConfig())
+	poller.GetDeviceCache().Update([]services.Device{
+		{ID: "nBuild001CNTRL", NodeID: "nBuild001CNTRL", Hostname: "build", Addresses: []string{"100.64.0.21"}, Tags: []string{"tag:prod"}},
+		{ID: "nOther01CNTRL", NodeID: "nOther01CNTRL", Hostname: "laptop", User: "bob@example.com", Tags: []string{"tag:ops"}},
+	})
+	metadata, err := store.GetNodeMetadata(context.Background(), database.DefaultTailnetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller.GetDeviceCache().UpsertNodeMetadata(metadata)
+	h.poller = poller
+
+	code, body := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("ada@example.com"))
 	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"owner":"ada@example.com"`) ||
 		!strings.Contains(string(body), `"totalBytes":45`) || strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) || strings.Contains(string(body), `"totalBytes":900`) {
-		t.Fatalf("user filter: %d %s", code, body)
+		t.Fatalf("login search: %d %s", code, body)
 	}
-	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&tag="+url.QueryEscape("tag:prod"))
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("user@ada"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) || strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) {
+		t.Fatalf("user@ search: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&q="+url.QueryEscape("tag:prod"))
 	if code != http.StatusOK || !strings.Contains(string(body), `"srcNodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"totalBytes":45`) ||
-		strings.Contains(string(body), "127.3.3.40") || !strings.Contains(string(body), `"tag":"prod"`) {
-		t.Fatalf("tag filter: %d %s", code, body)
+		strings.Contains(string(body), "127.3.3.40") || strings.Contains(string(body), `"srcNodeId":"nOther01CNTRL"`) || !strings.Contains(string(body), `"q":"tag:prod"`) {
+		t.Fatalf("tag search: %d %s", code, body)
 	}
-	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&tag=prod&trafficTypes=physical")
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&q=tag:prod&trafficTypes=physical")
 	if code != http.StatusOK || !strings.Contains(string(body), `"dstNodeId":"127.3.3.40"`) || !strings.Contains(string(body), `"dstHostname":"DERP relay"`) ||
 		strings.Contains(string(body), `"dstNodeId":"peer"`) {
-		t.Fatalf("physical tag filter: %d %s", code, body)
+		t.Fatalf("physical tag search: %d %s", code, body)
 	}
-	code, _ = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&tag="+url.QueryEscape(strings.Repeat("p", 200)))
+	code, _ = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("tag:"+strings.Repeat("p", 400)))
 	if code != http.StatusBadRequest {
-		t.Fatalf("long tag status=%d", code)
+		t.Fatalf("long search status=%d", code)
+	}
+	// The separate tag and user parameters are not part of the API; q is.
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&tag=ops")
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) {
+		t.Fatalf("tag param should be ignored: %d %s", code, body)
 	}
 
 	plainCode, plainBody := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window)
-	if plainCode != http.StatusOK || strings.Contains(string(plainBody), `"owner"`) || strings.Contains(string(plainBody), `"tag"`) {
+	if plainCode != http.StatusOK || strings.Contains(string(plainBody), `"q":`) || strings.Contains(string(plainBody), `"tag"`) {
 		t.Fatalf("unfiltered talkers changed: %d %s", plainCode, plainBody)
 	}
 }

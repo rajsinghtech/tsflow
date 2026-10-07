@@ -3,7 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -27,8 +29,10 @@ func (s *SQLiteStore) ListRankedTalkers(ctx context.Context, tailnetID string, s
 	if source == "" {
 		return nil, false, nil
 	}
-	statement := fmt.Sprintf(rankedTalkerSQL, source, rankTalkerOrder(sort, ""), rankTalkerOrder(sort, "ranked."))
-	rows, err := s.db.QueryContext(ctx, statement, append(append([]any{}, args...), limit+1, offset, tailnetID)...)
+	filter, filterArgs := rankNodeFilter(query, "node_id")
+	statement := fmt.Sprintf(rankedTalkerSQL, source, filter, rankTalkerOrder(sort, ""), rankTalkerOrder(sort, "ranked."))
+	params := append(append([]any{}, args...), filterArgs...)
+	rows, err := s.db.QueryContext(ctx, statement, append(params, limit+1, offset, tailnetID)...)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to query ranked talkers: %w", err)
 	}
@@ -68,8 +72,10 @@ func (s *SQLiteStore) ListRankedPairs(ctx context.Context, tailnetID string, sta
 	if source == "" {
 		return nil, false, nil
 	}
-	statement := fmt.Sprintf(rankedPairSQL, source, rankPairOrder(sort, ""), rankPairOrder(sort, "ranked."))
-	rows, err := s.db.QueryContext(ctx, statement, append(append([]any{}, args...), limit+1, offset, tailnetID, tailnetID)...)
+	filter, filterArgs := rankNodeFilter(query, "src_node_id", "dst_node_id")
+	statement := fmt.Sprintf(rankedPairSQL, source, filter, rankPairOrder(sort, ""), rankPairOrder(sort, "ranked."))
+	params := append(append([]any{}, args...), filterArgs...)
+	rows, err := s.db.QueryContext(ctx, statement, append(params, limit+1, offset, tailnetID, tailnetID)...)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to query ranked pairs: %w", err)
 	}
@@ -124,6 +130,35 @@ func (s *SQLiteStore) prepareRank(ctx context.Context, tailnetID string, start, 
 		clause, typeArgs,
 	)
 	return source, args, limit, offset, sort, nil
+}
+
+// rankNodeFilter is the WHERE clause for RankQuery.NodeIDs and Match over the
+// given id columns. It always returns a clause so the SQL shape is fixed.
+func rankNodeFilter(query RankQuery, columns ...string) (string, []any) {
+	if !query.Filtered() {
+		return "1 = 1", nil
+	}
+	ids := query.NodeIDs
+	if ids == nil {
+		ids = []string{}
+	}
+	encoded, _ := json.Marshal(ids)
+	match := ""
+	if query.Match != "" {
+		match = "%" + escapeLike(strings.ToLower(query.Match)) + "%"
+	}
+	parts := make([]string, 0, len(columns))
+	args := make([]any, 0, len(columns)*2)
+	for _, column := range columns {
+		parts = append(parts, fmt.Sprintf(
+			"(%[1]s IN (SELECT value FROM json_each(?)) OR (? != '' AND LOWER(%[1]s) LIKE ? ESCAPE '\\'))", column))
+		args = append(args, string(encoded), match, match)
+	}
+	return strings.Join(parts, " OR "), args
+}
+
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
 func normalizeRankQuery(query RankQuery) (int, int, string, error) {
@@ -198,6 +233,7 @@ FROM (
 		WHERE src_node_id != dst_node_id
 		GROUP BY dst_node_id
 	) AS node_bytes
+	WHERE %s
 	GROUP BY node_id
 	ORDER BY %s
 	LIMIT ? OFFSET ?
@@ -225,6 +261,7 @@ FROM (
 	       COALESCE(SUM(tx_bytes), 0) + COALESCE(SUM(rx_bytes), 0) AS total,
 	       COALESCE(SUM(flow_count), 0) AS flows
 	FROM pair_rows
+	WHERE %s
 	GROUP BY src_node_id, dst_node_id
 	ORDER BY %s
 	LIMIT ? OFFSET ?

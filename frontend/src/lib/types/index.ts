@@ -167,15 +167,6 @@ export interface TrafficStatsSummary {
 	totalNodes?: number;
 }
 
-export interface TopTalker {
-	nodeId: string;
-	displayName?: string;
-	owner?: string;
-	txBytes: number;
-	rxBytes: number;
-	totalBytes: number;
-}
-
 export interface TopPair {
 	srcNodeId: string;
 	srcDisplayName?: string;
