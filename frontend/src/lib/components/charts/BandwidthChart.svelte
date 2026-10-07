@@ -4,6 +4,7 @@
 	import { uiStore, filteredNodes, filterStore } from '#lib/stores';
 	import { tailscaleService } from '#lib/services';
 	import { formatBytes, formatBitsRate } from '#lib/utils';
+	import { bytesPerSecond, coveredBucketSeconds } from '#lib/utils/bandwidth-rate';
 
 	// Chart dimensions
 	const height = 80;
@@ -13,11 +14,11 @@
 	let containerWidth = $state(800);
 	let container: HTMLDivElement;
 
-	// Chart data from API (normalized to bytes/sec for display)
-	let chartData = $state<{ time: Date; txBytes: number; rxBytes: number }[]>([]);
+	// Chart data from API (normalized to bytes/sec for display).
+	// seconds is the covered duration used to produce the rate.
+	let chartData = $state<{ time: Date; txBytes: number; rxBytes: number; seconds: number }[]>([]);
 	// Raw totals (un-normalized bytes) for header summary
 	let rawTotals = $state<{ tx: number; rx: number }>({ tx: 0, rx: 0 });
-	let bucketSeconds = $state(60); // Duration of each bucket, from API metadata
 	let isLoading = $state(false);
 	let emptyReason = $state('No bandwidth data available');
 	let bandwidthController: AbortController | null = null;
@@ -120,20 +121,24 @@
 			const response = await tailscaleService.getBandwidth(start, end, nodeId || undefined, signal, trafficTypes);
 			if (signal.aborted) return null;
 			const bs = Math.max(response.metadata?.bucketSeconds || 60, 1);
-			bucketSeconds = bs;
 			// Compute raw totals before normalization
 			const buckets = response.buckets || [];
 			rawTotals = buckets.reduce(
 				(acc, b) => ({ tx: acc.tx + b.txBytes, rx: acc.rx + b.rxBytes }),
 				{ tx: 0, rx: 0 }
 			);
-			// Normalize to bytes/sec for chart display
+			// Normalize to bytes/sec. Partial edge buckets carry their own duration
+			// so the first and last points are not divided as if they were full.
 			chartData = buckets
-				.map((b) => ({
-					time: new Date(b.time),
-					txBytes: b.txBytes / bs,
-					rxBytes: b.rxBytes / bs
-				}))
+				.map((b) => {
+					const seconds = coveredBucketSeconds(bs, b.seconds);
+					return {
+						time: new Date(b.time),
+						txBytes: bytesPerSecond(b.txBytes, bs, b.seconds),
+						rxBytes: bytesPerSecond(b.rxBytes, bs, b.seconds),
+						seconds
+					};
+				})
 				.sort((a, b) => a.time.getTime() - b.time.getTime());
 			emptyReason = 'No bandwidth data in the selected range';
 			return chartData;
@@ -259,8 +264,8 @@
 				const t = d.time.getTime();
 				return t >= rangeStart!.getTime() && t <= rangeEnd!.getTime();
 			});
-			const tx = dataToSum.reduce((sum, d) => sum + d.txBytes * bucketSeconds, 0);
-			const rx = dataToSum.reduce((sum, d) => sum + d.rxBytes * bucketSeconds, 0);
+			const tx = dataToSum.reduce((sum, d) => sum + d.txBytes * d.seconds, 0);
+			const rx = dataToSum.reduce((sum, d) => sum + d.rxBytes * d.seconds, 0);
 			return { tx, rx, total: tx + rx };
 		}
 
@@ -332,8 +337,8 @@
 			time: d.time,
 			txRate: d.txBytes,
 			rxRate: d.rxBytes,
-			txRaw: d.txBytes * bucketSeconds,
-			rxRaw: d.rxBytes * bucketSeconds
+			txRaw: d.txBytes * d.seconds,
+			rxRaw: d.rxBytes * d.seconds
 		};
 	});
 </script>

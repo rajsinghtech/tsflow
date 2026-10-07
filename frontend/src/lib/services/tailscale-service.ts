@@ -88,6 +88,9 @@ export interface BandwidthBucket {
 	time: string;
 	txBytes: number;
 	rxBytes: number;
+	// Seconds of this bucket that fall inside the query window. Partial edge
+	// buckets are shorter than metadata.bucketSeconds.
+	seconds?: number;
 }
 
 export interface BandwidthResponse {

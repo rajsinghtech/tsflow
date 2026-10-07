@@ -156,6 +156,7 @@ TSFlow can embed a Tailscale node and serve itself directly on your tailnet, eli
 | `TSFLOW_TAGS` | Comma-separated ACL tags (e.g. `tag:tsflow`) | - |
 | `TSFLOW_FUNNEL` | Expose via Tailscale Funnel. Refused when more than one tailnet is configured. | `false` |
 | `TSFLOW_STATE_DIR` | tsnet state persistence directory | `./data/tsnet-state` |
+| `TSFLOW_HEALTH_PORT` | Also serve `GET /health`, and nothing else, on this plain port. For Kubernetes probes, which cannot reach the tailnet. Only valid with `TSFLOW_SERVE=true`. | - |
 
 ##### Workload Identity Federation
 
@@ -165,9 +166,10 @@ tsnet mode supports [workload identity federation](https://tailscale.com/kb/1236
 |----------|-------------|---------|
 | `TS_CLIENT_ID` | Federated client ID | - |
 | `TS_ID_TOKEN` | ID token from identity provider | - |
+| `TS_ID_TOKEN_FILE` | File holding the ID token, read once at startup. For tokens that a sidecar or init container writes. | - |
 | `TS_AUDIENCE` | Audience for requesting platform tokens | - |
 
-When `TS_CLIENT_ID` is set, tsflow uses WIF instead of OAuth `ClientSecret` for the tsnet node. The platform token is auto-detected from the runtime environment. Set either `TS_ID_TOKEN` or `TS_AUDIENCE`, not both. You must also set `TSFLOW_TAGS`.
+When `TS_CLIENT_ID` is set, tsflow uses WIF instead of OAuth `ClientSecret` for the tsnet node. The platform token is auto-detected from the runtime environment. Set exactly one of `TS_ID_TOKEN`, `TS_ID_TOKEN_FILE`, or `TS_AUDIENCE`. You must also set `TSFLOW_TAGS`.
 
 tsnet WIF registers the embedded node only. API calls and the flow-log bucket have their own opt-in modes, described in [docs/workload-identity.md](docs/workload-identity.md). `TAILSCALE_AUTH=wif` is the API mode. `TSFLOW_S3_AUTH=aws_default` is the bucket mode. Leaving both unset keeps OAuth, API key, and static S3 keys.
 
@@ -223,6 +225,8 @@ When it is on, a viewer needs a Tailscale application capability, or membership 
 Omit `tailnets`, or include `"*"`, to allow every configured tailnet id. Those ids are the ones from `TSFLOW_TAILNETS_FILE` (`default` when you use the single-tailnet environment variables). A request with no matching capability and no mapped group is `403` with `missing access grant`. `GET /api/tailnets` lists only the tailnets that grant allows. Other data routes return `403` for a tailnet the grant does not include. If several grants match, the tailnet lists are unioned. One grant that allows every tailnet allows every tailnet.
 
 Identity is logged per request only when `TSFLOW_LOG_LEVEL=debug`.
+
+A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For`, so it is not the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
 
 There are two front doors.
 

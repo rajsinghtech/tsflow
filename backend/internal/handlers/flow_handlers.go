@@ -158,6 +158,18 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 	start := st.Format(time.RFC3339)
 	end := et.Format(time.RFC3339)
 	duration := et.Sub(st)
+	// An hour of raw logs is large enough to time out the gateway. Point
+	// callers at the aggregated endpoint and keep short windows working.
+	if duration > MaxNetworkLogWindow {
+		c.Header("Deprecation", "true")
+		c.JSON(http.StatusGone, gin.H{
+			"error":       "network log window is too large",
+			"hint":        "Request at most 30 minutes, or use the aggregated endpoint",
+			"replacement": "/api/flow-logs/aggregated",
+		})
+		return
+	}
+	limit := h.parseLimitParam(c, DefaultNetworkLogLimit, MaxNetworkLogLimit)
 	// Use chunking for queries longer than threshold to prevent response size issues
 	if duration > ChunkThreshold {
 		chunks, err := tn.service.GetNetworkLogsChunkedParallelWithContext(c.Request.Context(), start, end, ChunkSize, MaxParallelChunks)
@@ -237,7 +249,44 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, logs)
+	c.JSON(http.StatusOK, capNetworkLogs(logs, limit))
+}
+
+// capNetworkLogs applies the caller's limit to a Tailscale network-log payload
+// and records how many rows were returned. Payloads that are not the usual
+// {logs: ...} object are left unchanged.
+func capNetworkLogs(payload any, limit int) any {
+	root, ok := payload.(map[string]any)
+	if !ok || limit <= 0 {
+		return payload
+	}
+	switch logs := root["logs"].(type) {
+	case []any:
+		total := len(logs)
+		if total > limit {
+			logs = logs[:limit]
+			root["logs"] = logs
+		}
+		root["metadata"] = gin.H{
+			"limit":     limit,
+			"returned":  len(logs),
+			"total":     total,
+			"truncated": total > limit,
+		}
+	case []tailscale.NetworkFlowLog:
+		total := len(logs)
+		if total > limit {
+			logs = logs[:limit]
+			root["logs"] = logs
+		}
+		root["metadata"] = gin.H{
+			"limit":     limit,
+			"returned":  len(logs),
+			"total":     total,
+			"truncated": total > limit,
+		}
+	}
+	return root
 }
 
 func sampleLogs(logs []any, maxCount int) ([]any, int) {

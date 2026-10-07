@@ -360,6 +360,9 @@ func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
 		}
 	}
+	if pruned := p.deviceCache.PruneFlowOnly(p.config.Retention, time.Now()); pruned > 0 {
+		log.Printf("Pruned %d flow-only devices outside retention", pruned)
+	}
 	log.Printf("Device cache refreshed: %d devices", len(devicesResp.Devices))
 	return nil
 }
@@ -534,6 +537,11 @@ func (p *Poller) cleanup(ctx context.Context) error {
 	}
 	if deleted > 0 {
 		log.Printf("Cleaned up %d old records", deleted)
+	}
+	if p.deviceCache != nil {
+		if pruned := p.deviceCache.PruneFlowOnly(p.config.Retention, time.Now()); pruned > 0 {
+			log.Printf("Pruned %d flow-only devices outside retention", pruned)
+		}
 	}
 	return nil
 }

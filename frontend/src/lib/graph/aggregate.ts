@@ -195,6 +195,17 @@ function aggregateEdges(edges: NetworkLink[], representative: Map<string, string
 	return [...merged.values()];
 }
 
+// Groups in a collapsed model whose members include a searched device.
+export function groupIdsContaining(model: RenderModel, memberIds: ReadonlySet<string>): string[] {
+	if (memberIds.size === 0) return [];
+	const ids: string[] = [];
+	for (const node of model.nodes) {
+		if (node.kind !== 'group') continue;
+		if (node.memberIds.some((id) => memberIds.has(id))) ids.push(node.id);
+	}
+	return ids;
+}
+
 // Collapse by tag, then user, then subnet. A bucket of one stays a device.
 // An expanded group comes back as its members and is not regrouped.
 export function buildRenderModel(

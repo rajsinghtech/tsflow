@@ -338,6 +338,23 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	if cfg.TsnetServe {
+		// Probes cannot reach the tailnet. The health listener serves only
+		// /health, so no data route is exposed off the tailnet. It starts
+		// before tsnet joins so a slow join is not killed as unhealthy.
+		var healthSrv *http.Server
+		if cfg.TsnetHealthPort != "" {
+			healthRouter := gin.New()
+			healthRouter.Use(gin.Recovery())
+			healthRouter.GET("/health", handlerService.HealthCheck)
+			healthSrv = &http.Server{Addr: "0.0.0.0:" + cfg.TsnetHealthPort, Handler: healthRouter, ReadHeaderTimeout: 10 * time.Second}
+			go func() {
+				if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("FATAL health listener failed: %v", err)
+				}
+			}()
+			log.Printf("Health: http://0.0.0.0:%s/health (no other routes)", cfg.TsnetHealthPort)
+		}
+
 		tsnetCtx, tsnetCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		tsnetSrv, err := tsnetserve.New(tsnetCtx, cfg)
 		tsnetCancel()
@@ -372,6 +389,9 @@ func main() {
 		defer shutdownCancel()
 		tlsSrv.Shutdown(shutdownCtx)
 		httpSrv.Shutdown(shutdownCtx)
+		if healthSrv != nil {
+			healthSrv.Shutdown(shutdownCtx)
+		}
 		tsnetSrv.Close()
 	} else {
 		httpSrv := &http.Server{Addr: "0.0.0.0:" + port, Handler: router}

@@ -42,6 +42,10 @@ type BandwidthBucket struct {
 	Time    time.Time `json:"time"`
 	TxBytes int64     `json:"txBytes"`
 	RxBytes int64     `json:"rxBytes"`
+	// Seconds is the portion of this bucket covered by the query window.
+	// Edge buckets are often shorter than the nominal bucket size. Zero means
+	// the caller has not annotated coverage yet.
+	Seconds int64 `json:"seconds,omitempty"`
 }
 
 // NodeBandwidth represents bandwidth for a specific node
@@ -173,8 +177,9 @@ type ObjectIngestResult struct {
 }
 
 // NodeMetadata stores node identities embedded in exported flow-log objects.
-// Tailscale flow logs use n...CNTRL node IDs that are distinct from the live
-// Devices API IDs, so this metadata is required to render historical data.
+// A flow log may identify a node by its stable nodeId or by the legacy numeric
+// id. The device cache merges that record into the API device when they are
+// the same node.
 type NodeMetadata struct {
 	NodeID   string    `json:"nodeId"`
 	Name     string    `json:"name"`
@@ -231,6 +236,7 @@ type Store interface {
 	GetBandwidth(ctx context.Context, tailnetID string, start, end time.Time) ([]BandwidthBucket, error)
 	GetBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
 	GetNodeBandwidth(ctx context.Context, tailnetID string, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
+	GetNodeBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, nodeID string, trafficTypes []string) ([]BandwidthBucket, error)
 
 	// Traffic stats operations
 	UpsertTrafficStats(ctx context.Context, tailnetID string, stats []TrafficStats) error
@@ -243,6 +249,11 @@ type Store interface {
 	FillMissingTrafficStats(ctx context.Context, tailnetID string, start, end time.Time, primary []TrafficStats) ([]TrafficStats, error)
 	GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error)
 	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
+	// ActiveNodeIDs lists the distinct stored node ids with traffic in the
+	// window. A self-pair lists its node once. Ranking limits do not apply.
+	// Ids are as stored, so callers resolve aliases before counting devices.
+	// An empty trafficTypes list leaves out physical rows.
+	ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
 	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
 	// ListRankedTalkers and ListRankedPairs page device and pair totals.
@@ -251,6 +262,11 @@ type Store interface {
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
+	// DistinctPairs lists the distinct stored src/dst pairs across the whole
+	// window. Complete hours come from the hourly rollup. An empty
+	// trafficTypes list leaves out physical rows. Ids are as stored, so
+	// callers resolve aliases before counting pairs.
+	DistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([][2]string, error)
 
 	// Atomic poll commit
 	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error

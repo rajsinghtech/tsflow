@@ -103,7 +103,8 @@ export async function loadStats(currentAttempt = 0) {
 					subnetBytes: 0,
 					physicalBytes: 0,
 					totalFlows: 0,
-					uniquePairs: 0
+					uniquePairs: 0,
+					totalNodes: 0
 				},
 				buckets: [],
 				topTalkers: [],

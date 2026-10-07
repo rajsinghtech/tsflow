@@ -59,6 +59,7 @@ func (h *Handlers) GetRankedTalkers(c *gin.Context) {
 	if talkers == nil {
 		talkers = []database.RankedTalker{}
 	}
+	labelRankedTalkers(talkers)
 	c.JSON(http.StatusOK, gin.H{
 		"talkers":  talkers,
 		"metadata": rankMeta(tn.id, startTime, endTime, query, len(talkers), hasMore),
@@ -100,6 +101,7 @@ func (h *Handlers) GetRankedPairs(c *gin.Context) {
 	if pairs == nil {
 		pairs = []database.RankedPair{}
 	}
+	labelRankedPairs(pairs)
 	c.JSON(http.StatusOK, gin.H{
 		"pairs":    pairs,
 		"metadata": rankMeta(tn.id, startTime, endTime, query, len(pairs), hasMore),

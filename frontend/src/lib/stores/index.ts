@@ -18,6 +18,7 @@ export {
 	filteredNodes,
 	filteredEdges,
 	primaryMatchedNodes,
+	searchMatchedNodeIds,
 	networkStats,
 	lastUpdated,
 	isAutoRefreshing,

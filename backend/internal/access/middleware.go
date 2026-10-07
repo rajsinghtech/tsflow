@@ -17,10 +17,11 @@ func Middleware(cfg config.Access, who WhoIsClient) gin.HandlerFunc {
 	if !cfg.Enabled {
 		return func(c *gin.Context) { c.Next() }
 	}
+	denied := newDenyLimiter(denyLogWindow)
 	return func(c *gin.Context) {
 		ident, err := Resolve(c.Request, cfg, who)
 		if err != nil {
-			debugf(cfg, "denied %s %s remote=%s: %v", c.Request.Method, c.Request.URL.RequestURI(), c.Request.RemoteAddr, err)
+			logDenied(cfg, denied, c.Request, err)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": publicError(err)})
 			return
 		}

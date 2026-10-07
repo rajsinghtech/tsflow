@@ -1,9 +1,11 @@
 import { writable, derived, get } from 'svelte/store';
-import type { Device, DeviceScope, NetworkLog, NetworkNode, NetworkLink, PortStat, TrafficEntry } from '#lib/types';
+import type { Device, DeviceScope, NetworkLog, NetworkNode, NetworkLink } from '#lib/types';
 import { tailscaleService, type AggregatedFlow } from '#lib/services';
+import { convertAggregatedFlowsToNetworkLogs } from '#lib/utils/aggregate-logs';
 import { processNetworkLogs } from '#lib/utils/network-processor';
 import { isValidIPv4, isIPv6 } from '#lib/utils/ip-utils';
 import { nodeMatchesDeviceScope, hasDeviceScope } from '#lib/utils/device-scope';
+import { nodeMatchesSearch } from '#lib/utils/node-search';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
@@ -46,32 +48,6 @@ const nodesWithTrafficConnections = derived(trafficFilteredEdges, ($edges) => {
 	return nodeIds;
 });
 
-// Helper to check if a node matches the search query
-function nodeMatchesSearch(node: NetworkNode, query: string): boolean {
-	if (!query) return true;
-
-	const q = query.toLowerCase().trim();
-
-	if (q.startsWith('tag:')) {
-		const tagSearch = q.substring(4);
-		const nodeTagsLower = node.tags.map((t) => t.toLowerCase().replace('tag:', ''));
-		return nodeTagsLower.some((tag) => tag.includes(tagSearch));
-	} else if (q.startsWith('ip:')) {
-		const ipSearch = q.substring(3);
-		return node.ips.some((ip) => ip.toLowerCase().includes(ipSearch));
-	} else if (q.includes('@')) {
-		return node.user?.toLowerCase().includes(q.replace('user@', '')) || false;
-	} else {
-		const matchesIP = node.ips.some((ip) => ip.toLowerCase().includes(q));
-		const matchesName = node.displayName.toLowerCase().includes(q);
-		const matchesUser = node.user?.toLowerCase().includes(q) || false;
-		const matchesTags = node.tags.some((tag) =>
-			tag.toLowerCase().replace('tag:', '').includes(q)
-		);
-		return matchesIP || matchesName || matchesUser || matchesTags;
-	}
-}
-
 function viewIsNarrowed(search: string, scope: DeviceScope | null): boolean {
 	return search.trim() !== '' || hasDeviceScope(scope);
 }
@@ -84,6 +60,16 @@ export const primaryMatchedNodes = derived(
 			if (!$connectedNodeIds.has(node.id)) return false;
 			return nodeMatchesSearch(node, $filters.search) && nodeMatchesDeviceScope(node, $filters.deviceScope);
 		});
+	}
+);
+
+// Nodes the current search matched directly. Empty when the box is empty,
+// so a blank search does not highlight the whole graph.
+export const searchMatchedNodeIds = derived(
+	[primaryMatchedNodes, debouncedFilterStore],
+	([$primary, $filters]) => {
+		if (!$filters.search.trim()) return new Set<string>();
+		return new Set($primary.map((node) => node.id));
 	}
 );
 
@@ -354,204 +340,10 @@ function formatSyntheticDeviceName(id: string, displayName?: string): string {
 	return raw;
 }
 
-function normalizeProtocolBytes(protocolBytes: Record<string, number> | undefined, fallbackProtocol: number, fallbackBytes: number) {
-	const normalized: Record<string, number> = {};
-	for (const [rawProtocol, bytes] of Object.entries(protocolBytes || {})) {
-		const protocol = Number(rawProtocol);
-		if (!Number.isInteger(protocol) || protocol < 0 || !Number.isFinite(bytes)) continue;
-		normalized[String(protocol)] = bytes;
-	}
-	if (Object.keys(normalized).length === 0 && fallbackBytes > 0) {
-		normalized[String(fallbackProtocol || 0)] = fallbackBytes;
-	}
-	return normalized;
-}
-
-function dominantProtocol(protocolBytes: Record<string, number>, fallbackProtocol: number): number {
-	let dominant = fallbackProtocol || 0;
-	let dominantBytes = -1;
-	for (const [rawProtocol, bytes] of Object.entries(protocolBytes)) {
-		const protocol = Number(rawProtocol);
-		if (!Number.isInteger(protocol) || !Number.isFinite(bytes)) continue;
-		if (bytes > dominantBytes || (bytes === dominantBytes && protocol < dominant)) {
-			dominant = protocol;
-			dominantBytes = bytes;
-		}
-	}
-	return dominant;
-}
-
-function mergePortStats(...lists: (PortStat[] | undefined)[]): PortStat[] {
-	const merged = new Map<string, PortStat>();
-	for (const list of lists) {
-		for (const stat of list || []) {
-			if (stat.port <= 0) continue;
-			const key = `${stat.proto}:${stat.port}`;
-			const existing = merged.get(key);
-			if (existing) existing.bytes += stat.bytes || 0;
-			else merged.set(key, { ...stat });
-		}
-	}
-	return Array.from(merged.values());
-}
-
-function makeAggregateTrafficEntry(
-	src: string,
-	dst: string,
-	bytes: number,
-	packets: number,
-	protocolBytes: Record<string, number>,
-	ports: PortStat[],
-	directional: boolean
-): TrafficEntry {
-	const entry: TrafficEntry = {
-		proto: dominantProtocol(protocolBytes, 0),
-		src,
-		dst,
-		txBytes: bytes,
-		rxBytes: 0,
-		txPkts: packets,
-		rxPkts: 0,
-		ports
-	};
-	if (directional) {
-		entry.directional = { protocolBytes, ports };
-	}
-	return entry;
-}
-
 // Manual retry with reset backoff
 export function retryLoadNetworkData() {
 	clearRetryState();
 	loadNetworkData(0);
-}
-
-// Convert pre-aggregated node-pair flows to NetworkLog format for the graph.
-// Emits two entries per flow (forward + reverse with TX-only) so the network
-// processor's TX-only dedup logic works consistently for aggregate data.
-function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], rangeStart: Date, rangeEnd: Date): NetworkLog[] {
-	// Build two NetworkLogs per flow: one for the forward direction (src→dst)
-	// and one for the reverse (dst→src). Each only carries txBytes.
-	const logsByNode = new Map<string, NetworkLog>();
-	const startISO = rangeStart.toISOString();
-	const endISO = rangeEnd.toISOString();
-
-	function getOrCreateLog(nodeId: string): NetworkLog {
-		let log = logsByNode.get(nodeId);
-		if (!log) {
-			log = {
-				logged: endISO,
-				nodeId,
-				start: startISO,
-				end: endISO,
-				virtualTraffic: [],
-				exitTraffic: [],
-				subnetTraffic: [],
-				physicalTraffic: []
-			};
-			logsByNode.set(nodeId, log);
-		}
-		return log;
-	}
-
-	function pushTraffic(log: NetworkLog, trafficType: string, entry: any) {
-		switch (trafficType) {
-			case 'virtual':
-				log.virtualTraffic.push(entry);
-				break;
-			case 'exit':
-				log.exitTraffic!.push(entry);
-				break;
-			case 'subnet':
-				log.subnetTraffic.push(entry);
-				break;
-			case 'physical':
-				log.physicalTraffic.push(entry);
-				break;
-			default:
-				log.virtualTraffic.push(entry);
-				break;
-		}
-	}
-
-	for (const flow of flows) {
-		const directional = flow.directional === true;
-		if (flow.srcNodeId === flow.dstNodeId) {
-			// A self-pair is represented by one graph endpoint. Collapse both
-			// normalized directions into one TX-only entry so the graph does not
-			// render or count the same node twice.
-			const totalBytes = (flow.totalTxBytes || 0) + (flow.totalRxBytes || 0);
-			if (totalBytes > 0) {
-				const selfLog = getOrCreateLog(flow.srcNodeId);
-				const protocolBytes = directional
-					? normalizeProtocolBytes(flow.txProtocolBytes, flow.protocol || 0, flow.totalTxBytes || 0)
-					: normalizeProtocolBytes(undefined, flow.protocol || 0, totalBytes);
-				if (directional) {
-					const reverseProtocolBytes = normalizeProtocolBytes(flow.rxProtocolBytes, flow.protocol || 0, flow.totalRxBytes || 0);
-					for (const [protocol, bytes] of Object.entries(reverseProtocolBytes)) {
-						protocolBytes[protocol] = (protocolBytes[protocol] || 0) + bytes;
-					}
-				}
-				const ports = directional
-					? mergePortStats(flow.txPorts, flow.rxPorts)
-					: flow.ports || [];
-				pushTraffic(selfLog, flow.trafficType, {
-					...makeAggregateTrafficEntry(
-						flow.srcNodeId,
-						flow.dstNodeId,
-						totalBytes,
-						(flow.totalTxPkts || 0) + (flow.totalRxPkts || 0),
-						protocolBytes,
-						ports,
-						directional
-					)
-				});
-			}
-			continue;
-		}
-
-		// Forward direction: src sent txBytes to dst
-		if (flow.totalTxBytes > 0) {
-			const fwdLog = getOrCreateLog(flow.srcNodeId);
-			const protocolBytes = normalizeProtocolBytes(flow.txProtocolBytes, flow.protocol || 0, flow.totalTxBytes);
-			const ports = directional ? flow.txPorts || [] : flow.ports || [];
-			pushTraffic(
-				fwdLog,
-				flow.trafficType,
-				makeAggregateTrafficEntry(
-					flow.srcNodeId,
-					flow.dstNodeId,
-					flow.totalTxBytes,
-					flow.totalTxPkts || 0,
-					protocolBytes,
-					ports,
-					directional
-				)
-			);
-		}
-
-		// Reverse direction: dst sent rxBytes back to src
-		if (flow.totalRxBytes > 0) {
-			const revLog = getOrCreateLog(flow.dstNodeId);
-			const protocolBytes = normalizeProtocolBytes(flow.rxProtocolBytes, flow.protocol || 0, flow.totalRxBytes);
-			const ports = directional ? flow.rxPorts || [] : [];
-			pushTraffic(
-				revLog,
-				flow.trafficType,
-				makeAggregateTrafficEntry(
-					flow.dstNodeId,
-					flow.srcNodeId,
-					flow.totalRxBytes,
-					flow.totalRxPkts || 0,
-					protocolBytes,
-					ports,
-					directional
-				)
-			);
-		}
-	}
-
-	return Array.from(logsByNode.values());
 }
 
 // Centralized auto-refresh interval (5 minutes)
