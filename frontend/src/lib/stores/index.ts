@@ -41,8 +41,6 @@ export {
 	stopStatsRefresh,
 	statsSummary,
 	statsBuckets,
-	topTalkers,
-	topPairs,
 	topPorts,
 	statsLoading,
 	statsError

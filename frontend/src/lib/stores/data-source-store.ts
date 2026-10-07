@@ -50,7 +50,7 @@ function createDataSourceStore() {
 	let dataRangeRequestToken = 0;
 	let pollerStatusRequest: Promise<PollerStatus | null> | null = null;
 	// Set by a page that sends the user to the traffic graph for the window it
-	// is showing (Rankings "open on the traffic graph"); consumed on entry.
+	// is showing (Analytics "open on the traffic graph"); consumed on entry.
 	let windowHandoff = false;
 
 	const showLatestWindow = (range?: DataRange | null, windowMs = DEFAULT_WINDOW_MS) =>

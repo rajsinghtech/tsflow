@@ -25,7 +25,7 @@
 			]);
 			if (cancelled) return;
 
-			// Opens the latest window, or keeps the one Rankings handed off.
+			// Opens the latest window, or keeps the one Analytics handed off.
 			dataSourceStore.enterLatestWindow(range);
 			startAutoRefresh();
 

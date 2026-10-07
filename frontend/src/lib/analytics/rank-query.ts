@@ -14,6 +14,9 @@ export interface RankQueryParams {
 	sort?: RankSort;
 	// Search text: a name, owner email, address, tag:x, ip:x, or user@x.
 	q?: string;
+	// Counted traffic types. Omitted means the server default, which leaves
+	// out physical (DERP and direct transport) traffic.
+	trafficTypes?: string[];
 }
 
 export interface RankedTalker {
@@ -58,7 +61,8 @@ export function rankQueryPath(resource: 'talkers' | 'pairs', query: RankQueryPar
 	const sort = query.sort ?? 'bytes';
 	const q = query.q?.trim() ?? '';
 	const search = q ? `&q=${encodeURIComponent(q)}` : '';
-	return `/analytics/${resource}?start=${query.start.toISOString()}&end=${query.end.toISOString()}&limit=${limit}&offset=${offset}&sort=${sort}${search}`;
+	const types = query.trafficTypes?.length ? `&trafficTypes=${query.trafficTypes.map(encodeURIComponent).join(',')}` : '';
+	return `/analytics/${resource}?start=${query.start.toISOString()}&end=${query.end.toISOString()}&limit=${limit}&offset=${offset}&sort=${sort}${types}${search}`;
 }
 
 // trafficSearchFor is the traffic-graph search that finds a ranked node: its
@@ -92,4 +96,16 @@ export function rankNodeLabel(hostname: string | undefined, nodeId: string): { t
 	if (name) return { text: name, mono: false };
 	if (/^\d{10,}$/.test(nodeId)) return { text: `${nodeId.slice(0, 8)}\u2026`, mono: true };
 	return { text: nodeId, mono: true };
+}
+
+// subnetRouteHint marks an unnamed private IPv4 endpoint. Those addresses are
+// reached through a subnet router; the backend does not record which one.
+export function subnetRouteHint(hostname: string | undefined, nodeId: string): string {
+	if (hostname?.trim()) return '';
+	const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(nodeId);
+	if (!m) return '';
+	const a = Number(m[1]);
+	const b = Number(m[2]);
+	if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return 'subnet route';
+	return '';
 }

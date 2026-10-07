@@ -1,8 +1,10 @@
 import { get, writable } from 'svelte/store';
 import type { RankedPair, RankedTalker, RankMetadata, RankQueryParams, RankSort } from '#lib/analytics/rank-query';
 import { RANK_PAGE_SIZE } from '#lib/analytics/rank-query';
+import { serviceNameResolver } from '#lib/analytics/service-names';
 import { tailscaleService } from '#lib/services/tailscale-service';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
+import { filterStore } from './filter-store';
 
 export interface RankTableState<T> {
 	rows: T[];
@@ -54,8 +56,12 @@ const talkersSlot: LoadSlot<RankedTalker> = {
 	abort: null,
 	fallbackError: 'Failed to load talkers',
 	fetchRows: async (query, signal) => {
-		const response = await tailscaleService.getRankedTalkers(query, signal);
-		return { rows: response.talkers ?? [], metadata: response.metadata };
+		const [response, nameOf] = await Promise.all([tailscaleService.getRankedTalkers(query, signal), serviceNames()]);
+		const rows = (response.talkers ?? []).map((talker) => ({
+			...talker,
+			hostname: talker.hostname || nameOf(talker.nodeId)
+		}));
+		return { rows, metadata: response.metadata };
 	}
 };
 
@@ -65,8 +71,13 @@ const pairsSlot: LoadSlot<RankedPair> = {
 	abort: null,
 	fallbackError: 'Failed to load pairs',
 	fetchRows: async (query, signal) => {
-		const response = await tailscaleService.getRankedPairs(query, signal);
-		return { rows: response.pairs ?? [], metadata: response.metadata };
+		const [response, nameOf] = await Promise.all([tailscaleService.getRankedPairs(query, signal), serviceNames()]);
+		const rows = (response.pairs ?? []).map((pair) => ({
+			...pair,
+			srcHostname: pair.srcHostname || nameOf(pair.srcNodeId),
+			dstHostname: pair.dstHostname || nameOf(pair.dstNodeId)
+		}));
+		return { rows, metadata: response.metadata };
 	}
 };
 
@@ -76,6 +87,21 @@ export const rankedTalkers = talkerState;
 export const rankedPairs = pairState;
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+// VIP service and DNS record names for endpoints the backend leaves unnamed.
+// Fetched once per full load and reused by page changes.
+let serviceNamesRequest: Promise<(nodeId: string) => string> | null = null;
+const noServiceNames = () => '';
+
+function serviceNames(refresh = false): Promise<(nodeId: string) => string> {
+	if (refresh || !serviceNamesRequest) {
+		serviceNamesRequest = tailscaleService
+			.getServicesRecords()
+			.then((res) => serviceNameResolver(res.services || {}, res.records || {}))
+			.catch(() => noServiceNames);
+	}
+	return serviceNamesRequest;
+}
 
 async function loadSlot<T>(slot: LoadSlot<T>, offset: number): Promise<void> {
 	const gen = ++slot.gen;
@@ -92,8 +118,14 @@ async function loadSlot<T>(slot: LoadSlot<T>, offset: number): Promise<void> {
 		}
 		if (gen !== slot.gen || signal.aborted) return;
 		const { start, end } = get(queryTimeWindow);
+		const trafficTypes = get(filterStore).trafficTypes;
+		if (trafficTypes.length === 0) {
+			// No traffic type selected: nothing is counted, as on the stat cards.
+			slot.state.set({ ...emptyTable(), offset: 0 });
+			return;
+		}
 		const response = await slot.fetchRows(
-			{ start, end, limit: RANK_PAGE_SIZE, offset, sort: get(rankSort), q: get(rankSearch) },
+			{ start, end, limit: RANK_PAGE_SIZE, offset, sort: get(rankSort), q: get(rankSearch), trafficTypes },
 			signal
 		);
 		if (gen !== slot.gen || signal.aborted) return;
@@ -141,6 +173,7 @@ export async function loadRankings(resetOffset = false): Promise<void> {
 	}
 	const talkerOffset = get(rankedTalkers).offset;
 	const pairOffset = get(rankedPairs).offset;
+	void serviceNames(true);
 	await Promise.all([loadRankedTalkers(talkerOffset), loadRankedPairs(pairOffset)]);
 }
 
@@ -159,6 +192,7 @@ export async function setRankSearch(next: string): Promise<void> {
 }
 
 export function clearRankingsData(): void {
+	serviceNamesRequest = null;
 	invalidate(talkersSlot);
 	invalidate(pairsSlot);
 	rankedTalkers.set(emptyTable());
@@ -184,6 +218,7 @@ export function stopRankingsRefresh(): void {
 
 export function resetRankingsForTests(): void {
 	stopRankingsRefresh();
+	serviceNamesRequest = null;
 	rankSort.set('bytes');
 	rankSearch.set('');
 	rankedTalkers.set(emptyTable());

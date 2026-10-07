@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageStep, rankNodeLabel, rankPageLabel, rankQueryPath, trafficSearchFor } from './rank-query';
+import { pageStep, rankNodeLabel, rankPageLabel, rankQueryPath, subnetRouteHint, trafficSearchFor } from './rank-query';
 
 const start = new Date('2026-03-01T12:00:00.000Z');
 const end = new Date('2026-03-01T14:00:00.000Z');
@@ -61,5 +61,25 @@ describe('traffic search for a ranked node', () => {
 	it('uses the device name, or the stored address when there is none', () => {
 		expect(trafficSearchFor('build', 'nBuild001CNTRL')).toBe('build');
 		expect(trafficSearchFor('', '10.20.0.5')).toBe('10.20.0.5');
+	});
+});
+
+describe('traffic types and subnet hints', () => {
+	it('adds selected traffic types before the search', () => {
+		expect(rankQueryPath('pairs', { start, end, trafficTypes: ['virtual', 'subnet'], q: 'alice' })).toBe(
+			'/analytics/pairs?start=2026-03-01T12:00:00.000Z&end=2026-03-01T14:00:00.000Z&limit=20&offset=0&sort=bytes&trafficTypes=virtual,subnet&q=alice'
+		);
+		expect(rankQueryPath('talkers', { start, end, trafficTypes: [] })).not.toContain('trafficTypes');
+	});
+
+	it('marks unnamed private IPv4 endpoints only', () => {
+		expect(subnetRouteHint('', '10.20.0.5')).toBe('subnet route');
+		expect(subnetRouteHint('', '172.16.4.1')).toBe('subnet route');
+		expect(subnetRouteHint('', '192.168.1.9')).toBe('subnet route');
+		expect(subnetRouteHint('', '172.32.0.1')).toBe('');
+		expect(subnetRouteHint('', '100.64.0.10')).toBe('');
+		expect(subnetRouteHint('', '8.8.8.8')).toBe('');
+		expect(subnetRouteHint('', 'fd7a:115c:a1e0::1')).toBe('');
+		expect(subnetRouteHint('db', '10.20.0.5')).toBe('');
 	});
 });

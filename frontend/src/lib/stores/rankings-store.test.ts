@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 import { dataSourceStore } from '#lib/stores/data-source-store';
+import { filterStore } from '#lib/stores/filter-store';
 import type { TailnetInfo } from '#lib/services/tailnet-query';
 import {
 	loadRankedTalkers,
@@ -24,6 +25,7 @@ const calls: string[] = [];
 let tailnetList: TailnetInfo[] = [];
 let failTalkers = false;
 let emptyTalkers = false;
+let ipTalker = false;
 
 const start = new Date('2026-03-01T12:00:00.000Z');
 const end = new Date('2026-03-01T14:00:00.000Z');
@@ -59,6 +61,8 @@ beforeEach(() => {
 	calls.length = 0;
 	failTalkers = false;
 	emptyTalkers = false;
+	ipTalker = false;
+	filterStore.setTrafficTypes(['virtual', 'subnet']);
 	tailnetList = [tailnet('default', 'example.com')];
 	resetRankingsForTests();
 	resetTailnetStateForTests();
@@ -70,9 +74,21 @@ beforeEach(() => {
 		calls.push(url);
 		if (url.includes('/api/tailnets')) return json({ tailnets: tailnetList });
 		if (url.includes('/flow-logs/range')) return json({ earliest: '', latest: '', count: 0 });
+		if (url.includes('/services-records')) {
+			return json({ services: { 'svc:web': { name: 'web-vip', addrs: ['100.100.0.9'] } }, records: {} });
+		}
 		if (url.includes('/analytics/talkers')) {
 			if (failTalkers) return new Response('no', { status: 500 });
 			if (emptyTalkers) return json({ talkers: [], metadata: metadata(url, 0, false) });
+			if (ipTalker) {
+				return json({
+					talkers: [
+						{ nodeId: '100.100.0.9', hostname: '', txBytes: 5, rxBytes: 5, totalBytes: 10, flowCount: 1 },
+						{ nodeId: 'a', hostname: 'laptop', txBytes: 4, rxBytes: 4, totalBytes: 8, flowCount: 1 }
+					],
+					metadata: metadata(url, 2, false)
+				});
+			}
 			const offset = Number(new URL(url, 'http://local').searchParams.get('offset') ?? '0');
 			return json({
 				talkers: [
@@ -117,10 +133,10 @@ describe('ranked analytics requests', () => {
 
 		expect(calls[0]).toBe('/api/tailnets');
 		expect(calls).toContain(
-			`/api/analytics/talkers?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes`
+			`/api/analytics/talkers?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes&trafficTypes=virtual,subnet`
 		);
 		expect(calls).toContain(
-			`/api/analytics/pairs?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes`
+			`/api/analytics/pairs?start=${startISO}&end=${endISO}&limit=20&offset=0&sort=bytes&trafficTypes=virtual,subnet`
 		);
 		expect(calls.some((url) => url.includes('tailnet='))).toBe(false);
 		expect(get(rankedTalkers).rows[0]?.hostname).toBe('laptop');
@@ -188,20 +204,53 @@ describe('ranked analytics requests', () => {
 		expect(talkers).toContain(`start=${startISO}`);
 	});
 
-	it('reloads rankings for the new tailnet and leaves stats and the graph alone', async () => {
+	it('reloads the analytics tables and overview for the new tailnet but not the graph', async () => {
 		tailnetList = [tailnet('default', 'example.com'), tailnet('lab', 'lab.example.com')];
 		setTailnetSearchReader(() => '?tailnet=default');
 		await loadRankedTalkers(0);
 		calls.length = 0;
-		setTailnetPathReader(() => '/rankings');
+		setTailnetPathReader(() => '/analytics');
 
 		await selectTailnet('lab');
 
 		const ranked = calls.filter((url) => url.includes('/api/analytics/'));
 		expect(ranked.length).toBeGreaterThanOrEqual(2);
 		expect(ranked.every((url) => url.includes('tailnet=lab'))).toBe(true);
+		expect(calls.some((url) => url.includes('/api/stats/overview') && url.includes('tailnet=lab'))).toBe(true);
+		expect(calls.some((url) => url.includes('/api/stats/top-'))).toBe(false);
 		expect(calls.some((url) => url.includes('/api/devices'))).toBe(false);
-		expect(calls.some((url) => url.includes('/api/stats/'))).toBe(false);
+	});
+
+	it('sends the selected traffic types and skips the request when none are selected', async () => {
+		filterStore.setTrafficTypes(['virtual', 'subnet', 'exit']);
+		await loadRankings(true);
+		const ranked = calls.filter((url) => url.includes('/api/analytics/'));
+		expect(ranked.every((url) => url.includes('trafficTypes=virtual,subnet,exit'))).toBe(true);
+
+		filterStore.setTrafficTypes([]);
+		calls.length = 0;
+		await loadRankings(true);
+		expect(calls.some((url) => url.includes('/api/analytics/'))).toBe(false);
+		expect(get(rankedTalkers).rows).toEqual([]);
+		expect(get(rankedPairs).rows).toEqual([]);
+		expect(get(rankedTalkers).hasMore).toBe(false);
+	});
+
+	it('names unnamed addresses from VIP services and keeps device names', async () => {
+		ipTalker = true;
+		await loadRankings(true);
+		const rows = get(rankedTalkers).rows;
+		expect(rows.map((row) => [row.nodeId, row.hostname])).toEqual([
+			['100.100.0.9', 'web-vip'],
+			['a', 'laptop']
+		]);
+		expect(calls.filter((url) => url.includes('/services-records'))).toHaveLength(1);
+
+		// A page change reuses the names; a full reload fetches them again.
+		await loadRankedTalkers(20);
+		expect(calls.filter((url) => url.includes('/services-records'))).toHaveLength(1);
+		await loadRankings(false);
+		expect(calls.filter((url) => url.includes('/services-records'))).toHaveLength(2);
 	});
 
 	it('keeps an empty page and records a talker error without dropping pairs', async () => {

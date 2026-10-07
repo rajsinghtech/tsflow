@@ -103,11 +103,7 @@ export function resetTailnetCaches(): void {
 async function reloadCurrentView(): Promise<void> {
 	const path = currentPath();
 	if (path === '/analytics') {
-		await loadStats();
-		return;
-	}
-	if (path === '/rankings') {
-		await loadRankings();
+		await Promise.all([loadStats(), loadRankings(true)]);
 		return;
 	}
 	if (path === '/policy') {
