@@ -14,14 +14,18 @@
 		domainEnd,
 		selectionStart,
 		selectionEnd,
-		onChange
+		onChange,
+		label = 'Traffic overview',
+		tall = true
 	}: {
-		bins: { bytes: number }[];
+		bins: { bytes: number | null }[];
 		domainStart: number;
 		domainEnd: number;
 		selectionStart: number;
 		selectionEnd: number;
 		onChange: (start: number, end: number) => void;
+		label?: string;
+		tall?: boolean;
 	} = $props();
 
 	let chartEl: HTMLDivElement | null = $state(null);
@@ -36,7 +40,7 @@
 
 	const shownStart = $derived(drag?.start ?? selectionStart);
 	const shownEnd = $derived(drag?.end ?? selectionEnd);
-	const maxBytes = $derived(Math.max(1, ...bins.map((bin) => bin.bytes)));
+	const maxBytes = $derived(Math.max(1, ...bins.map((bin) => bin.bytes ?? 0)));
 	const domain = $derived(Math.max(0, domainEnd - domainStart));
 	const overlaps = $derived(domain > 0 && shownEnd > domainStart && shownStart < domainEnd);
 	const leftRatio = $derived(overlaps ? timeToRatio(Math.max(shownStart, domainStart), domainStart, domainEnd) : 0);
@@ -69,7 +73,7 @@
 			pointerId: event.pointerId
 		};
 		drag = { start: shownStart, end: shownEnd };
-		chartEl?.setPointerCapture(event.pointerId);
+		chartEl?.setPointerCapture?.(event.pointerId);
 	}
 
 	function move(event: PointerEvent) {
@@ -104,17 +108,26 @@
 
 <div
 	bind:this={chartEl}
-	class="relative h-16 touch-none rounded-md bg-muted/50"
+	class="relative touch-none rounded-md bg-muted/50 {tall ? 'h-16' : 'h-3'}"
 	role="group"
-	aria-label="Traffic overview"
+	aria-label={label}
 	onpointerdown={(event) => begin('create', event)}
 	onpointermove={move}
 	onpointerup={finish}
 	onpointercancel={finish}
 >
+	{#each bins as bin, index}
+		{#if bin.bytes === null}
+			<div
+				class="time-gap pointer-events-none absolute inset-y-0"
+				style="left: {(index / Math.max(bins.length, 1)) * 100}%; width: {100 / Math.max(bins.length, 1)}%"
+				data-gap="true"
+			></div>
+		{/if}
+	{/each}
 	<svg class="absolute inset-0 h-full w-full" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
 		{#each bins as bin, index}
-			{#if bin.bytes > 0}
+			{#if bin.bytes !== null && bin.bytes > 0}
 				{@const width = 100 / Math.max(bins.length, 1)}
 				{@const height = Math.max(1.5, (bin.bytes / maxBytes) * 34)}
 				<rect

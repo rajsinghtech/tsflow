@@ -74,8 +74,8 @@ describe('traffic bins', () => {
 		);
 		expect(bins).toHaveLength(4);
 		expect(bins[0].bytes).toBe(150);
-		expect(bins[1].bytes).toBe(0);
-		expect(bins[2].bytes).toBe(0);
+		expect(bins[1].bytes).toBeNull();
+		expect(bins[2].bytes).toBeNull();
 		expect(bins[3].bytes).toBe(80);
 	});
 });

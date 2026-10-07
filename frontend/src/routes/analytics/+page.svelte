@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Activity, Network, Link, ArrowUpDown, Loader2, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
+	import { Activity, Network, Link, ArrowUpDown, Loader2, SlidersHorizontal } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import DonutChart from '#lib/components/charts/DonutChart.svelte';
 	import BarChart from '#lib/components/charts/BarChart.svelte';
 	import StatCard from '#lib/components/charts/StatCard.svelte';
-	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 	import {
 		startStatsRefresh,
 		stopStatsRefresh,
@@ -35,9 +34,6 @@
 				dataSourceStore.fetchPollerStatus()
 			]);
 			if (cancelled) return;
-			if (range?.count) {
-				dataSourceStore.showLatestWindow(range);
-			}
 			startStatsRefresh();
 		}
 
@@ -57,7 +53,6 @@
 	let talkerSortDir: 'asc' | 'desc' = $state('desc');
 	let pairSort: PairField = $state('totalBytes');
 	let pairSortDir: 'asc' | 'desc' = $state('desc');
-	let showWindowControls = $state(false);
 	const trafficTypes: { value: TrafficType; label: string; colorClass: string }[] = [
 		{ value: 'virtual', label: 'Virtual', colorClass: 'bg-blue-500' },
 		{ value: 'subnet', label: 'Subnet', colorClass: 'bg-green-500' },
@@ -194,10 +189,6 @@
 		return id;
 	}
 
-	function showLatestStoredWindow() {
-		dataSourceStore.showLatestWindow($dataSourceStore.dataRange, $dataSourceStore.latestWindowMs);
-		loadStats();
-	}
 </script>
 
 <div class="flex h-screen flex-col bg-background">
@@ -216,10 +207,6 @@
 			{#if $statsSummary && $statsSummary.totalFlows === 0 && $hasStoredData}
 				<div class="mb-4 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground sm:mb-6">
 					No traffic data in the selected window.
-					<button
-						class="rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary hover:text-foreground"
-						onclick={showLatestStoredWindow}
-					>Back to live</button> to browse the latest data.
 				</div>
 			{/if}
 			<div class="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
@@ -231,18 +218,6 @@
 
 			<div class="sticky top-0 z-20 mb-4 rounded-lg border border-border bg-card/95 p-2 shadow-sm backdrop-blur sm:mb-5">
 				<div class="flex flex-wrap items-center gap-2">
-					<button
-						type="button"
-						class="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs hover:bg-secondary"
-						class:bg-secondary={showWindowControls}
-						onclick={() => (showWindowControls = !showWindowControls)}
-					>
-						<CalendarClock class="h-3.5 w-3.5" />
-						Window
-					</button>
-
-					<div class="h-6 w-px bg-border"></div>
-
 					<div class="flex items-center gap-1 text-xs text-muted-foreground">
 						<SlidersHorizontal class="h-3.5 w-3.5" />
 						<span class="hidden sm:inline">Traffic</span>
@@ -272,12 +247,6 @@
 						</button>
 					</div>
 				</div>
-
-				{#if showWindowControls}
-					<div class="mt-2 border-t border-border pt-2">
-						<TimelineSlider onWindowChange={loadStats} />
-					</div>
-				{/if}
 			</div>
 
 			<!-- Overview Cards -->

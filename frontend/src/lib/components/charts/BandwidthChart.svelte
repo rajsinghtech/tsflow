@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { queryTimeWindow } from '#lib/stores/data-source-store';
+	import { commitIntent } from '#lib/stores/time-range-history';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { uiStore, filteredNodes, filterStore } from '#lib/stores';
 	import { tailscaleService } from '#lib/services';
@@ -329,6 +330,47 @@
 		hoverIndex = null;
 	}
 
+	let brush: { x0: number; x1: number } | null = $state(null);
+
+	function chartX(event: PointerEvent): number {
+		const svg = event.currentTarget as SVGElement;
+		return event.clientX - svg.getBoundingClientRect().left;
+	}
+
+	function timeFromChartX(x: number): number {
+		const { minTime, maxTime } = chartBounds;
+		if (chartWidth <= 0 || maxTime <= minTime) return minTime;
+		const ratio = Math.min(1, Math.max(0, (x - padding.left) / chartWidth));
+		return minTime + ratio * (maxTime - minTime);
+	}
+
+	function startChartBrush(event: PointerEvent) {
+		if (event.button !== 0 || chartData.length === 0) return;
+		brush = { x0: chartX(event), x1: chartX(event) };
+		(event.currentTarget as SVGElement).setPointerCapture(event.pointerId);
+	}
+
+	function moveChartBrush(event: PointerEvent) {
+		if (!brush) {
+			handleChartMouseMove(event);
+			return;
+		}
+		brush = { x0: brush.x0, x1: chartX(event) };
+	}
+
+	function finishChartBrush(event: PointerEvent) {
+		if (!brush) return;
+		const startX = Math.min(brush.x0, brush.x1);
+		const endX = Math.max(brush.x0, brush.x1);
+		brush = null;
+		hoverIndex = null;
+		if (endX - startX < 4) return;
+		const start = timeFromChartX(startX);
+		const end = timeFromChartX(endX);
+		if (end - start < 5 * 60 * 1000) return;
+		commitIntent({ kind: 'absolute', start: new Date(start), end: new Date(end) });
+	}
+
 	const hoverData = $derived.by(() => {
 		if (hoverIndex === null || !chartData[hoverIndex]) return null;
 		const d = chartData[hoverIndex];
@@ -396,6 +438,7 @@
 				<span class="text-xs text-muted-foreground">
 					{chartData.length} pts
 				</span>
+				<span class="text-[10px] text-muted-foreground/80">Drag to set the window</span>
 			{/if}
 		</div>
 	</div>
@@ -409,8 +452,12 @@
 		<svg
 			width={containerWidth}
 			{height}
-			class="overflow-visible"
-			onmousemove={handleChartMouseMove}
+			class="overflow-visible touch-none"
+			aria-label="Bandwidth. Drag to set the time window."
+			onpointerdown={startChartBrush}
+			onpointermove={moveChartBrush}
+			onpointerup={finishChartBrush}
+			onpointercancel={() => (brush = null)}
 			onmouseleave={handleChartMouseLeave}
 		>
 			<!-- Grid lines -->
@@ -438,6 +485,23 @@
 				<!-- Network total view: show single throughput line -->
 				<path d={txArea} fill="rgb(59, 130, 246)" fill-opacity="0.15" />
 				<path d={txPath} fill="none" stroke="rgb(59, 130, 246)" stroke-width="1.5" />
+			{/if}
+
+			{#if brush}
+				{@const startX = Math.max(padding.left, Math.min(brush.x0, brush.x1))}
+				{@const endX = Math.min(containerWidth - padding.right, Math.max(brush.x0, brush.x1))}
+				{#if endX > startX}
+					<rect
+						x={startX}
+						y={padding.top}
+						width={endX - startX}
+						height={chartHeight}
+						fill="var(--color-primary)"
+						fill-opacity="0.18"
+						stroke="var(--color-primary)"
+						stroke-width="1.5"
+					/>
+				{/if}
 			{/if}
 
 			<!-- Selected range indicator -->

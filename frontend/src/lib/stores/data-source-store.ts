@@ -11,6 +11,8 @@ interface DataSourceState {
 	selectedEnd: Date | null;
 	latestWindowMs: number;
 	followLatest: boolean;
+	// Set when live mode keeps a fixed start ("since 9am") and only the end moves.
+	anchoredStart: Date | null;
 	isLoading: boolean;
 	error: string | null;
 }
@@ -22,6 +24,7 @@ const defaultState: DataSourceState = {
 	selectedEnd: null,
 	latestWindowMs: DEFAULT_WINDOW_MS,
 	followLatest: true,
+	anchoredStart: null,
 	isLoading: false,
 	error: null
 };
@@ -59,8 +62,23 @@ function createDataSourceStore() {
 				selectedStart: start,
 				selectedEnd: end,
 				latestWindowMs: Math.max(MIN_WINDOW_MS, end.getTime() - start.getTime()),
-				followLatest: false
+				followLatest: false,
+				anchoredStart: null
 			})),
+
+		showAnchoredLive: (start: Date) =>
+			update((s) => {
+				const end = hasValidRange(s.dataRange) ? new Date(s.dataRange.latest) : (s.selectedEnd ?? new Date());
+				const startMs = Math.min(start.getTime(), end.getTime() - MIN_WINDOW_MS);
+				return {
+					...s,
+					selectedStart: new Date(startMs),
+					selectedEnd: end,
+					latestWindowMs: Math.max(MIN_WINDOW_MS, end.getTime() - startMs),
+					followLatest: true,
+					anchoredStart: new Date(startMs)
+				};
+			}),
 
 		showLatestWindow: (range?: DataRange | null, windowMs = DEFAULT_WINDOW_MS) =>
 			update((s) => {
@@ -75,7 +93,8 @@ function createDataSourceStore() {
 					selectedStart: selected.start,
 					selectedEnd: selected.end,
 					latestWindowMs: nextWindowMs,
-					followLatest: true
+					followLatest: true,
+					anchoredStart: null
 				};
 			}),
 
@@ -97,9 +116,17 @@ function createDataSourceStore() {
 					update((s) => {
 						const next = { ...s, dataRange };
 						if (s.followLatest && hasValidRange(dataRange)) {
-							const selected = latestWindow(dataRange, s.latestWindowMs);
-							next.selectedStart = selected.start;
-							next.selectedEnd = selected.end;
+							if (s.anchoredStart) {
+								const end = new Date(dataRange.latest);
+								const startMs = Math.min(s.anchoredStart.getTime(), end.getTime() - MIN_WINDOW_MS);
+								next.selectedStart = new Date(startMs);
+								next.selectedEnd = end;
+								next.anchoredStart = new Date(startMs);
+							} else {
+								const selected = latestWindow(dataRange, s.latestWindowMs);
+								next.selectedStart = selected.start;
+								next.selectedEnd = selected.end;
+							}
 						}
 						return next;
 					});

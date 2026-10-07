@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseGoDuration, refreshIntervalMs } from './poll-interval';
+import { nextPollAt, parseGoDuration, pollerIsBehind, refreshIntervalMs } from './poll-interval';
 
 describe('parseGoDuration', () => {
 	it('reads Go duration strings', () => {
@@ -23,5 +23,21 @@ describe('refreshIntervalMs', () => {
 	it('uses the fallback when the status has no interval', () => {
 		expect(refreshIntervalMs(undefined, 60_000)).toBe(60_000);
 		expect(refreshIntervalMs(null)).toBe(5 * 60 * 1000);
+	});
+});
+
+describe('poll freshness', () => {
+	const interval = 5 * 60 * 1000;
+	const last = Date.parse('2026-10-06T22:00:00.000Z');
+
+	it('schedules the next poll one interval after the last one', () => {
+		expect(nextPollAt(last, interval, last + 60_000)).toBe(last + interval);
+		expect(nextPollAt(last, interval, last + interval + 1)).toBe(last + 2 * interval);
+	});
+
+	it('turns stale only after more than two intervals', () => {
+		expect(pollerIsBehind(last, interval, last + interval)).toBe(false);
+		expect(pollerIsBehind(last, interval, last + 2 * interval)).toBe(false);
+		expect(pollerIsBehind(last, interval, last + 2 * interval + 1)).toBe(true);
 	});
 });

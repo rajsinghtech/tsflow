@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink } from 'lucide-svelte';
-	import LiveStatus from './LiveStatus.svelte';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
+	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
-	import { uiStore, networkStats, filteredNodes, lastUpdated, themeStore, statsSummary, viewerStore, dataSourceStore, hasStoredData } from '#lib/stores';
-	import { refreshVisibleData, toggleLive } from '#lib/stores/live-mode';
+	import { uiStore, networkStats, filteredNodes, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
 	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
@@ -58,31 +57,6 @@
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
-
-	let isRefreshing = $state(false);
-
-	async function handleRefresh() {
-		isRefreshing = true;
-		try {
-			await refreshVisibleData();
-		} finally {
-			isRefreshing = false;
-		}
-	}
-
-	function handleKeydown(event: KeyboardEvent) {
-		const target = event.target;
-		if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
-		if (target instanceof HTMLElement && target.closest('.cm-editor')) return;
-		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		if (event.key === 'p' || event.key === 'P') {
-			event.preventDefault();
-			void toggleLive();
-		} else if (event.key === 'r' || event.key === 'R') {
-			event.preventDefault();
-			void handleRefresh();
-		}
-	}
 
 	// Traffic view uses the graph, which includes every node in that window.
 	// Analytics uses the overview active-node count once stats are loaded.
@@ -144,9 +118,10 @@
 	});
 </script>
 
-<svelte:window onclick={handleCloseAbout} onkeydown={handleKeydown} />
+<svelte:window onclick={handleCloseAbout} />
 
-<header class="relative z-30 flex h-12 items-center justify-between gap-1 border-b border-border bg-card px-1 sm:h-14 sm:gap-2 sm:px-4">
+<div class="relative z-30 border-b border-border bg-card">
+<header class="flex h-12 items-center justify-between gap-1 px-1 sm:h-14 sm:gap-2 sm:px-4">
 	<!-- Left section: Logo + primary navigation -->
 	<div class="flex shrink-0 items-center gap-2 sm:gap-3">
 		<div class="relative about-flyout-container shrink-0">
@@ -305,16 +280,6 @@
 			</button>
 		{/if}
 
-		<LiveStatus
-			compact
-			live={$dataSourceStore.followLatest}
-			updatedAt={$lastUpdated}
-			refreshing={isRefreshing}
-			canReturn={$hasStoredData}
-			onBackToLive={() => void toggleLive()}
-			onRefresh={() => void handleRefresh()}
-		/>
-
 		<button
 			onclick={cycleTheme}
 			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
@@ -334,3 +299,7 @@
 		</button>
 	</div>
 </header>
+{#if currentPath !== '/policy'}
+	<TimeControls />
+{/if}
+</div>

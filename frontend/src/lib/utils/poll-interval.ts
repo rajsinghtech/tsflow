@@ -35,3 +35,15 @@ export function refreshIntervalMs(raw: string | null | undefined, fallback = DEF
 	const parsed = parseGoDuration(raw);
 	return Math.max(MIN_REFRESH_MS, parsed ?? fallback);
 }
+
+export function nextPollAt(lastMs: number, intervalMs: number, now: number): number {
+	const interval = Math.max(1_000, intervalMs);
+	const elapsed = now - lastMs;
+	if (elapsed <= interval) return lastMs + interval;
+	return lastMs + (Math.floor(elapsed / interval) + 1) * interval;
+}
+
+export function pollerIsBehind(lastMs: number, intervalMs: number, now: number): boolean {
+	if (!Number.isFinite(lastMs) || lastMs <= 0) return false;
+	return now - lastMs > Math.max(1_000, intervalMs) * 2;
+}

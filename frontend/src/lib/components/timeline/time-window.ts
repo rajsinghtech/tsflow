@@ -28,12 +28,15 @@ export type BrushAction = 'start' | 'end' | 'move' | 'create';
 export interface TrafficPoint {
 	time: number;
 	bytes: number;
+	// How long this sample represents. Missing samples outside these spans are gaps.
+	durationMs?: number;
 }
 
 export interface SparkBin {
 	start: number;
 	end: number;
-	bytes: number;
+	// null means the bin has no samples. That is a coverage gap, not a measured zero.
+	bytes: number | null;
 }
 
 // Same rule as the database coverage read: drop only a short early burst
@@ -126,14 +129,60 @@ export function binTraffic(
 	const bins: SparkBin[] = Array.from({ length: count }, (_, index) => ({
 		start: domainStart + (span * index) / count,
 		end: domainStart + (span * (index + 1)) / count,
-		bytes: 0
+		bytes: null
 	}));
-	for (const bucket of buckets) {
-		if (bucket.time < domainStart || bucket.time >= domainEnd) continue;
-		const index = Math.min(count - 1, Math.floor(((bucket.time - domainStart) / span) * count));
-		bins[index].bytes += bucket.bytes;
+	const ordered = [...buckets].sort((a, b) => a.time - b.time);
+	const fallback = sampleDuration(ordered);
+	for (const bucket of ordered) {
+		const duration = bucket.durationMs && bucket.durationMs > 0 ? bucket.durationMs : fallback;
+		const bucketEnd = bucket.time + duration;
+		if (bucketEnd <= domainStart || bucket.time >= domainEnd) continue;
+		const first = Math.max(0, Math.floor(((bucket.time - domainStart) / span) * count));
+		const last = Math.min(count - 1, Math.floor(((bucketEnd - domainStart) / span) * count - 1e-9));
+		for (let index = first; index <= last; index++) {
+			bins[index].bytes = (bins[index].bytes ?? 0) + bucket.bytes;
+		}
 	}
 	return bins;
+}
+
+function sampleDuration(buckets: TrafficPoint[]): number {
+	let min = Number.POSITIVE_INFINITY;
+	for (let index = 1; index < buckets.length; index++) {
+		const gap = buckets[index].time - buckets[index - 1].time;
+		if (gap > 0 && gap < min) min = gap;
+	}
+	return Number.isFinite(min) ? min : 60 * 60 * 1000;
+}
+
+// The main brush shows context around the selection. A live window stays
+// anchored to the newest data so zooming out does not pin it.
+export function timelineViewDomain(
+	selectionStart: number,
+	selectionEnd: number,
+	coverageStart: number,
+	coverageEnd: number,
+	live: boolean
+): { start: number; end: number } {
+	if (!(coverageEnd > coverageStart)) return { start: coverageStart, end: coverageEnd };
+	const span = Math.max(selectionEnd - selectionStart, MIN_WINDOW_MS);
+	const padded = Math.min(coverageEnd - coverageStart, Math.max(span * 8, 6 * 60 * 60 * 1000));
+	if (live) {
+		const end = coverageEnd;
+		return { start: Math.max(coverageStart, end - padded), end };
+	}
+	const mid = (Math.max(selectionStart, coverageStart) + Math.min(selectionEnd, coverageEnd)) / 2;
+	let start = mid - padded / 2;
+	let end = mid + padded / 2;
+	if (start < coverageStart) {
+		end += coverageStart - start;
+		start = coverageStart;
+	}
+	if (end > coverageEnd) {
+		start -= end - coverageEnd;
+		end = coverageEnd;
+	}
+	return { start: Math.max(coverageStart, start), end: Math.min(coverageEnd, end) };
 }
 
 export function sparklineWindows(start: number, end: number): { start: number; end: number }[] {

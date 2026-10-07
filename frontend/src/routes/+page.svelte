@@ -19,19 +19,9 @@
 
 		async function bootstrap() {
 			isBootstrapping = true;
-			const [range] = await Promise.all([
-				dataSourceStore.fetchDataRange(),
-				dataSourceStore.fetchPollerStatus()
-			]);
+			await Promise.all([dataSourceStore.fetchDataRange(), dataSourceStore.fetchPollerStatus()]);
 			if (cancelled) return;
 
-			const latest = range?.latest ? new Date(range.latest) : null;
-			const earliest = range?.earliest ? new Date(range.earliest) : null;
-			const hasStoredData = !!range && range.count > 0 && earliest && latest;
-
-			if (hasStoredData) {
-				dataSourceStore.showLatestWindow(range);
-			}
 			startAutoRefresh();
 
 			await loadNetworkData();
@@ -73,7 +63,11 @@
 
 	const shortcuts = [
 		{ key: 'R', desc: 'Refresh data' },
-		{ key: 'P', desc: 'Pin the window or go back to live' },
+		{ key: 'P', desc: 'Pin the window or return to live' },
+		{ key: 't ←/→', desc: 'Shift the time range' },
+		{ key: 't − / t z', desc: 'Zoom the range out' },
+		{ key: 't +', desc: 'Zoom the range in' },
+		{ key: 't c', desc: 'Copy a link to this range' },
 		{ key: 'F', desc: 'Toggle filters' },
 		{ key: 'L', desc: 'Toggle log viewer' },
 		{ key: 'Esc', desc: 'Clear selection' },
