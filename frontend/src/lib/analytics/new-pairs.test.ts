@@ -36,5 +36,7 @@ describe('lookbackNotice', () => {
 	});
 	it('handles a store with no data', () => {
 		expect(lookbackNotice({ lookbackComplete: false }, fmt)).toContain('No stored data');
+		// The Me summary sends dataStart: null when nothing is stored.
+		expect(lookbackNotice({ lookbackComplete: false, dataStart: null }, fmt)).toContain('No stored data');
 	});
 });

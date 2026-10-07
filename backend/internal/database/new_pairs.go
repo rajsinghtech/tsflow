@@ -38,6 +38,10 @@ type NewPairQuery struct {
 	Limit        int
 	Offset       int
 	TrafficTypes []string
+	// User, when set, keeps pairs that touch a device with that login.
+	// ExactUser compares the full login, including a tagged device's creator.
+	User      string
+	ExactUser bool
 }
 
 // ListNewPairs returns src/dst pairs that appear in [start, end) and do not
@@ -90,10 +94,17 @@ func (s *SQLiteStore) ListNewPairs(ctx context.Context, tailnetID string, start,
 		return nil, false, err
 	}
 	clause, typeArgs := countedTrafficClause(query.TrafficTypes)
+	idClause, idArgs, err := viewerNodeClause(ctx, tx, tailnetID, query.User, query.ExactUser)
+	if err != nil {
+		return nil, false, err
+	}
+	if idClause == viewerNoneSQL {
+		return nil, false, nil
+	}
 	windowSource, windowArgs := windowPlan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count, bucket AS seen",
 		"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count, min_bucket AS seen",
-		clause, typeArgs,
+		clause+idClause, append(append([]any{}, typeArgs...), idArgs...),
 	)
 	if windowSource == "" {
 		return nil, false, nil

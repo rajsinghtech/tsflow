@@ -386,6 +386,10 @@ Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP a
 
 `physical` is omitted unless `trafficTypes` includes it. Each bucket includes `seconds`, the part of the bucket inside the query window. A DERP peer is labeled `DERP relay`. Selecting a device on the traffic graph opens the same timeline.
 
+### Me
+
+`GET /api/analytics/me` is the signed-in viewer's devices, traffic, per-device timelines, top peers, and new connections. The login is the request identity from WhoIs or the trusted proxy headers. No request parameter sets it. `me=1` on the talker, pair, new-pair, and device-timeline routes uses that same login and compares it in full, including a tagged device's creator login. On the talker and pair routes, `q` then narrows the viewer's own devices. Devices are listed busiest first. Top peers leave out the viewer's own devices and peers with no bytes. New connections leave out a device talking to itself, but keep one between two of the viewer's devices. The response `metadata` carries the same `lookbackStart`, `dataStart`, and `lookbackComplete` fields as `/api/analytics/new-pairs` for `newPairs`. Without a login the route is unauthorized, and the Me tab is not shown. When a login is known, `/` opens Me unless the address has query parameters or the viewer already chose another tab. That choice is stored in `tsflow-last-tab`.
+
 ### MCP server
 
 `TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.

@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { Loader2, AlertCircle, RefreshCw, X, Keyboard } from 'lucide-svelte';
 	import NetworkGraph from '#lib/components/graph/NetworkGraph.svelte';
 	import FilterPanel from '#lib/components/filters/FilterPanel.svelte';
@@ -12,8 +15,23 @@
 	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
 	import { uiStore } from '#lib/stores/ui-store';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
+	import { viewerReady, viewerStore, whenViewerReady } from '#lib/stores/viewer-store';
+	import { landingTarget, readLastTab, rememberTab } from '#lib/analytics/landing';
 
 	let isBootstrapping = $state(true);
+
+	$effect(() => {
+		if (!$viewerReady) return;
+		const target = landingTarget({
+			login: $viewerStore?.login,
+			pathname: page.url.pathname,
+			search: page.url.search,
+			stored: readLastTab()
+		});
+		if (!target || target === page.url.pathname) return;
+		rememberTab(target);
+		void goto(target);
+	});
 
 	onMount(() => {
 		let cancelled = false;
@@ -22,9 +40,18 @@
 			isBootstrapping = true;
 			const [range] = await Promise.all([
 				dataSourceStore.fetchDataRange(),
-				dataSourceStore.fetchPollerStatus()
+				dataSourceStore.fetchPollerStatus(),
+				whenViewerReady()
 			]);
 			if (cancelled) return;
+			// A signed-in viewer landing on / is sent to Me. Do not load the graph first.
+			const redirect = landingTarget({
+				login: get(viewerStore)?.login,
+				pathname: page.url.pathname,
+				search: page.url.search,
+				stored: readLastTab()
+			});
+			if (redirect && redirect !== page.url.pathname) return;
 
 			// Opens the latest window, or keeps the one Analytics handed off.
 			dataSourceStore.enterLatestWindow(range);

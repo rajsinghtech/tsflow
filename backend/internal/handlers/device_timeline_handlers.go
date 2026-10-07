@@ -51,6 +51,25 @@ func (h *Handlers) GetDeviceTimeline(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	scope, ok := h.viewerScope(c)
+	if !ok {
+		return
+	}
+	if scope.active {
+		owns, ownsErr := h.store.ViewerOwns(c.Request.Context(), tn.id, scope.login, nodeID)
+		if ownsErr != nil {
+			if writeContextError(c, ownsErr) {
+				return
+			}
+			log.Printf("ERROR GetDeviceTimeline owner: %v", ownsErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch device timeline"})
+			return
+		}
+		if !owns {
+			c.JSON(http.StatusNotFound, gin.H{"error": "device is not in the viewer scope"})
+			return
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()

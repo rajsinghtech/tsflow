@@ -22,10 +22,12 @@ const (
 // IdentityQuery narrows a ranked read to devices recorded for one tailnet.
 // An empty query leaves the read unfiltered. Tag and User are both required
 // when both are set. Q matches a login, tag, hostname, device name, or address.
+// ExactUser compares the login in full, which is what the viewer "me" scope uses.
 type IdentityQuery struct {
-	Tag  string
-	User string
-	Q    string
+	Tag       string
+	User      string
+	Q         string
+	ExactUser bool
 }
 
 func (q IdentityQuery) active() bool {
@@ -42,9 +44,10 @@ func (q IdentityQuery) normalized() (IdentityQuery, error) {
 	tag = strings.TrimSpace(stripPrefixFold(tag, "tag:"))
 	user = strings.TrimSpace(stripPrefixFold(user, "user@"))
 	return IdentityQuery{
-		Tag:  strings.ToLower(tag),
-		User: strings.ToLower(user),
-		Q:    strings.ToLower(text),
+		Tag:       strings.ToLower(tag),
+		User:      strings.ToLower(user),
+		Q:         strings.ToLower(text),
+		ExactUser: q.ExactUser,
 	}, nil
 }
 
@@ -301,7 +304,7 @@ func (d *mergedDevice) matches(q IdentityQuery) bool {
 	if q.Tag != "" && !tagMatches(d.tags, q.Tag) {
 		return false
 	}
-	if q.User != "" && !textContains(d.owner, q.User) {
+	if q.User != "" && !loginQueryMatches(d.owner, q.User, q.ExactUser) {
 		return false
 	}
 	if q.Q != "" && !deviceContains(d, q.Q) {
@@ -321,6 +324,13 @@ func tagMatches(tags []string, query string) bool {
 		}
 	}
 	return false
+}
+
+func loginQueryMatches(owner, query string, exact bool) bool {
+	if exact {
+		return strings.EqualFold(strings.TrimSpace(owner), strings.TrimSpace(query))
+	}
+	return textContains(owner, query)
 }
 
 func textContains(value, query string) bool {
@@ -343,6 +353,51 @@ func deviceContains(device *mergedDevice, query string) bool {
 		}
 	}
 	return false
+}
+
+const viewerNoneSQL = " AND 0"
+
+// viewerNodeClause limits pair rows to devices owned by user.
+// An empty user leaves the SQL unchanged. No matching device returns
+// viewerNoneSQL so the caller can stop before scanning pairs.
+func viewerNodeClause(ctx context.Context, q queryRower, tailnetID, user string, exact bool) (string, []any, error) {
+	if strings.TrimSpace(user) == "" {
+		return "", nil, nil
+	}
+	identity, err := (IdentityQuery{User: user, ExactUser: exact}).normalized()
+	if err != nil {
+		return "", nil, err
+	}
+	devices, err := loadMergedDevices(ctx, q, tailnetID)
+	if err != nil {
+		return "", nil, err
+	}
+	matched := matchingDevices(devices, identity)
+	seen := map[string]struct{}{}
+	var ids []string
+	for _, device := range matched {
+		for _, id := range device.ids {
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return viewerNoneSQL, nil, nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)*2)
+	for pass := 0; pass < 2; pass++ {
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	return fmt.Sprintf(" AND (src_node_id IN (%s) OR dst_node_id IN (%s))", marks, marks), args, nil
 }
 
 func matchingDevices(devices []*mergedDevice, query IdentityQuery) []*mergedDevice {
