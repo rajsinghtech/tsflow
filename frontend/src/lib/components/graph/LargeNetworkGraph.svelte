@@ -15,7 +15,8 @@
 	import '@xyflow/svelte/dist/style.css';
 	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import type { NetworkLink, NetworkNode as NetworkNodeType } from '#lib/types';
-	import { runElkGraph, runElkLayout } from '#lib/utils/elk-layout';
+	import { runElkGraph, runElkLayout, type LayoutMemory } from '#lib/utils/elk-layout';
+	import { rememberLayout } from '#lib/graph/layout-reuse';
 	import { boundsOf, buildRenderModel, cullToViewport, groupIdsContaining } from '#lib/graph/aggregate';
 	import {
 		GROUP_LAYOUT_OPTIONS,
@@ -65,6 +66,8 @@
 	let flatNodes: Node[] = [];
 	let flatEdges: Edge[] = [];
 	let fitTimer: ReturnType<typeof setTimeout> | null = null;
+	let layoutTimer: ReturnType<typeof setTimeout> | null = null;
+	const collapsedMemory: LayoutMemory = { boxes: new Map() };
 
 	let flowApi: {
 		setViewport: (viewport: { x: number; y: number; zoom: number }, options?: { duration?: number }) => Promise<boolean>;
@@ -173,13 +176,20 @@
 			openIds.length > 0 ? buildRenderModel(nodeList, edgeList, new Set(openIds)) : collapsed;
 		const collapsedFlow = modelToFlow(collapsed, devices, matched);
 		const flow = model === collapsed ? collapsedFlow : modelToFlow(model, devices, matched);
-		const collapsedLaid = await runElkLayout(collapsedFlow.nodes, collapsedFlow.edges, GROUP_LAYOUT_OPTIONS);
+		const collapsedLaid = await runElkLayout(
+			collapsedFlow.nodes,
+			collapsedFlow.edges,
+			GROUP_LAYOUT_OPTIONS,
+			collapsedMemory
+		);
 		if (token !== requestToken) return;
+		rememberLayout(collapsedMemory, collapsedLaid.nodes);
 		let laid = collapsedLaid;
 		if (flow !== collapsedFlow) {
 			laid = await runElkLayout(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
 			if (token !== requestToken) return;
 		}
+		const keptPositions = flow === collapsedFlow && collapsedLaid.reused;
 		const boxes = absoluteBoxes(laid.nodes);
 		const focusIds = new Set(matched);
 		for (const node of laid.nodes) {
@@ -188,7 +198,7 @@
 		}
 		const focus = boxes.filter((box) => focusIds.has(box.id));
 		const fit = focus.length > 0 ? focus : boxes;
-		if (paneWidth > 0 && paneHeight > 0) {
+		if ((!keptPositions || focus.length > 0) && paneWidth > 0 && paneHeight > 0) {
 			const next = getViewportForBounds(
 				fit.length ? boundsOf(fit) : { x: 0, y: 0, width: 1, height: 1 },
 				paneWidth,
@@ -232,7 +242,17 @@
 		const key = `${topologyKey(nodes, edges)}|${[...matched].sort().join(',')}`;
 		if (key === sourceKey) return;
 		sourceKey = key;
-		void layoutGroups(nodes, edges, matched);
+		if (layoutTimer) clearTimeout(layoutTimer);
+		layoutTimer = setTimeout(() => {
+			layoutTimer = null;
+			void layoutGroups(nodes, edges, matched);
+		}, 100);
+	});
+
+	$effect(() => {
+		return () => {
+			if (layoutTimer) clearTimeout(layoutTimer);
+		};
 	});
 
 	async function expandGroup(groupId: string) {

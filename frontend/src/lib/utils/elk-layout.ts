@@ -6,6 +6,9 @@ import {
 	calculateNodeDimensions,
 	type ElkLayoutOptions
 } from '#lib/graph/elk-input';
+import { rememberLayout, tryReuseLayout, type LayoutMemory } from '#lib/graph/layout-reuse';
+
+export type { LayoutMemory };
 
 export type { ElkLayoutOptions };
 
@@ -33,11 +36,17 @@ const elk = new ELK({
 });
 
 const ELK_NODE_LIMIT = FULL_GRAPH_NODE_THRESHOLD;
-const ELK_EDGE_LIMIT = 2500;
+
+export interface LaidOutGraph {
+	nodes: Node[];
+	edges: Edge[];
+	reused: boolean;
+}
 
 function nodesWithElkPositions(nodes: Node[], layoutedGraph: ElkNode): Node[] {
+	const byId = new Map((layoutedGraph.children ?? []).map((child) => [child.id, child]));
 	return nodes.map((node) => {
-		const layoutedNode = layoutedGraph.children?.find((n) => n.id === node.id);
+		const layoutedNode = byId.get(node.id);
 
 		if (!layoutedNode) {
 			return {
@@ -58,29 +67,53 @@ function nodesWithElkPositions(nodes: Node[], layoutedGraph: ElkNode): Node[] {
 	});
 }
 
-// Apply ELK layout to nodes and edges
+function reusedLayout(
+	nodes: Node[],
+	edges: Edge[],
+	options: ElkLayoutOptions,
+	memory: LayoutMemory | undefined
+): LaidOutGraph | null {
+	if (!memory) return null;
+	const reused = tryReuseLayout(nodes, edges, memory, options.nodeSpacing ?? 150);
+	if (!reused) return null;
+	return { ...reused, reused: true };
+}
+
+// Apply ELK layout to nodes and edges.
+// Graphs larger than the grouped-view threshold are not laid out here; the
+// caller switches views. Dense graphs stay on the layered algorithm instead
+// of dropping to a grid.
 export async function applyElkLayout(
 	nodes: Node[],
 	edges: Edge[],
-	options: ElkLayoutOptions = {}
-): Promise<{ nodes: Node[]; edges: Edge[] }> {
+	options: ElkLayoutOptions = {},
+	memory?: LayoutMemory
+): Promise<LaidOutGraph> {
 	if (nodes.length === 0) {
-		return { nodes: [], edges: [] };
+		return { nodes: [], edges: [], reused: false };
 	}
 
-	if (nodes.length > ELK_NODE_LIMIT || edges.length > ELK_EDGE_LIMIT) {
-		return applyFallbackLayout(nodes, edges, options.nodeSpacing || 150);
+	const reused = reusedLayout(nodes, edges, options, memory);
+	if (reused) {
+		if (memory) rememberLayout(memory, reused.nodes);
+		return reused;
+	}
+
+	if (nodes.length > ELK_NODE_LIMIT) {
+		return { ...applyFallbackLayout(nodes, edges, options.nodeSpacing || 150), reused: false };
 	}
 
 	const elkGraph = buildElkLayoutInput(nodes, edges, options);
 
 	try {
 		const layoutedGraph = await elk.layout(elkGraph);
-		return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
+		const laid = { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges, reused: false };
+		if (memory) rememberLayout(memory, laid.nodes);
+		return laid;
 	} catch (error) {
 		const errorContext = workerInitFailed ? ' (worker initialization failed)' : '';
 		console.error(`ELK layout failed${errorContext}, using fallback grid layout:`, error);
-		return applyFallbackLayout(nodes, edges, options.nodeSpacing || 150);
+		return { ...applyFallbackLayout(nodes, edges, options.nodeSpacing || 150), reused: false };
 	}
 }
 
@@ -126,12 +159,16 @@ export async function runElkGraph(graph: ElkNode): Promise<ElkNode> {
 export async function runElkLayout(
 	nodes: Node[],
 	edges: Edge[],
-	options: ElkLayoutOptions = {}
-): Promise<{ nodes: Node[]; edges: Edge[] }> {
+	options: ElkLayoutOptions = {},
+	memory?: LayoutMemory
+): Promise<LaidOutGraph> {
 	if (nodes.length === 0) {
-		return { nodes: [], edges: [] };
+		return { nodes: [], edges: [], reused: false };
 	}
 
+	const reused = reusedLayout(nodes, edges, options, memory);
+	if (reused) return reused;
+
 	const layoutedGraph = await runElkGraph(buildElkLayoutInput(nodes, edges, options));
-	return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges };
+	return { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges, reused: false };
 }
