@@ -24,24 +24,36 @@ const (
 )
 
 func parseWindow(startRaw, endRaw string) (time.Time, time.Time, error) {
+	return parseWindowAt(startRaw, endRaw, time.Now().UTC())
+}
+
+// parseWindowAt resolves a window against now. An end in the future is
+// clamped to now before the default start is derived, so "end only" still
+// means the hour before it. A start in the future is reported as such
+// instead of as an empty or inverted window.
+func parseWindowAt(startRaw, endRaw string, now time.Time) (time.Time, time.Time, error) {
 	var (
 		start time.Time
 		end   time.Time
 		err   error
 	)
+	now = now.UTC()
 	if strings.TrimSpace(endRaw) == "" {
-		end = time.Now().UTC()
+		end = now
 	} else if end, err = time.Parse(time.RFC3339, strings.TrimSpace(endRaw)); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid end time")
+	}
+	if end.After(now) {
+		end = now
 	}
 	if strings.TrimSpace(startRaw) == "" {
 		start = end.Add(-defaultWindow)
 	} else if start, err = time.Parse(time.RFC3339, strings.TrimSpace(startRaw)); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid start time")
 	}
-	now := time.Now()
-	if end.After(now) {
-		end = now
+	if !start.Before(now) {
+		return time.Time{}, time.Time{}, fmt.Errorf("start time %s is in the future (server time is %s)",
+			start.UTC().Format(time.RFC3339), now.Format(time.RFC3339))
 	}
 	if !end.After(start) {
 		return time.Time{}, time.Time{}, fmt.Errorf("end time must be after start time")

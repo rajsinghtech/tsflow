@@ -74,6 +74,9 @@ func (h *Handlers) applyRankSearch(poller *services.Poller, raw string, query *d
 	if direct != "" && strings.Contains(strings.ToLower(derpRelayName), direct) {
 		add(derpRelayIP)
 	}
+	if direct != "" && strings.Contains(strings.ToLower(exitInternetName), direct) {
+		add(services.ExitInternetEndpoint)
+	}
 	query.NodeIDs = ids
 	query.Match = direct
 	return query.Filtered()

@@ -660,8 +660,8 @@ func (s *Service) devices(ctx context.Context, binding handlers.TailnetBinding) 
 }
 
 func (s *Service) present(filter *access.DeviceScope, poller *services.Poller, stored string) (string, string, bool) {
-	if _, ok := handlers.DERPRelayName(stored); ok {
-		return stored, "DERP relay", true
+	if name, ok := handlers.PseudoEndpointName(stored); ok {
+		return stored, name, true
 	}
 	canonical := stored
 	if s != nil && s.h != nil {
@@ -700,7 +700,7 @@ func (s *Service) present(filter *access.DeviceScope, poller *services.Poller, s
 }
 
 func (s *Service) canonical(poller *services.Poller, stored string) string {
-	if _, ok := handlers.DERPRelayName(stored); ok {
+	if _, ok := handlers.PseudoEndpointName(stored); ok {
 		return stored
 	}
 	if s != nil && s.h != nil {
