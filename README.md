@@ -368,6 +368,12 @@ A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, 
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
 
+### Device timeline
+
+`GET /api/analytics/device-timeline` returns one device's bytes over time, split into `virtual`, `subnet`, and `exit`, plus one page of its peers. Pass `node` (the stored device id). `limit` and `offset` page the peers, not the time buckets. Windows of two hours or less use one-minute buckets. Longer windows use hourly buckets, and complete hours are read from `node_pair_hours`.
+
+`physical` is omitted unless `trafficTypes` includes it. Each bucket includes `seconds`, the part of the bucket inside the query window. A DERP peer is labeled `DERP relay`. Selecting a device on the traffic graph opens the same timeline.
+
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`

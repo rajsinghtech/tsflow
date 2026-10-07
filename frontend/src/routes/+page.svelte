@@ -6,6 +6,7 @@
 	import LogViewer from '#lib/components/logs/LogViewer.svelte';
 	import PortDetails from '#lib/components/logs/PortDetails.svelte';
 	import BandwidthChart from '#lib/components/charts/BandwidthChart.svelte';
+	import DeviceTimeline from '#lib/components/charts/DeviceTimeline.svelte';
 	import EdgePolicyInfo from '#lib/components/logs/EdgePolicyInfo.svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
@@ -189,6 +190,8 @@
 					/>
 				</div>
 			{/if}
+
+			<DeviceTimeline />
 
 			<!-- Bottom Panel: Bandwidth Chart + Port Details + Log Viewer -->
 			{#if $uiStore.showLogViewer && !isBootstrapping}
