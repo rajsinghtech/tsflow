@@ -147,6 +147,13 @@ func main() {
 	} else {
 		router = gin.Default()
 	}
+	trustedProxies, err := cfg.ClientIPTrustedProxies()
+	if err == nil {
+		err = middleware.ConfigureClientIP(router, trustedProxies)
+	}
+	if err != nil {
+		log.Fatalf("Invalid trusted proxies: %v", err)
+	}
 
 	router.HandleMethodNotAllowed = true
 
