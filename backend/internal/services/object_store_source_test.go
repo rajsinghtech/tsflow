@@ -64,6 +64,9 @@ func TestNewObjectStoreSourceRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
+// forbiddenTestBody makes the test object store answer GET with 403.
+var forbiddenTestBody = []byte("\x00forbidden")
+
 type testObject struct {
 	key  string
 	body []byte
@@ -142,7 +145,13 @@ func newTestObjectStoreWithPageSize(t *testing.T, objects []testObject, maxObjec
 
 		key := strings.TrimPrefix(path.Clean(r.URL.Path), "/bucket/")
 		body, ok := byKey[key]
-		if !ok {
+		if ok && bytes.Equal(body, forbiddenTestBody) {
+			http.Error(w, "<Error><Code>AccessDenied</Code></Error>", http.StatusForbidden)
+			return
+		}
+		if !ok || body == nil {
+			// A nil body is listed but gone, as when lifecycle rules delete
+			// an object between LIST and GET.
 			http.NotFound(w, r)
 			return
 		}

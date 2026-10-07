@@ -6,14 +6,17 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -63,9 +66,20 @@ type blobClient interface {
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// maxObjectReadAttempts is how many polls an unreadable object is retried
+// before it is recorded as ingested with no flows. Objects are immutable, so
+// a body that is malformed, truncated, or gone stays that way, and retrying
+// it forever pins the poll cursor while the scanned window keeps growing.
+const maxObjectReadAttempts = 5
+
 type ObjectStoreSource struct {
 	cfg   ObjectStoreConfig
 	blobs blobClient
+
+	// readFailures counts consecutive failed reads per object key. It lives
+	// in memory, so a restart grants every object a fresh budget.
+	failuresMu   sync.Mutex
+	readFailures map[string]int
 }
 
 type flowObject struct {
@@ -145,9 +159,33 @@ func (c *s3BlobClient) Open(ctx context.Context, key string) (io.ReadCloser, err
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		var status interface{ HTTPStatusCode() int }
+		if errors.As(err, &status) && status.HTTPStatusCode() == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %w", errObjectGone, err)
+		}
 		return nil, err
 	}
 	return out.Body, nil
+}
+
+// errObjectGone marks an object that was listed but no longer exists, for
+// example after a lifecycle rule deleted it between LIST and GET.
+var errObjectGone = errors.New("object no longer exists")
+
+// objectContentError marks a body that was fetched but cannot be decoded:
+// malformed JSON, a corrupt or truncated compressed stream, or an oversized
+// line. Objects are immutable, so retrying does not repair these.
+type objectContentError struct{ err error }
+
+func (e objectContentError) Error() string { return e.err.Error() }
+func (e objectContentError) Unwrap() error { return e.err }
+
+// permanentReadError reports whether a failed read will fail the same way on
+// every retry. Authorization, throttling, server, and network errors are
+// not permanent: giving up on those would drop data during an outage.
+func permanentReadError(err error) bool {
+	var content objectContentError
+	return errors.Is(err, errObjectGone) || errors.As(err, &content)
 }
 
 func normalizeObjectStoreConfig(cfg ObjectStoreConfig) (ObjectStoreConfig, error) {
@@ -340,6 +378,29 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	for _, obj := range selected {
 		flows, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
 		if err != nil {
+			if ctx.Err() != nil {
+				return processedObjects, processedFlows, lastProcessed, ctx.Err()
+			}
+			// Only failures that repeat on every retry count toward the
+			// budget. Authorization, server, and network errors do not, so an
+			// outage never drops data.
+			if permanentReadError(err) {
+				if attempts := s.recordReadFailure(obj.key); attempts >= maxObjectReadAttempts {
+					log.Printf("Warning: giving up on object %s after %d failed reads; recording it with no flows: %v", obj.key, attempts, err)
+					if err := p.store.CommitObjectIngest(ctx, p.tailnetIDOrDefault(), database.ObjectIngestResult{
+						Key:          obj.key,
+						LastModified: obj.lastModified,
+						Size:         obj.size,
+					}); err != nil {
+						return processedObjects, processedFlows, lastProcessed, err
+					}
+					s.clearReadFailure(obj.key)
+					if obj.logTime.After(lastProcessed) {
+						lastProcessed = obj.logTime
+					}
+					continue
+				}
+			}
 			if firstReadErr == nil {
 				firstReadErr = fmt.Errorf("failed to read %s: %w", obj.key, err)
 			}
@@ -349,6 +410,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 			log.Printf("Warning: skipping unreadable object %s; later objects will still be attempted: %v", obj.key, err)
 			continue
 		}
+		s.clearReadFailure(obj.key)
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
 		}
@@ -386,6 +448,22 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	}
 
 	return processedObjects, processedFlows, lastProcessed, firstReadErr
+}
+
+func (s *ObjectStoreSource) recordReadFailure(key string) int {
+	s.failuresMu.Lock()
+	defer s.failuresMu.Unlock()
+	if s.readFailures == nil {
+		s.readFailures = make(map[string]int)
+	}
+	s.readFailures[key]++
+	return s.readFailures[key]
+}
+
+func (s *ObjectStoreSource) clearReadFailure(key string) {
+	s.failuresMu.Lock()
+	defer s.failuresMu.Unlock()
+	delete(s.readFailures, key)
 }
 
 // hydrateMissingMetadata repairs historical node identities independently of
@@ -484,14 +562,17 @@ func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key str
 	case strings.HasSuffix(key, ".zst") || strings.HasSuffix(key, ".zstd"):
 		zstdReader, err = zstd.NewReader(body)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
+			return nil, nil, objectContentError{fmt.Errorf("failed to create zstd reader: %w", err)}
 		}
 		defer zstdReader.Close()
 		reader = zstdReader
 	case strings.HasSuffix(key, ".gz") || strings.HasSuffix(key, ".gzip"):
 		gzipReader, err = gzip.NewReader(body)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return nil, nil, objectContentError{fmt.Errorf("failed to create gzip reader: %w", err)}
 		}
 		defer gzipReader.Close()
 		reader = gzipReader
@@ -511,7 +592,7 @@ func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key str
 		}
 		var logMap map[string]any
 		if err := json.Unmarshal(line, &logMap); err != nil {
-			return nil, nil, fmt.Errorf("line %d: %w", lineNo, err)
+			return nil, nil, objectContentError{fmt.Errorf("line %d: %w", lineNo, err)}
 		}
 		p.deviceCache.UpsertFromFlowLogMetadata(logMap)
 		for _, node := range extractNodeMetadata(logMap) {
@@ -520,7 +601,10 @@ func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key str
 		flows = append(flows, p.convertMapLog(logMap)...)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, nil, err
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, objectContentError{err}
 	}
 	log.Printf("Read %d flow rows from %s", len(flows), key)
 	nodes := make([]database.NodeMetadata, 0, len(nodeMetadata))
