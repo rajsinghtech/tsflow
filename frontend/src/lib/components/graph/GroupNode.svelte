@@ -12,6 +12,7 @@
 			user?: string;
 			groupKind?: string;
 			memberCount: number;
+			searchMatch?: boolean;
 		};
 	}
 
@@ -25,6 +26,8 @@
 
 <div
 	class="min-w-[180px] w-fit rounded-lg border-2 bg-card shadow-lg shadow-md shadow-black/10"
+	class:ring-2={data.searchMatch}
+	class:ring-primary={data.searchMatch}
 	style="border-color: {nodeColor}"
 >
 	<Handle type="target" position={Position.Top} class="!opacity-0" />
@@ -50,7 +53,9 @@
 		{/if}
 	</div>
 
-	<div class="px-3 py-2 text-xs text-muted-foreground">Click to expand</div>
+	<div class="px-3 py-2 text-xs text-muted-foreground">
+		{data.searchMatch ? 'Matches search' : 'Click to expand'}
+	</div>
 
 	<div class="flex items-center justify-between border-t border-border px-3 py-1.5">
 		<div class="flex items-center gap-1.5">
