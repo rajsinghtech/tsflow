@@ -39,6 +39,12 @@ type RollingWindowCache struct {
 
 	// Maximum age of cached data (default 1 hour)
 	maxAge time.Duration
+
+	// completeFrom is the first bucket this cache holds in full. The
+	// database can hold earlier parts of older buckets, written by a previous
+	// process before a restart, which the cache never saw. Zero means no
+	// floor has been set.
+	completeFrom int64
 }
 
 func NewRollingWindowCache(maxAge time.Duration) *RollingWindowCache {
@@ -60,6 +66,26 @@ type nodePairCacheKey struct {
 	src         string
 	dst         string
 	trafficType string
+}
+
+// CoverFrom records that every write from t onward goes through this cache.
+// The first call wins: the bucket containing t, and anything before it, may
+// already be partly in the database, so coverage checks start at the next
+// whole minute. Later calls are ignored.
+func (c *RollingWindowCache) CoverFrom(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.completeFrom != 0 {
+		return
+	}
+	floor := t.Unix()
+	if rem := floor % 60; rem != 0 {
+		floor += 60 - rem
+	}
+	if floor <= 0 {
+		floor = 1
+	}
+	c.completeFrom = floor
 }
 
 // Update adds new aggregates to the cache and prunes old data
@@ -383,7 +409,9 @@ func (c *RollingWindowCache) GetTrafficStats(start, end time.Time) []database.Tr
 	return result
 }
 
-func cacheWindowCovers(now time.Time, maxAge time.Duration, start, end time.Time, buckets map[int64]struct{}) bool {
+// cacheWindowCovers reports whether every minute bucket of [start, end) is
+// cached. A window that reaches a bucket before completeFrom is not covered.
+func cacheWindowCovers(now time.Time, maxAge time.Duration, completeFrom int64, start, end time.Time, buckets map[int64]struct{}) bool {
 	if !end.After(start) || len(buckets) == 0 {
 		return false
 	}
@@ -402,6 +430,9 @@ func cacheWindowCovers(now time.Time, maxAge time.Duration, start, end time.Time
 	if lastBucket < firstBucket {
 		return false
 	}
+	if firstBucket < completeFrom {
+		return false
+	}
 	for bucket := firstBucket; bucket <= lastBucket; bucket += 60 {
 		if _, ok := buckets[bucket]; !ok {
 			return false
@@ -417,7 +448,7 @@ func (c *RollingWindowCache) HasNodePairDataFor(start, end time.Time) bool {
 	for bucket := range c.nodePairs {
 		buckets[bucket] = struct{}{}
 	}
-	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+	return cacheWindowCovers(time.Now(), c.maxAge, c.completeFrom, start, end, buckets)
 }
 
 func (c *RollingWindowCache) HasBandwidthDataFor(start, end time.Time) bool {
@@ -427,7 +458,7 @@ func (c *RollingWindowCache) HasBandwidthDataFor(start, end time.Time) bool {
 	for bucket := range c.bandwidth {
 		buckets[bucket] = struct{}{}
 	}
-	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+	return cacheWindowCovers(time.Now(), c.maxAge, c.completeFrom, start, end, buckets)
 }
 
 func (c *RollingWindowCache) HasNodeBandwidthDataFor(start, end time.Time, nodeID string) bool {
@@ -439,7 +470,7 @@ func (c *RollingWindowCache) HasNodeBandwidthDataFor(start, end time.Time, nodeI
 			buckets[bucket] = struct{}{}
 		}
 	}
-	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+	return cacheWindowCovers(time.Now(), c.maxAge, c.completeFrom, start, end, buckets)
 }
 
 func (c *RollingWindowCache) HasTrafficStatsDataFor(start, end time.Time) bool {
@@ -449,7 +480,7 @@ func (c *RollingWindowCache) HasTrafficStatsDataFor(start, end time.Time) bool {
 	for bucket := range c.trafficStats {
 		buckets[bucket] = struct{}{}
 	}
-	return cacheWindowCovers(time.Now(), c.maxAge, start, end, buckets)
+	return cacheWindowCovers(time.Now(), c.maxAge, c.completeFrom, start, end, buckets)
 }
 
 // HasDataFor is retained for callers that do not identify a dataset. It only
