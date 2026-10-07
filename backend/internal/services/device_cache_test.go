@@ -274,3 +274,120 @@ func TestDeviceCache_KeepsFlowOnlyDevice(t *testing.T) {
 		t.Fatalf("flow-only device = %+v", devices[0])
 	}
 }
+
+func TestDeviceIsOnline(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	if !deviceIsOnline(true, time.Time{}, now) {
+		t.Fatal("a node connected to control is online even with no lastSeen")
+	}
+	if !deviceIsOnline(false, now.Add(-time.Minute), now) {
+		t.Fatal("a node seen a minute ago is online")
+	}
+	if deviceIsOnline(false, now.Add(-time.Hour), now) {
+		t.Fatal("a node last seen an hour ago is offline")
+	}
+	if deviceIsOnline(false, time.Time{}, now) {
+		t.Fatal("a node with no lastSeen and no control connection is offline")
+	}
+}
+
+func TestDeviceCache_TaggedDeviceKeepsCreatorLogin(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{{
+		ID:                 "nTaggedBuild1CNTRL",
+		NodeID:             "nTaggedBuild1CNTRL",
+		LegacyID:           "5973675649221043",
+		Name:               "build.example.ts.net",
+		Hostname:           "build",
+		User:               "",
+		OS:                 "linux",
+		Addresses:          []string{"100.64.0.21"},
+		Online:             true,
+		ConnectedToControl: true,
+		Created:            "2026-01-02T03:04:05Z",
+		ClientVersion:      "1.84.0",
+		Tags:               []string{"tag:ci"},
+		Authorized:         true,
+	}})
+	cache.UpsertFromFlowLogMetadata(map[string]any{
+		"srcNode": map[string]any{
+			"nodeId":    "5973675649221043",
+			"name":      "build.example.ts.net",
+			"user":      "alice@example.com",
+			"tags":      []any{"tag:ci"},
+			"addresses": []any{"100.64.0.21"},
+		},
+	})
+
+	devices := cache.Devices()
+	if len(devices) != 1 {
+		t.Fatalf("expected one merged device, got %+v", devices)
+	}
+	got := devices[0]
+	if got.ID != "nTaggedBuild1CNTRL" || got.NodeID != "nTaggedBuild1CNTRL" {
+		t.Fatalf("id=%s nodeId=%s", got.ID, got.NodeID)
+	}
+	if got.User != "alice@example.com" {
+		t.Fatalf("creator login was not copied onto the tagged device: %+v", got)
+	}
+	if got.OS != "linux" || !got.Online || !got.ConnectedToControl || got.LastSeen != "" ||
+		got.Created != "2026-01-02T03:04:05Z" || got.ClientVersion != "1.84.0" {
+		t.Fatalf("API detail fields were dropped: %+v", got)
+	}
+	if cache.GetDevice("5973675649221043") == nil || cache.GetDevice("5973675649221043").Owner != "alice@example.com" {
+		t.Fatal("numeric id should resolve to the merged device and its creator login")
+	}
+}
+
+func TestDeviceCache_PruneStaleFlowOnlyDevices(t *testing.T) {
+	cache := NewDeviceCache()
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	cache.Update([]Device{{
+		ID:        "nLive1CNTRL",
+		Name:      "live.example.ts.net",
+		User:      "alice@example.com",
+		OS:        "macOS",
+		Online:    true,
+		Addresses: []string{"100.64.0.1"},
+	}})
+	cache.UpsertNodeMetadata([]database.NodeMetadata{
+		{
+			NodeID:  "111",
+			Name:    "gone.example.ts.net",
+			Owner:   "bob@example.com",
+			IPs:     []string{"100.64.0.50"},
+			Updated: now.Add(-48 * time.Hour),
+		},
+		{
+			NodeID:  "222",
+			Name:    "recent.example.ts.net",
+			Owner:   "carol@example.com",
+			IPs:     []string{"100.64.0.51"},
+			Updated: now.Add(-time.Hour),
+		},
+	})
+
+	if pruned := cache.PruneFlowOnly(0, now); pruned != 0 {
+		t.Fatalf("non-positive retention pruned %d devices", pruned)
+	}
+	pruned := cache.PruneFlowOnly(24*time.Hour, now)
+	if pruned != 1 {
+		t.Fatalf("pruned %d devices, want 1", pruned)
+	}
+	if cache.GetDevice("111") != nil {
+		t.Fatal("flow-only device outside retention should be removed")
+	}
+	if cache.ResolveIP("100.64.0.50") != "100.64.0.50" {
+		t.Fatal("pruned device address should no longer resolve")
+	}
+	if cache.GetDevice("222") == nil || cache.GetDevice("222").Owner != "carol@example.com" {
+		t.Fatal("flow-only device inside retention should stay")
+	}
+	live := cache.GetDevice("nLive1CNTRL")
+	if live == nil || live.OS != "macOS" || !live.Online || live.Owner != "alice@example.com" {
+		t.Fatalf("API device should stay with its detail fields: %+v", live)
+	}
+	if len(cache.Devices()) != 2 {
+		t.Fatalf("device list = %+v", cache.Devices())
+	}
+}

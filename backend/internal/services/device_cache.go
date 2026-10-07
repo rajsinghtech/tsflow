@@ -24,15 +24,41 @@ type DeviceCache struct {
 }
 
 type DeviceCacheEntry struct {
-	ID          string
-	Name        string
-	Hostname    string
-	Owner       string
-	IPs         []string
-	Tags        []string
-	IsTailscale bool
+	ID                 string
+	NodeID             string
+	Name               string
+	Hostname           string
+	Owner              string
+	OS                 string
+	LastSeen           string
+	Created            string
+	ClientVersion      string
+	IPs                []string
+	Tags               []string
+	Online             bool
+	ConnectedToControl bool
+	Authorized         bool
+	IsTailscale        bool
+	// fromAPI is set for devices returned by the Tailscale device list.
+	// Flow-log-only rows are the ones retention is allowed to drop.
+	fromAPI bool
+	// flowSeen is the last time a flow log identified this node.
+	flowSeen time.Time
 	// legacyID is the other id carried by a not-yet-adopted flow node.
 	legacyID string
+}
+
+// deviceIsOnline reports whether a device should be shown as online.
+// A node connected to control often has no lastSeen, so that flag counts.
+func deviceIsOnline(connectedToControl bool, lastSeen, now time.Time) bool {
+	if connectedToControl {
+		return true
+	}
+	if lastSeen.IsZero() {
+		return false
+	}
+	age := now.Sub(lastSeen)
+	return age >= 0 && age < 2*time.Minute
 }
 
 func NewDeviceCache() *DeviceCache {
@@ -70,14 +96,27 @@ func (c *DeviceCache) Update(devices []Device) {
 		if d.ID == "" {
 			continue
 		}
+		nodeID := d.NodeID
+		if nodeID == "" && isStableNodeID(d.ID) {
+			nodeID = d.ID
+		}
 		entry := &DeviceCacheEntry{
-			ID:          d.ID,
-			Name:        d.Name,
-			Hostname:    d.Hostname,
-			Owner:       d.User,
-			IPs:         append([]string(nil), d.Addresses...),
-			Tags:        append([]string(nil), d.Tags...),
-			IsTailscale: true,
+			ID:                 d.ID,
+			NodeID:             nodeID,
+			Name:               d.Name,
+			Hostname:           d.Hostname,
+			Owner:              d.User,
+			OS:                 d.OS,
+			LastSeen:           d.LastSeen,
+			Created:            d.Created,
+			ClientVersion:      d.ClientVersion,
+			IPs:                append([]string(nil), d.Addresses...),
+			Tags:               append([]string(nil), d.Tags...),
+			Online:             d.Online,
+			ConnectedToControl: d.ConnectedToControl,
+			Authorized:         d.Authorized,
+			IsTailscale:        true,
+			fromAPI:            true,
 		}
 		c.idToDevice[d.ID] = entry
 		c.aliasLocked(d.LegacyID, d.ID)
@@ -136,6 +175,8 @@ func (c *DeviceCache) UpsertNodeMetadata(nodes []database.NodeMetadata) {
 			IPs:         append([]string(nil), node.IPs...),
 			Tags:        append([]string(nil), node.Tags...),
 			IsTailscale: true,
+			Authorized:  true,
+			flowSeen:    node.Updated,
 		})
 	}
 	c.lastRefresh = time.Now()
@@ -163,6 +204,8 @@ func entryFromFlowNode(node map[string]any) *DeviceCacheEntry {
 		IPs:         stringList(node["addresses"]),
 		Tags:        stringList(node["tags"]),
 		IsTailscale: true,
+		Authorized:  true,
+		flowSeen:    time.Now(),
 		legacyID:    legacy,
 	}
 }
@@ -229,6 +272,9 @@ func (c *DeviceCache) adoptLocked(incoming *DeviceCacheEntry) {
 		return
 	}
 	incoming.legacyID = ""
+	if incoming.NodeID == "" && isStableNodeID(incoming.ID) {
+		incoming.NodeID = incoming.ID
+	}
 	c.idToDevice[incoming.ID] = incoming
 	c.aliasLocked(legacy, incoming.ID)
 	for _, ip := range incoming.IPs {
@@ -257,19 +303,51 @@ func (c *DeviceCache) matchLocked(incoming *DeviceCacheEntry) *DeviceCacheEntry 
 }
 
 func (c *DeviceCache) mergeLocked(existing, incoming *DeviceCacheEntry, legacy string) {
+	// Tagged API devices often have an empty user. The creator login is then
+	// only on the flow-log row, and has to survive onto the merged device.
+	if existing.Owner == "" {
+		existing.Owner = incoming.Owner
+	}
 	if existing.Name == "" {
 		existing.Name = incoming.Name
 	}
 	if existing.Hostname == "" {
 		existing.Hostname = incoming.Hostname
 	}
-	if existing.Owner == "" {
-		existing.Owner = incoming.Owner
+	if existing.OS == "" {
+		existing.OS = incoming.OS
+	}
+	if existing.LastSeen == "" {
+		existing.LastSeen = incoming.LastSeen
+	}
+	if existing.Created == "" {
+		existing.Created = incoming.Created
+	}
+	if existing.ClientVersion == "" {
+		existing.ClientVersion = incoming.ClientVersion
+	}
+	if existing.NodeID == "" {
+		existing.NodeID = incoming.NodeID
+	}
+	if incoming.Online {
+		existing.Online = true
+	}
+	if incoming.ConnectedToControl {
+		existing.ConnectedToControl = true
+	}
+	if !existing.fromAPI && incoming.Authorized {
+		existing.Authorized = true
+	}
+	if incoming.flowSeen.After(existing.flowSeen) {
+		existing.flowSeen = incoming.flowSeen
 	}
 	existing.IPs = unionStrings(existing.IPs, incoming.IPs)
 	existing.Tags = unionStrings(existing.Tags, incoming.Tags)
 	if next := preferredID(existing.ID, incoming.ID); next != existing.ID {
 		c.rekeyLocked(existing, next)
+	}
+	if existing.NodeID == "" && isStableNodeID(existing.ID) {
+		existing.NodeID = existing.ID
 	}
 	c.aliasLocked(incoming.ID, existing.ID)
 	c.aliasLocked(legacy, existing.ID)
@@ -380,20 +458,67 @@ func unionStrings(base, extra []string) []string {
 	return out
 }
 
+// PruneFlowOnly drops flow-log devices that are not in the Tailscale device
+// list and have not been seen in a flow inside the retention window.
+// API devices are left alone. A non-positive retention keeps every device.
+func (c *DeviceCache) PruneFlowOnly(retention time.Duration, now time.Time) int {
+	if c == nil || retention <= 0 || now.IsZero() {
+		return 0
+	}
+	cutoff := now.Add(-retention)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	removed := 0
+	for id, entry := range c.idToDevice {
+		if entry.fromAPI || entry.flowSeen.IsZero() || !entry.flowSeen.Before(cutoff) {
+			continue
+		}
+		c.removeLocked(id, entry)
+		removed++
+	}
+	return removed
+}
+
+func (c *DeviceCache) removeLocked(id string, entry *DeviceCacheEntry) {
+	delete(c.idToDevice, id)
+	for alias, canonical := range c.aliases {
+		if alias == id || canonical == id {
+			delete(c.aliases, alias)
+		}
+	}
+	for ip, mapped := range c.ipToDevice {
+		if mapped == entry {
+			delete(c.ipToDevice, ip)
+		}
+	}
+}
+
 func (c *DeviceCache) Devices() []Device {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	devices := make([]Device, 0, len(c.idToDevice))
 	for _, entry := range c.idToDevice {
+		nodeID := entry.NodeID
+		if nodeID == "" && isStableNodeID(entry.ID) {
+			nodeID = entry.ID
+		}
 		devices = append(devices, Device{
-			ID:         entry.ID,
-			Name:       entry.Name,
-			Hostname:   entry.Hostname,
-			User:       entry.Owner,
-			Addresses:  append([]string(nil), entry.IPs...),
-			Tags:       append([]string(nil), entry.Tags...),
-			Authorized: true,
+			ID:                 entry.ID,
+			NodeID:             nodeID,
+			Name:               entry.Name,
+			Hostname:           entry.Hostname,
+			User:               entry.Owner,
+			OS:                 entry.OS,
+			Addresses:          append([]string(nil), entry.IPs...),
+			Online:             entry.Online,
+			ConnectedToControl: entry.ConnectedToControl,
+			LastSeen:           entry.LastSeen,
+			Authorized:         entry.Authorized,
+			Created:            entry.Created,
+			ClientVersion:      entry.ClientVersion,
+			Tags:               append([]string(nil), entry.Tags...),
 		})
 	}
 	return devices

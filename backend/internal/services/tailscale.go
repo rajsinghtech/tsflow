@@ -49,6 +49,7 @@ type Device struct {
 	OS                        string   `json:"os"`
 	Addresses                 []string `json:"addresses"`
 	Online                    bool     `json:"online"`
+	ConnectedToControl        bool     `json:"connectedToControl"`
 	LastSeen                  string   `json:"lastSeen"`
 	Authorized                bool     `json:"authorized"`
 	KeyExpiryDisabled         bool     `json:"keyExpiryDisabled"`
@@ -272,25 +273,37 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 		var ourDevices []Device
 		for _, device := range devices {
 			lastSeen := ""
-			online := false
+			var seenAt time.Time
 			if device.LastSeen != nil {
-				lastSeen = device.LastSeen.Time.Format(time.RFC3339)
-				online = !device.LastSeen.IsZero() && time.Since(device.LastSeen.Time) < 2*time.Minute
+				seenAt = device.LastSeen.Time
+				if !seenAt.IsZero() {
+					lastSeen = seenAt.Format(time.RFC3339)
+				}
+			}
+			created := ""
+			if !device.Created.Time.IsZero() {
+				created = device.Created.Time.Format(time.RFC3339)
 			}
 			canonical, legacy := preferStableDeviceID(device.ID, device.NodeID)
+			nodeID := device.NodeID
+			if nodeID == "" && isStableNodeID(canonical) {
+				nodeID = canonical
+			}
 			ourDevices = append(ourDevices, Device{
 				ID:                        canonical,
+				NodeID:                    nodeID,
 				LegacyID:                  legacy,
 				Name:                      device.Name,
 				Hostname:                  device.Hostname,
 				User:                      device.User,
 				OS:                        device.OS,
 				Addresses:                 device.Addresses,
-				Online:                    online,
+				Online:                    deviceIsOnline(device.ConnectedToControl, seenAt, time.Now()),
+				ConnectedToControl:        device.ConnectedToControl,
 				LastSeen:                  lastSeen,
 				Authorized:                device.Authorized,
 				KeyExpiryDisabled:         device.KeyExpiryDisabled,
-				Created:                   device.Created.Time.Format(time.RFC3339),
+				Created:                   created,
 				MachineKey:                device.MachineKey,
 				NodeKey:                   device.NodeKey,
 				ClientVersion:             device.ClientVersion,
@@ -322,10 +335,16 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 	}
 	for i := range response.Devices {
 		device := &response.Devices[i]
-		canonical, legacy := preferStableDeviceID(device.ID, device.NodeID)
+		stableID := device.NodeID
+		canonical, legacy := preferStableDeviceID(device.ID, stableID)
 		device.ID = canonical
 		device.LegacyID = legacy
-		device.NodeID = ""
+		if stableID == "" && isStableNodeID(canonical) {
+			stableID = canonical
+		}
+		device.NodeID = stableID
+		seenAt, _ := time.Parse(time.RFC3339, device.LastSeen)
+		device.Online = deviceIsOnline(device.ConnectedToControl, seenAt, time.Now())
 	}
 
 	return &response, nil

@@ -38,6 +38,18 @@ describe('nodeMatchesSearch user login', () => {
 		).toBe(true);
 	});
 
+	it('matches the creator login on a tagged device', () => {
+		const tagged = node({
+			displayName: 'build',
+			user: 'alice@example.com',
+			tags: ['tag:ci'],
+			ips: ['100.64.0.21']
+		});
+		expect(nodeMatchesSearch(tagged, 'alice@example.com')).toBe(true);
+		expect(nodeMatchesSearch(tagged, 'Alice@Example.com')).toBe(true);
+		expect(nodeMatchesSearch(node({ displayName: 'build', tags: ['tag:ci'] }), 'alice@example.com')).toBe(false);
+	});
+
 	it('does not match a different login', () => {
 		expect(nodeMatchesSearch(alice, 'bob@example.com')).toBe(false);
 	});
