@@ -125,7 +125,8 @@
 
 			<!-- Floating controls panel — left side, vertically centered -->
 			{#if $policyGraph}
-				<div class="pointer-events-none absolute inset-y-0 left-2 flex items-center">
+				<!-- bottom-32 keeps the graph's zoom controls (bottom left) uncovered -->
+				<div class="pointer-events-none absolute top-0 bottom-32 left-2 flex items-center">
 					<div class="pointer-events-auto flex max-h-[90%] w-56 flex-col overflow-hidden rounded-lg border border-border bg-card/95 shadow-lg backdrop-blur-sm">
 						<!-- Header: stats + toggle -->
 						<div class="flex items-center gap-2 border-b border-border px-3 py-2">
