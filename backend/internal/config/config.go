@@ -30,6 +30,9 @@ type Config struct {
 	Port                    string
 	Environment             string
 	AllowedCORSOrigins      []string
+	// TrustedProxies lists the proxies (IPs or CIDRs, comma separated)
+	// allowed to set the client address with X-Forwarded-For.
+	TrustedProxies string
 	// tsnet serve mode
 	TsnetServe    bool
 	TsnetHostname string
@@ -66,10 +69,15 @@ type Config struct {
 	FlowObjectStoreWebIdentityTokenFile string
 	PollInterval                        string
 	InitialBackfill                     string
-	Retention                           string
+	// PollDelay is how far behind now API polls end (TSFLOW_POLL_DELAY).
+	PollDelay string
+	Retention string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
+	// MCPEnabled serves a read-only Model Context Protocol endpoint at /mcp.
+	// It stays off unless TSFLOW_MCP_ENABLED is set.
+	MCPEnabled bool
 	// Access is opt-in tailnet identity. The zero value leaves requests open.
 	Access Access
 }
@@ -92,6 +100,7 @@ func Load() *Config {
 		Port:                       getEnvWithDefault("PORT", "8080"),
 		Environment:                getEnvWithDefault("ENVIRONMENT", "development"),
 		AllowedCORSOrigins:         parseCORSOrigins(getEnvWithFallback("ALLOWED_CORS_ORIGINS")),
+		TrustedProxies:             strings.TrimSpace(os.Getenv("TSFLOW_TRUSTED_PROXIES")),
 		TsnetServe:                 parseBool(os.Getenv("TSFLOW_SERVE"), false),
 		TsnetHostname:              getEnvWithDefault("TSFLOW_HOSTNAME", "tsflow"),
 		TsnetTags:                  parseTags(os.Getenv("TSFLOW_TAGS")),
@@ -116,8 +125,10 @@ func Load() *Config {
 		FlowObjectStoreRoleARN:     strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_ROLE_ARN")),
 		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
+		PollDelay:                  getEnvWithDefault("TSFLOW_POLL_DELAY", "2m"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
+		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
 	}
 	cfg.FlowObjectStoreWebIdentityTokenFile = strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE"))
 	cfg.Access = cfg.loadAccess()
@@ -166,6 +177,11 @@ func (c *Config) Validate() error {
 	}
 	if err := validateDuration("TSFLOW_INITIAL_BACKFILL", c.InitialBackfill, false); err != nil {
 		return err
+	}
+	if strings.TrimSpace(c.PollDelay) != "" {
+		if err := validateDuration("TSFLOW_POLL_DELAY", c.PollDelay, true); err != nil {
+			return err
+		}
 	}
 	if c.Retention != "" {
 		if err := validateDuration("TSFLOW_RETENTION", c.Retention, true); err != nil {
@@ -418,6 +434,31 @@ func parseTags(tagsStr string) []string {
 
 // parseCORSOrigins parses a comma-separated string of allowed CORS origins
 // Returns nil to indicate all origins allowed (for development)
+// ClientIPTrustedProxies returns the proxies allowed to supply the client
+// address used for rate limiting and request logs. TSFLOW_TRUSTED_PROXIES
+// wins; header access mode falls back to TSFLOW_ACCESS_TRUSTED_PROXIES,
+// which already names the proxy in front of tsflow. Empty means the peer
+// address is used.
+func (c *Config) ClientIPTrustedProxies() ([]string, error) {
+	raw, name := c.TrustedProxies, "TSFLOW_TRUSTED_PROXIES"
+	if strings.TrimSpace(raw) == "" && c.Access.Enabled && c.Access.Mode == AccessModeHeader {
+		raw, name = c.Access.TrustedProxies, "TSFLOW_ACCESS_TRUSTED_PROXIES"
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		prefix, err := parseIPPrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %q: %w", name, part, err)
+		}
+		out = append(out, prefix.String())
+	}
+	return out, nil
+}
+
 func parseCORSOrigins(originsStr string) []string {
 	if originsStr == "" {
 		return nil // Allow all origins when not specified

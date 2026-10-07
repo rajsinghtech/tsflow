@@ -331,3 +331,37 @@ func insertRankPair(t *testing.T, store *SQLiteStore, tailnet string, bucket int
 		t.Fatal(err)
 	}
 }
+
+func TestRankedTrafficFiltersBeforePaging(t *testing.T) {
+	store := setupTestDB(t)
+	start := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Minute)
+	end := start.Add(10 * time.Minute)
+	base := start.Unix()
+	insertRankPair(t, store, DefaultTailnetID, base, "big", "peer", "virtual", 1000, 0, 1)
+	insertRankPair(t, store, DefaultTailnetID, base, "a", "b", "virtual", 30, 0, 1)
+	insertRankPair(t, store, DefaultTailnetID, base, "a", "10.1.2.3", "subnet", 20, 0, 1)
+	insertRankPair(t, store, DefaultTailnetID, base, "c", "d", "virtual", 10, 0, 1)
+
+	ctx := context.Background()
+	talkers, more, err := store.ListRankedTalkers(ctx, DefaultTailnetID, start, end, RankQuery{Limit: 1, NodeIDs: []string{"a", "c"}})
+	if err != nil || more != true || len(talkers) != 1 || talkers[0].NodeID != "a" || talkers[0].TotalBytes != 50 {
+		t.Fatalf("filtered first page = %+v more=%v err=%v, want a (50) with more", talkers, more, err)
+	}
+	talkers, more, err = store.ListRankedTalkers(ctx, DefaultTailnetID, start, end, RankQuery{Limit: 1, Offset: 1, NodeIDs: []string{"a", "c"}})
+	if err != nil || more || len(talkers) != 1 || talkers[0].NodeID != "c" {
+		t.Fatalf("filtered second page = %+v more=%v err=%v, want c and no more", talkers, more, err)
+	}
+	talkers, _, err = store.ListRankedTalkers(ctx, DefaultTailnetID, start, end, RankQuery{Match: "10.1"})
+	if err != nil || len(talkers) != 1 || talkers[0].NodeID != "10.1.2.3" {
+		t.Fatalf("match talkers = %+v err=%v", talkers, err)
+	}
+	// LIKE wildcards in the search text are literal.
+	talkers, _, err = store.ListRankedTalkers(ctx, DefaultTailnetID, start, end, RankQuery{Match: "%"})
+	if err != nil || len(talkers) != 0 {
+		t.Fatalf("literal %% match = %+v err=%v", talkers, err)
+	}
+	pairs, _, err := store.ListRankedPairs(ctx, DefaultTailnetID, start, end, RankQuery{NodeIDs: []string{"b"}, Match: "10.1"})
+	if err != nil || len(pairs) != 2 || pairs[0].DstNodeID != "b" || pairs[1].DstNodeID != "10.1.2.3" {
+		t.Fatalf("filtered pairs = %+v err=%v", pairs, err)
+	}
+}

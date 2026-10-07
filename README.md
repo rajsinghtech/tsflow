@@ -144,6 +144,9 @@ JSON uses the same fields:
 |----------|-------------|---------|
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
+| `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
+| `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
+| `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 
 #### tsnet Serve Mode
 
@@ -226,7 +229,7 @@ Omit `tailnets`, or include `"*"`, to allow every configured tailnet id. Those i
 
 Identity is logged per request only when `TSFLOW_LOG_LEVEL=debug`.
 
-A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For`, so it is not the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
+A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For` only when the peer is a trusted proxy (`TSFLOW_TRUSTED_PROXIES`), so it can differ from the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
 
 There are two front doors.
 
@@ -273,7 +276,7 @@ TSFLOW_ACCESS_CAPABILITY=example.com/cap/tsflow
 TSFLOW_ACCESS_TRUSTED_PROXIES=127.0.0.1/32
 ```
 
-If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address is the peer. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
+If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address, across every `X-Forwarded-For` line, is the peer. If that entry is not an IP address the request is denied. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
 
 Some proxies forward identity and a groups header, and do not forward app capabilities. Set `TSFLOW_ACCESS_GROUPS_HEADER` to that header name. Values are comma-separated and must match the keys in the grant map exactly. Load the map from `TSFLOW_ACCESS_GROUP_GRANTS` or `TSFLOW_ACCESS_GROUP_GRANTS_FILE`, not both. The values use the same grant object as the capability. A mapped group grants access. If a request has both a capability and mapped groups, the tailnet lists are unioned.
 
@@ -340,6 +343,7 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_SKIP_DB_BACKUP` | Skip the pre-migration database copy. Set `1` only when disk space is tight. | unset |
 | `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
+| `TSFLOW_POLL_DELAY` | API backend only. Each poll fetches logs up to now minus this delay, because the logs API can publish a message a little after its logged time and a window is never re-read. Set `0` to poll up to now. S3 and GCS polling use `TSFLOW_S3_LOOKBACK` instead. | `2m` |
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
 | `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
 | `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |
@@ -360,13 +364,52 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 
 ### Ranked talkers and pairs
 
-`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. This is the API behind a later table view. The existing graph and `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay as they are.
+`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. The Analytics page's Top Talkers and Top Pairs tables use them, for the page's window and traffic-type filter, with previous and next pages, a bytes or flows sort, and a search box. Clicking a device name opens it on the traffic graph over the same window. The `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay for API callers.
 
-`start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use.
+`start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use. Optional `q` narrows both rankings before paging, with the same rules as the traffic graph search: `tag:x`, `ip:x`, `user@x` for the owner login (including the creator login recorded for a tagged device), or a case-insensitive substring of a device name, owner email, address, or tag. A pair matches when either end does.
 
-A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `hostname` is the stored device hostname, or the stored device name when the hostname is blank. A pair row has `srcNodeId`, `srcHostname`, `dstNodeId`, `dstHostname`, the same byte fields, and `flowCount`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
+A talker is one device. The row has `nodeId`, `hostname`, `owner`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `nodeId` is the canonical device id, and rows stored under another id for the same device (a legacy numeric id or an address) are merged into it on the page. `hostname` and `owner` come from the device list, falling back to the stored flow-log name; `127.3.3.40` is labeled `DERP relay`. A pair row has `srcNodeId`, `srcHostname`, `srcOwner`, `dstNodeId`, `dstHostname`, `dstOwner`, the same byte fields, and `flowCount`. Physical (WireGuard transport) traffic is left out unless `trafficTypes` includes `physical`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
+
+### New connections
+
+`GET /api/analytics/new-pairs` lists directed pairs that appear in the selected window and do not appear in the lookback immediately before it. `lookback` defaults to `7d`. It also accepts `24h`, `30d`, or any duration from `1h` through `90d`. `limit`, `offset`, `start`, `end`, `tailnet`, and `trafficTypes` match the ranked pair route. Rows are ordered by first seen, newest first, then by volume. There is no alert. The page is `/new`.
+
+`metadata.lookbackStart` is where the lookback begins. `metadata.dataStart` is the earliest stored minute and is left out when nothing is stored. `metadata.lookbackComplete` is false when stored data starts after `lookbackStart`. A pair last seen before the data starts then shows up as new, and the page says so.
+
+Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
+
+### MCP server
+
+`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
+
+Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes. The REST API still does not enforce the device filter.
+
+Tools are `list_tailnets`, `search_devices`, `get_device`, `top_talkers`, `top_pairs`, `flows_between`, `device_peers`, `device_timeline`, `new_connections`, and `stats_overview`. They read stored rollups. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Windows default to the last hour and stop at 7 days. List results default to 20 rows and stop at 100.
+
+Claude and Cursor can attach the endpoint as a remote MCP server. Point the client at the tailnet URL when tsflow is served with `TSFLOW_SERVE`, or at the trusted proxy when header access is on. The client does not get a new privilege path.
+
+```json
+{
+  "mcpServers": {
+    "tsflow": {
+      "type": "http",
+      "url": "https://tsflow.example.ts.net/mcp"
+    }
+  }
+}
+```
+
+The repository has Kubernetes manifests, not a Helm chart. Set the variable on the container:
+
+```yaml
+env:
+  - name: TSFLOW_MCP_ENABLED
+    value: "true"
+```
+
+`k8s/deployment.yaml` leaves it `false`. `k8s/access-example.yaml` shows it next to the access settings. Keep the Service reachable only from the tailnet or the trusted proxy. The health port used with `TSFLOW_SERVE` does not expose `/mcp`.
 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 

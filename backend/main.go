@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
+	"github.com/rajsinghtech/tsflow/backend/internal/mcpserver"
 	"github.com/rajsinghtech/tsflow/backend/internal/middleware"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 	"github.com/rajsinghtech/tsflow/backend/internal/tsnetserve"
@@ -146,27 +146,21 @@ func main() {
 	} else {
 		router = gin.Default()
 	}
+	trustedProxies, err := cfg.ClientIPTrustedProxies()
+	if err == nil {
+		err = middleware.ConfigureClientIP(router, trustedProxies)
+	}
+	if err != nil {
+		log.Fatalf("Invalid trusted proxies: %v", err)
+	}
 
 	router.HandleMethodNotAllowed = true
 
-	// Add gzip compression middleware
-	router.Use(gzip.Gzip(gzip.DefaultCompression))
+	// Add gzip compression middleware. /mcp is left uncompressed so
+	// streamable HTTP responses are not wrapped.
+	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/mcp"})))
 
-	corsConfig := cors.DefaultConfig()
-	// Configure CORS based on allowed origins. Production deployments must
-	// explicitly opt into cross-origin origins.
-	if len(cfg.AllowedCORSOrigins) > 0 {
-		corsConfig.AllowOrigins = cfg.AllowedCORSOrigins
-	} else if strings.EqualFold(cfg.Environment, "production") {
-		corsConfig.AllowOriginFunc = func(string) bool { return false }
-	} else {
-		corsConfig.AllowOriginFunc = func(origin string) bool {
-			return true
-		}
-	}
-	corsConfig.AllowCredentials = true
-	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+	corsConfig := middleware.CORSConfig(cfg.Environment, cfg.AllowedCORSOrigins)
 	router.Use(cors.New(corsConfig))
 
 	// Add CSP middleware for security
@@ -211,6 +205,7 @@ func main() {
 		{
 			analytics.GET("/talkers", statsCache, handlerService.GetRankedTalkers)
 			analytics.GET("/pairs", statsCache, handlerService.GetRankedPairs)
+			analytics.GET("/new-pairs", statsCache, handlerService.GetNewPairs)
 		}
 
 		// Policy endpoints
@@ -223,6 +218,17 @@ func main() {
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
 	}
+
+	mcpserver.Mount(router, mcpserver.Options{
+		Enabled:  cfg.MCPEnabled,
+		Access:   cfg.Access,
+		WhoIs:    requestWhoIs,
+		Handlers: handlerService,
+		Version:  Version,
+		// A separate budget from /api so MCP agents and the UI don't starve
+		// each other.
+		RateLimit: middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()),
+	})
 
 	// Register embedded frontend (must be after API routes)
 	if err := frontend.RegisterFrontend(router); err != nil {
@@ -252,6 +258,9 @@ func main() {
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
+	if pollerConfig.FlowBackend == config.FlowBackendAPI {
+		log.Printf("Poll Delay: %s", pollerConfig.PollDelay)
+	}
 	log.Printf("Retention: %s", pollerConfig.Retention)
 	log.Printf("Flow Backend: %s", pollerConfig.FlowBackend)
 	if pollerConfig.FlowBackend == "s3" || pollerConfig.FlowBackend == "gcs" {
@@ -346,7 +355,7 @@ func main() {
 			healthRouter := gin.New()
 			healthRouter.Use(gin.Recovery())
 			healthRouter.GET("/health", handlerService.HealthCheck)
-			healthSrv = &http.Server{Addr: "0.0.0.0:" + cfg.TsnetHealthPort, Handler: healthRouter, ReadHeaderTimeout: 10 * time.Second}
+			healthSrv = newHTTPServer("0.0.0.0:"+cfg.TsnetHealthPort, healthRouter)
 			go func() {
 				if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("FATAL health listener failed: %v", err)
@@ -369,8 +378,8 @@ func main() {
 			lazyWhoIs.Set(localClient)
 		}
 
-		tlsSrv := &http.Server{Handler: router}
-		httpSrv := &http.Server{Handler: router}
+		tlsSrv := newHTTPServer("", router)
+		httpSrv := newHTTPServer("", router)
 		go func() {
 			if err := tlsSrv.Serve(tsnetSrv.TLSListener()); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("FATAL tsnet TLS serve failed: %v", err)
@@ -394,10 +403,10 @@ func main() {
 		}
 		tsnetSrv.Close()
 	} else {
-		httpSrv := &http.Server{Addr: "0.0.0.0:" + port, Handler: router}
+		httpSrv := newHTTPServer("0.0.0.0:"+port, router)
 		go func() {
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("FATAL Failed to start server: %v", err)
+				log.Fatalf("FATAL Failed to start server: %v", err)
 			}
 		}()
 

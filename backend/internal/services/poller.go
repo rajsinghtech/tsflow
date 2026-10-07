@@ -17,6 +17,12 @@ type PollerConfig struct {
 	PollInterval time.Duration
 	// InitialBackfill is how far back to fetch on first run
 	InitialBackfill time.Duration
+	// PollDelay holds the API backend back from the newest logs. The logs
+	// API can return a message some time after its logged timestamp, and the
+	// cursor never revisits a window, so a poll that ends at "now" drops logs
+	// that become visible later. Polls end at now minus PollDelay. Zero
+	// disables it. Object-store polling has its own lookback and ignores it.
+	PollDelay time.Duration
 	// Retention is how long to keep flow data
 	Retention time.Duration
 	// CleanupInterval is how often to run cleanup
@@ -32,11 +38,15 @@ type PollerConfig struct {
 	TailnetID string
 }
 
+// DefaultPollDelay is how far behind now API polls end by default.
+const DefaultPollDelay = 2 * time.Minute
+
 // DefaultPollerConfig returns sensible defaults
 func DefaultPollerConfig() PollerConfig {
 	return PollerConfig{
 		PollInterval:       5 * time.Minute,
 		InitialBackfill:    6 * time.Hour,
+		PollDelay:          DefaultPollDelay,
 		Retention:          30 * 24 * time.Hour,
 		CleanupInterval:    1 * time.Hour,
 		DeviceCacheRefresh: 5 * time.Minute,
@@ -96,6 +106,9 @@ func (c PollerConfig) validate() error {
 	}
 	if c.InitialBackfill <= 0 {
 		return fmt.Errorf("initial backfill must be positive")
+	}
+	if c.PollDelay < 0 {
+		return fmt.Errorf("poll delay must not be negative")
 	}
 	if c.Retention < 0 {
 		return fmt.Errorf("retention must not be negative")
@@ -271,14 +284,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 	}
 
 	// Initial poll (runs asynchronously so the server isn't blocked)
-	if err := p.poll(ctx); err != nil && ctx.Err() == nil {
-		log.Printf("Initial poll failed: %v", err)
-		p.mu.Lock()
-		p.pollErrors++
-		p.lastPollError = err.Error()
-		p.lastPollErrorTime = time.Now()
-		p.mu.Unlock()
-	}
+	p.pollAndRecord(ctx, "Initial poll")
 
 	pollTicker := time.NewTicker(p.config.PollInterval)
 	defer pollTicker.Stop()
@@ -299,14 +305,7 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 					log.Printf("Warning: device cache refresh failed: %v", err)
 				}
 			}
-			if err := p.poll(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("Triggered poll failed: %v", err)
-				p.mu.Lock()
-				p.pollErrors++
-				p.lastPollError = err.Error()
-				p.lastPollErrorTime = time.Now()
-				p.mu.Unlock()
-			}
+			p.pollAndRecord(ctx, "Triggered poll")
 		case <-pollTicker.C:
 			// Refresh device cache if stale
 			if p.canRefreshDeviceCache() && p.deviceCache.NeedsRefresh(p.config.DeviceCacheRefresh) {
@@ -318,20 +317,33 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 				}
 			}
 
-			if err := p.poll(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("Poll failed: %v", err)
-				p.mu.Lock()
-				p.pollErrors++
-				p.lastPollError = err.Error()
-				p.lastPollErrorTime = time.Now()
-				p.mu.Unlock()
-			}
+			p.pollAndRecord(ctx, "Poll")
 		case <-cleanupTicker.C:
 			if err := p.cleanup(ctx); err != nil {
 				log.Printf("Cleanup failed: %v", err)
 			}
 		}
 	}
+}
+
+// pollAndRecord runs one poll and records its outcome for Stats. A
+// successful poll clears lastError, so a status that once failed does not
+// stay red after the source recovers. pollErrors keeps the history.
+func (p *Poller) pollAndRecord(ctx context.Context, label string) {
+	err := p.poll(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		log.Printf("%s failed: %v", label, err)
+		p.pollErrors++
+		p.lastPollError = err.Error()
+		p.lastPollErrorTime = time.Now()
+		return
+	}
+	p.lastPollError = ""
 }
 
 func (p *Poller) tailnetIDOrDefault() string {
@@ -380,6 +392,9 @@ func (p *Poller) poll(ctx context.Context) error {
 
 	var start time.Time
 	end := time.Now()
+	if p.objectStore == nil && p.config.PollDelay > 0 {
+		end = end.Add(-p.config.PollDelay)
+	}
 
 	if pollState.LastPollEnd.IsZero() {
 		// First poll - backfill
@@ -391,7 +406,19 @@ func (p *Poller) poll(ctx context.Context) error {
 	}
 
 	if p.objectStore != nil {
+		// Objects ingested before a restart hold flows logged up to about
+		// now, so only buckets after this poll are fully in the cache.
+		p.rollingCache.CoverFrom(end)
 		return p.pollObjectStore(ctx, start, end)
+	}
+	// Everything from the cursor on is written by this process, so it also
+	// lands in the cache. The minute holding the cursor may already be
+	// partly in the database from before a restart.
+	p.rollingCache.CoverFrom(start)
+	if !end.After(start) {
+		// The cursor is already inside the delay window, for example right
+		// after a restart or when the delay was raised. Wait for it to settle.
+		return nil
 	}
 
 	// If the time range is larger than maxPollChunk, split into chunks
@@ -420,15 +447,18 @@ func (p *Poller) pollObjectStore(ctx context.Context, start, end time.Time) erro
 			return err
 		}
 	}
+	// Objects committed before a later object failed are still ingested.
+	// Count them, or the status undercounts after any partial failure.
+	if pollErr == nil || objects > 0 {
+		p.mu.Lock()
+		p.lastPollTime = time.Now()
+		p.lastPollCount = flows
+		p.totalPolled += int64(flows)
+		p.mu.Unlock()
+	}
 	if pollErr != nil {
 		return pollErr
 	}
-
-	p.mu.Lock()
-	p.lastPollTime = time.Now()
-	p.lastPollCount = flows
-	p.totalPolled += int64(flows)
-	p.mu.Unlock()
 
 	log.Printf("Object-store poll processed %d objects and %d flow rows (%v to %v)",
 		objects, flows, start.Format(time.RFC3339), lastProcessed.Format(time.RFC3339))

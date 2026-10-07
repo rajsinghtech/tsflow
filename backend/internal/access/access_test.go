@@ -125,6 +125,18 @@ func TestGrantUnionAndDeviceScope(t *testing.T) {
 	if DeviceScopeFor(config.AccessAutoscopeOff, "ada@example.com", nil, nil) != nil {
 		t.Fatal("off scope should be unset")
 	}
+	if !(*DeviceScope)(nil).Matches("ada@example.com", []string{"tag:other"}) {
+		t.Fatal("nil scope should match every device")
+	}
+	if scope.Matches("other@example.com", []string{"tag:other"}) || !scope.Matches("someone@example.com", []string{"eng"}) {
+		t.Fatalf("group scope match = %+v", scope)
+	}
+	if !userScope.Matches("ada@example.com", nil) || userScope.Matches("ada@example.com.extra", nil) {
+		t.Fatal("user scope should match the login exactly")
+	}
+	if (&DeviceScope{}).Matches("ada@example.com", []string{"tag:eng"}) {
+		t.Fatal("empty scope should match nothing")
+	}
 }
 
 func TestWhoIsModeFiltersTailnets(t *testing.T) {

@@ -326,7 +326,8 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*Data
 	return readDataRange(ctx, s.db, tailnetID)
 }
 
-// Cleanup deletes rows older than retention from all four data tables.
+// Cleanup deletes rows older than retention from all four data tables, and
+// drops ingest bookkeeping and node metadata that retention no longer needs.
 func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention time.Duration) (int64, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return 0, err
@@ -384,6 +385,21 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 		tailnetID, int64(retention.Seconds()),
 	); err != nil {
 		return 0, fmt.Errorf("failed to cleanup ingested_objects: %w", err)
+	}
+	// Node metadata is refreshed whenever a node appears in an ingested
+	// object. A row not refreshed within retention belongs to a node that is
+	// gone (ephemeral nodes churn fast), and the poller reloads the whole
+	// table on every device refresh. Keep any node still named by a retained
+	// node pair.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM node_metadata
+		 WHERE tailnet_id = ?
+		   AND updated_at < datetime('now', '-' || ? || ' seconds')
+		   AND NOT EXISTS (SELECT 1 FROM node_pairs p WHERE p.tailnet_id = node_metadata.tailnet_id AND p.src_node_id = node_metadata.node_id)
+		   AND NOT EXISTS (SELECT 1 FROM node_pairs p WHERE p.tailnet_id = node_metadata.tailnet_id AND p.dst_node_id = node_metadata.node_id)`,
+		tailnetID, int64(retention.Seconds()),
+	); err != nil {
+		return 0, fmt.Errorf("failed to cleanup node_metadata: %w", err)
 	}
 	if err := s.commitWrite(tx, tailnetID); err != nil {
 		return 0, fmt.Errorf("failed to commit cleanup: %w", err)

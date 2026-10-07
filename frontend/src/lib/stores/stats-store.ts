@@ -5,14 +5,11 @@ import { createLiveRefresh } from './live-refresh';
 import { lastUpdated } from './network-store';
 import { DEFAULT_REFRESH_MS } from '#lib/utils/poll-interval';
 import { filterStore } from './filter-store';
-import { extractIP, ipMatches } from '#lib/utils/ip-utils';
-import type { TrafficStatsSummary, TrafficStatsBucket, TopTalker, TopPair, PortStat } from '#lib/types';
+import type { TrafficStatsSummary, TrafficStatsBucket, PortStat } from '#lib/types';
 
 interface StatsState {
 	summary: TrafficStatsSummary | null;
 	buckets: TrafficStatsBucket[];
-	topTalkers: TopTalker[];
-	topPairs: TopPair[];
 	isLoading: boolean;
 	error: string | null;
 }
@@ -20,8 +17,6 @@ interface StatsState {
 const defaultState: StatsState = {
 	summary: null,
 	buckets: [],
-	topTalkers: [],
-	topPairs: [],
 	isLoading: false,
 	error: null
 };
@@ -112,8 +107,6 @@ export async function loadStats(currentAttempt = 0) {
 					totalNodes: 0
 				},
 				buckets: [],
-				topTalkers: [],
-				topPairs: [],
 				isLoading: false,
 				error: null
 			});
@@ -122,28 +115,15 @@ export async function loadStats(currentAttempt = 0) {
 			return;
 		}
 
-		let [overviewRes, talkersRes, pairsRes, servicesRes] = await Promise.all([
-			tailscaleService.getStatsOverview(start, end, signal, trafficTypes),
-			tailscaleService.getTopTalkers(start, end, 15, signal, trafficTypes),
-			tailscaleService.getTopPairs(start, end, 15, signal, trafficTypes),
-			tailscaleService.getServicesRecords(signal).catch(() => ({ services: {}, records: {} }))
-		]);
+		// Talkers and pairs are the ranked tables (rankings-store), not part of
+		// this overview load.
+		const overviewRes = await tailscaleService.getStatsOverview(start, end, signal, trafficTypes);
 
 		if (signal.aborted) return;
 
-		const resolveDisplayName = createServiceRecordResolver(servicesRes.services || {}, servicesRes.records || {});
 		statsState.set({
 			summary: overviewRes.summary,
 			buckets: overviewRes.buckets || [],
-			topTalkers: (talkersRes.talkers || []).map((talker) => ({
-				...talker,
-				displayName: resolveDisplayName(talker.nodeId, talker.displayName)
-			})),
-			topPairs: (pairsRes.pairs || []).map((pair) => ({
-				...pair,
-				srcDisplayName: resolveDisplayName(pair.srcNodeId, pair.srcDisplayName),
-				dstDisplayName: resolveDisplayName(pair.dstNodeId, pair.dstDisplayName)
-			})),
 			isLoading: false,
 			error: null
 		});
@@ -196,8 +176,6 @@ export function stopStatsRefresh() {
 
 export const statsSummary = derived(statsState, ($s) => $s.summary);
 export const statsBuckets = derived(statsState, ($s) => $s.buckets);
-export const topTalkers = derived(statsState, ($s) => $s.topTalkers);
-export const topPairs = derived(statsState, ($s) => $s.topPairs);
 export const statsLoading = derived(statsState, ($s) => $s.isLoading);
 export const statsError = derived(statsState, ($s) => $s.error);
 
@@ -224,46 +202,3 @@ export const topPorts = derived(statsState, ($s): PortStat[] => {
 		.sort((a, b) => b.bytes - a.bytes || a.proto - b.proto || a.port - b.port)
 		.slice(0, 15);
 });
-
-function createServiceRecordResolver(
-	services: Record<string, { name: string; addrs: string[]; tags?: string[] }>,
-	records: Record<string, { addrs: string[]; comment?: string }>
-) {
-	return (nodeId: string, existingName?: string): string => {
-		const ip = extractIP(nodeId);
-		for (const [serviceName, service] of Object.entries(services)) {
-			if (service.addrs?.some((addr) => ipMatches(ip, addr))) {
-				return service.name || serviceName;
-			}
-		}
-		for (const [recordName, record] of Object.entries(records)) {
-			if (record.addrs?.some((addr) => ipMatches(ip, addr))) {
-				return recordName;
-			}
-		}
-		if (existingName && existingName !== nodeId && !isOpaqueTailscaleNodeID(existingName)) {
-			return existingName;
-		}
-		if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
-			if (
-				ip.startsWith('10.') ||
-				ip.startsWith('192.168.') ||
-				(ip.startsWith('172.') && Number(ip.split('.')[1]) >= 16 && Number(ip.split('.')[1]) <= 31)
-			) {
-				return `Subnet route ${ip}`;
-			}
-		}
-		return formatFallbackNodeName(existingName || nodeId);
-	};
-}
-
-function isOpaqueTailscaleNodeID(value: string): boolean {
-	return /^[A-Za-z0-9]{8,}CNTRL$/.test(value);
-}
-
-function formatFallbackNodeName(value: string): string {
-	if (isOpaqueTailscaleNodeID(value)) {
-		return `Unknown Tailscale node ${value.slice(0, 4)}`;
-	}
-	return value;
-}
