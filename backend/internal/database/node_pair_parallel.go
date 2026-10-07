@@ -257,8 +257,8 @@ func (g *pairGroup) merge(o *pairGroup) {
 }
 
 func (p *protoSums) merge(o *protoSums) {
-	for key, state := range o.byKey {
-		p.add(key, false, state.n, state.numeric)
+	for _, item := range o.items {
+		p.add(item.key, false, item.st.n, item.st.numeric)
 	}
 	if o.hasNull {
 		p.add(0, true, o.nullKey.n, o.nullKey.numeric)
@@ -266,7 +266,7 @@ func (p *protoSums) merge(o *protoSums) {
 }
 
 func (p *portSums) merge(o *portSums) {
-	for key, state := range o.byKey {
-		p.add(key, state.n, state.numeric)
+	for _, item := range o.items {
+		p.add(item.key, item.st.n, item.st.numeric)
 	}
 }
