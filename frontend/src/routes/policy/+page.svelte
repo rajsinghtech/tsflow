@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { Loader2, AlertCircle, FileCode, SlidersHorizontal, PanelRightClose, PanelRightOpen } from 'lucide-svelte';
+	import { Loader2, AlertCircle, FileCode, SlidersHorizontal, PanelRightClose, PanelRightOpen, RefreshCw } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import PolicyGraph from '#lib/components/policy/PolicyGraph.svelte';
 	import PolicyEditor from '#lib/components/policy/PolicyEditor.svelte';
@@ -13,6 +13,7 @@
 		parseErrors,
 		parseSummary,
 		isParsing,
+		fetchError,
 		filteredGraph,
 		fetchAndRenderPolicy,
 		runQuery,
@@ -93,6 +94,21 @@
 							<p class="mt-1 text-sm text-muted-foreground">{error}</p>
 						{/each}
 					</div>
+				</div>
+			{:else if $fetchError && !$policyGraph}
+				<div class="flex h-full flex-col items-center justify-center gap-4 p-4">
+					<AlertCircle class="h-8 w-8 text-destructive" />
+					<div class="max-w-md text-center">
+						<p class="font-medium text-destructive">Failed to load policy</p>
+						<p class="mt-1 break-words text-sm text-muted-foreground">{$fetchError}</p>
+					</div>
+					<button
+						onclick={() => fetchAndRenderPolicy()}
+						class="mt-2 flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+					>
+						<RefreshCw class="h-4 w-4" />
+						Retry
+					</button>
 				</div>
 			{:else if !$policyGraph}
 				<div class="flex h-full flex-col items-center justify-center gap-4 p-4">
