@@ -4,8 +4,10 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -14,7 +16,8 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
 )
 
-const instructions = "Read-only TSFlow flow data. Tools use the same tailnet grants and identity autoscope as the UI. " +
+const instructions = "Read-only TSFlow flow data. Tailnet allowlists match the REST API. " +
+	"Identity autoscope is the default device view and can be cleared with scope=all. " +
 	"Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. " +
 	"Pass tailnet when more than one tailnet is configured. Windows default to the last hour and cannot exceed 7 days."
 
@@ -34,11 +37,29 @@ type Viewer struct {
 	Ident      access.Identity
 }
 
-func (v Viewer) scope() *access.DeviceScope {
-	if !v.Restricted {
-		return nil
+const (
+	scopeMine = "mine"
+	scopeAll  = "all"
+)
+
+// deviceFilter resolves the optional scope argument.
+// An empty argument follows the viewer's autoscope: mine when a device
+// scope is set, otherwise all. all always clears the device filter.
+// Tailnet allowlists are applied separately and are not affected.
+func deviceFilter(v Viewer, raw string) (*access.DeviceScope, string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		if v.Ident.DeviceScope != nil {
+			return v.Ident.DeviceScope, scopeMine, nil
+		}
+		return nil, scopeAll, nil
+	case scopeAll:
+		return nil, scopeAll, nil
+	case scopeMine:
+		return v.Ident.DeviceScope, scopeMine, nil
+	default:
+		return nil, "", fmt.Errorf("scope must be mine or all")
 	}
-	return v.Ident.DeviceScope
 }
 
 type viewerKey struct{}

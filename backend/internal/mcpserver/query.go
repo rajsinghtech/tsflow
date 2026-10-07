@@ -51,6 +51,10 @@ func (s *Service) searchDevices(ctx context.Context, v Viewer, in searchDevicesI
 	if err != nil {
 		return searchDevicesOut{}, err
 	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
+	if err != nil {
+		return searchDevicesOut{}, err
+	}
 	limit, offset, err := parsePage(in.Limit, in.Offset)
 	if err != nil {
 		return searchDevicesOut{}, err
@@ -62,7 +66,7 @@ func (s *Service) searchDevices(ctx context.Context, v Viewer, in searchDevicesI
 	}
 	matched := make([]deviceOut, 0)
 	for _, device := range devices {
-		if !v.scope().Matches(device.User, device.Tags) || !deviceMatchesQuery(device, in.Query) {
+		if !filter.Matches(device.User, device.Tags) || !deviceMatchesQuery(device, in.Query) {
 			continue
 		}
 		matched = append(matched, toDeviceOut(device))
@@ -76,6 +80,7 @@ func (s *Service) searchDevices(ctx context.Context, v Viewer, in searchDevicesI
 	pageItems, more := page(matched, offset, limit)
 	return searchDevicesOut{
 		Tailnet: binding.ID,
+		Scope:   scopeName,
 		Devices: pageItems,
 		Limit:   limit,
 		Offset:  offset,
@@ -89,20 +94,28 @@ func (s *Service) getDevice(ctx context.Context, v Viewer, in getDeviceIn) (getD
 	if err != nil {
 		return getDeviceOut{}, err
 	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
+	if err != nil {
+		return getDeviceOut{}, err
+	}
 	devices, err := s.devices(ctx, binding)
 	if err != nil {
 		log.Printf("ERROR mcp get_device: %v", err)
 		return getDeviceOut{}, fmt.Errorf("failed to list devices")
 	}
-	device, err := findDevice(devices, v.scope(), in.Device)
+	device, err := findDevice(devices, filter, in.Device)
 	if err != nil {
 		return getDeviceOut{}, err
 	}
-	return getDeviceOut{Tailnet: binding.ID, Device: toDeviceOut(device)}, nil
+	return getDeviceOut{Tailnet: binding.ID, Scope: scopeName, Device: toDeviceOut(device)}, nil
 }
 
 func (s *Service) topTalkers(ctx context.Context, v Viewer, in rankedIn) (talkersOut, error) {
 	binding, start, end, types, sortKey, limit, offset, err := s.rankArgs(v, in)
+	if err != nil {
+		return talkersOut{}, err
+	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
 	if err != nil {
 		return talkersOut{}, err
 	}
@@ -114,7 +127,7 @@ func (s *Service) topTalkers(ctx context.Context, v Viewer, in rankedIn) (talker
 	merged := map[string]*talkerOut{}
 	var order []string
 	for _, row := range rows {
-		id, name, ok := s.present(v, binding.Poller, row.NodeID)
+		id, name, ok := s.present(filter, binding.Poller, row.NodeID)
 		if !ok {
 			continue
 		}
@@ -143,12 +156,16 @@ func (s *Service) topTalkers(ctx context.Context, v Viewer, in rankedIn) (talker
 	return talkersOut{
 		Tailnet: binding.ID, Start: start, End: end, TrafficTypes: types, Sort: sortKey,
 		Limit: limit, Offset: offset, Count: len(paged), HasMore: more || truncated, Truncated: truncated,
-		Talkers: paged,
+		Scope: scopeName, Talkers: paged,
 	}, nil
 }
 
 func (s *Service) topPairs(ctx context.Context, v Viewer, in rankedIn) (pairsOut, error) {
 	binding, start, end, types, sortKey, limit, offset, err := s.rankArgs(v, in)
+	if err != nil {
+		return pairsOut{}, err
+	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
 	if err != nil {
 		return pairsOut{}, err
 	}
@@ -161,8 +178,8 @@ func (s *Service) topPairs(ctx context.Context, v Viewer, in rankedIn) (pairsOut
 	merged := map[key]*pairOut{}
 	var order []key
 	for _, row := range rows {
-		srcID, srcName, srcOK := s.present(v, binding.Poller, row.SrcNodeID)
-		dstID, dstName, dstOK := s.present(v, binding.Poller, row.DstNodeID)
+		srcID, srcName, srcOK := s.present(filter, binding.Poller, row.SrcNodeID)
+		dstID, dstName, dstOK := s.present(filter, binding.Poller, row.DstNodeID)
 		if !srcOK || !dstOK {
 			continue
 		}
@@ -192,7 +209,7 @@ func (s *Service) topPairs(ctx context.Context, v Viewer, in rankedIn) (pairsOut
 	return pairsOut{
 		Tailnet: binding.ID, Start: start, End: end, TrafficTypes: types, Sort: sortKey,
 		Limit: limit, Offset: offset, Count: len(paged), HasMore: more || truncated, Truncated: truncated,
-		Pairs: paged,
+		Scope: scopeName, Pairs: paged,
 	}, nil
 }
 
@@ -213,6 +230,10 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 	if err != nil {
 		return flowsOut{}, err
 	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
+	if err != nil {
+		return flowsOut{}, err
+	}
 	if s.h.Store() == nil {
 		return flowsOut{}, fmt.Errorf("database not configured")
 	}
@@ -221,11 +242,11 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 		log.Printf("ERROR mcp flows_between devices: %v", err)
 		return flowsOut{}, fmt.Errorf("failed to list devices")
 	}
-	aIDs, err := s.endpointIDs(v, binding, devices, in.A)
+	aIDs, err := s.endpointIDs(filter, binding, devices, in.A)
 	if err != nil {
 		return flowsOut{}, err
 	}
-	bIDs, err := s.endpointIDs(v, binding, devices, in.B)
+	bIDs, err := s.endpointIDs(filter, binding, devices, in.B)
 	if err != nil {
 		return flowsOut{}, err
 	}
@@ -238,8 +259,8 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 	}
 	flows := make([]flowOut, 0, len(rows))
 	for _, row := range rows {
-		srcID, srcName, srcOK := s.present(v, binding.Poller, row.SrcNodeID)
-		dstID, dstName, dstOK := s.present(v, binding.Poller, row.DstNodeID)
+		srcID, srcName, srcOK := s.present(filter, binding.Poller, row.SrcNodeID)
+		dstID, dstName, dstOK := s.present(filter, binding.Poller, row.DstNodeID)
 		if !srcOK || !dstOK {
 			continue
 		}
@@ -262,7 +283,7 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 	paged, more := page(flows, 0, limit)
 	return flowsOut{
 		Tailnet: binding.ID, Start: start, End: end, TrafficTypes: types,
-		Count: len(paged), HasMore: more, Flows: paged,
+		Count: len(paged), HasMore: more, Scope: scopeName, Flows: paged,
 	}, nil
 }
 
@@ -283,6 +304,10 @@ func (s *Service) devicePeers(ctx context.Context, v Viewer, in deviceIn) (peers
 	if err != nil {
 		return peersOut{}, err
 	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
+	if err != nil {
+		return peersOut{}, err
+	}
 	if s.h.Store() == nil {
 		return peersOut{}, fmt.Errorf("database not configured")
 	}
@@ -291,7 +316,7 @@ func (s *Service) devicePeers(ctx context.Context, v Viewer, in deviceIn) (peers
 		log.Printf("ERROR mcp device_peers devices: %v", err)
 		return peersOut{}, fmt.Errorf("failed to list devices")
 	}
-	device, err := findDevice(devices, v.scope(), in.Device)
+	device, err := findDevice(devices, filter, in.Device)
 	if err != nil {
 		return peersOut{}, err
 	}
@@ -306,7 +331,7 @@ func (s *Service) devicePeers(ctx context.Context, v Viewer, in deviceIn) (peers
 	}
 	peers := make([]peerOut, 0, len(rows))
 	for _, row := range rows {
-		id, name, ok := s.present(v, binding.Poller, row.PeerID)
+		id, name, ok := s.present(filter, binding.Poller, row.PeerID)
 		if !ok {
 			continue
 		}
@@ -320,7 +345,7 @@ func (s *Service) devicePeers(ctx context.Context, v Viewer, in deviceIn) (peers
 		Tailnet: binding.ID, NodeID: device.ID, Name: displayName(device),
 		Start: start, End: end, TrafficTypes: types,
 		Limit: limit, Offset: offset, Count: len(paged), HasMore: more || len(rows) == peerScan,
-		Truncated: len(rows) == peerScan, Peers: paged,
+		Truncated: len(rows) == peerScan, Scope: scopeName, Peers: paged,
 	}, nil
 }
 
@@ -340,6 +365,10 @@ func (s *Service) deviceTimeline(ctx context.Context, v Viewer, in timelineIn) (
 	if len(types) == 0 {
 		types = []string{"virtual", "subnet", "exit"}
 	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
+	if err != nil {
+		return timelineOut{}, err
+	}
 	if s.h.Store() == nil {
 		return timelineOut{}, fmt.Errorf("database not configured")
 	}
@@ -348,7 +377,7 @@ func (s *Service) deviceTimeline(ctx context.Context, v Viewer, in timelineIn) (
 		log.Printf("ERROR mcp device_timeline devices: %v", err)
 		return timelineOut{}, fmt.Errorf("failed to list devices")
 	}
-	device, err := findDevice(devices, v.scope(), in.Device)
+	device, err := findDevice(devices, filter, in.Device)
 	if err != nil {
 		return timelineOut{}, err
 	}
@@ -408,7 +437,7 @@ func (s *Service) deviceTimeline(ctx context.Context, v Viewer, in timelineIn) (
 	}
 	return timelineOut{
 		Tailnet: binding.ID, NodeID: device.ID, Name: displayName(device),
-		Start: start, End: end, TrafficTypes: types, Truncated: truncated, Buckets: buckets,
+		Start: start, End: end, TrafficTypes: types, Truncated: truncated, Scope: scopeName, Buckets: buckets,
 	}, nil
 }
 
@@ -430,6 +459,10 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 		return newConnectionsOut{}, err
 	}
 	limit, offset, err := parsePage(in.Limit, in.Offset)
+	if err != nil {
+		return newConnectionsOut{}, err
+	}
+	filter, scopeName, err := deviceFilter(v, in.Scope)
 	if err != nil {
 		return newConnectionsOut{}, err
 	}
@@ -462,8 +495,8 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 	}
 	fresh := make([]newPairOut, 0)
 	for _, pair := range windowPairs {
-		srcID, srcName, srcOK := s.present(v, binding.Poller, pair[0])
-		dstID, dstName, dstOK := s.present(v, binding.Poller, pair[1])
+		srcID, srcName, srcOK := s.present(filter, binding.Poller, pair[0])
+		dstID, dstName, dstOK := s.present(filter, binding.Poller, pair[1])
 		if !srcOK || !dstOK {
 			continue
 		}
@@ -487,7 +520,7 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 	paged, more := page(fresh, offset, limit)
 	return newConnectionsOut{
 		Tailnet: binding.ID, Start: start, End: end, Lookback: lookback.String(), TrafficTypes: types,
-		Limit: limit, Offset: offset, Count: len(paged), HasMore: more, Pairs: paged,
+		Limit: limit, Offset: offset, Count: len(paged), HasMore: more, Scope: scopeName, Pairs: paged,
 	}, nil
 }
 
@@ -626,7 +659,7 @@ func (s *Service) devices(ctx context.Context, binding handlers.TailnetBinding) 
 	return []services.Device{}, nil
 }
 
-func (s *Service) present(v Viewer, poller *services.Poller, stored string) (string, string, bool) {
+func (s *Service) present(filter *access.DeviceScope, poller *services.Poller, stored string) (string, string, bool) {
 	if _, ok := handlers.DERPRelayName(stored); ok {
 		return stored, "DERP relay", true
 	}
@@ -639,7 +672,7 @@ func (s *Service) present(v Viewer, poller *services.Poller, stored string) (str
 		entry = deviceEntry(poller, stored)
 	}
 	if entry == nil {
-		if v.scope() != nil {
+		if filter != nil {
 			return "", "", false
 		}
 		name := stored
@@ -650,7 +683,7 @@ func (s *Service) present(v Viewer, poller *services.Poller, stored string) (str
 		}
 		return canonical, name, true
 	}
-	if !v.scope().Matches(entry.Owner, entry.Tags) {
+	if !filter.Matches(entry.Owner, entry.Tags) {
 		return "", "", false
 	}
 	name := entry.Hostname
@@ -676,7 +709,7 @@ func (s *Service) canonical(poller *services.Poller, stored string) string {
 	return stored
 }
 
-func (s *Service) endpointIDs(v Viewer, binding handlers.TailnetBinding, devices []services.Device, raw string) ([]string, error) {
+func (s *Service) endpointIDs(filter *access.DeviceScope, binding handlers.TailnetBinding, devices []services.Device, raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, fmt.Errorf("endpoint is required")
@@ -688,7 +721,7 @@ func (s *Service) endpointIDs(v Viewer, binding handlers.TailnetBinding, devices
 		}
 		var ids []string
 		for _, device := range devices {
-			if !v.scope().Matches(device.User, device.Tags) || !deviceInPrefix(device, prefix) {
+			if !filter.Matches(device.User, device.Tags) || !deviceInPrefix(device, prefix) {
 				continue
 			}
 			ids = append(ids, equivalentIDs(binding.Poller, device.ID, device.Addresses)...)
@@ -699,14 +732,14 @@ func (s *Service) endpointIDs(v Viewer, binding handlers.TailnetBinding, devices
 		}
 		return ids, nil
 	}
-	device, err := findDevice(devices, v.scope(), raw)
+	device, err := findDevice(devices, filter, raw)
 	if err == nil {
 		return dedupe(equivalentIDs(binding.Poller, device.ID, device.Addresses)), nil
 	}
 	if !errors.Is(err, errDeviceNotFound) {
 		return nil, err
 	}
-	if knownDevice(devices, raw) || v.scope() != nil {
+	if knownDevice(devices, raw) || filter != nil {
 		return nil, errDeviceNotFound
 	}
 	if binding.Poller != nil {

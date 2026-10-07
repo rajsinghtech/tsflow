@@ -30,11 +30,25 @@ func TestSearchAndGetDeviceScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scoped.Count != 1 || scoped.Devices[0].ID != "ada" || scoped.Devices[0].User != "ada@example.com" {
-		t.Fatalf("scoped search = %+v", scoped)
+	if scoped.Scope != "mine" || scoped.Count != 1 || scoped.Devices[0].ID != "ada" || scoped.Devices[0].User != "ada@example.com" {
+		t.Fatalf("default search = %+v", scoped)
+	}
+	everyone, err := svc.searchDevices(context.Background(), ada, searchDevicesIn{Scope: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if everyone.Scope != "all" || everyone.Count != 2 {
+		t.Fatalf("scope=all search = %+v", everyone)
 	}
 	if _, err := svc.getDevice(context.Background(), ada, getDeviceIn{Device: "bob"}); err == nil {
-		t.Fatal("scoped viewer read bob's device")
+		t.Fatal("default scope returned bob")
+	}
+	bob, err := svc.getDevice(context.Background(), ada, getDeviceIn{Device: "bob", Scope: "all"})
+	if err != nil || bob.Device.ID != "bob" || bob.Scope != "all" {
+		t.Fatalf("scope=all get bob = %+v err=%v", bob, err)
+	}
+	if _, err := svc.searchDevices(context.Background(), ada, searchDevicesIn{Scope: "nope"}); err == nil {
+		t.Fatal("invalid scope was accepted")
 	}
 	got, err := svc.getDevice(context.Background(), ada, getDeviceIn{Device: "ada-laptop"})
 	if err != nil {
@@ -88,10 +102,28 @@ func TestTopTalkersOmitPhysicalUnlessRequested(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if scoped.Scope != "mine" {
+		t.Fatalf("default talker scope = %q", scoped.Scope)
+	}
 	for _, talker := range scoped.Talkers {
 		if talker.NodeID == "bob" {
-			t.Fatalf("scoped talkers include bob: %+v", scoped.Talkers)
+			t.Fatalf("default talkers include bob: %+v", scoped.Talkers)
 		}
+	}
+	cleared, err := svc.topTalkers(context.Background(), adaViewer(), rankedIn{
+		Start: window.Start, End: window.End, Scope: "all",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawBob bool
+	for _, talker := range cleared.Talkers {
+		if talker.NodeID == "bob" {
+			sawBob = true
+		}
+	}
+	if cleared.Scope != "all" || !sawBob {
+		t.Fatalf("scope=all talkers = %+v", cleared.Talkers)
 	}
 }
 
@@ -125,7 +157,13 @@ func TestTopPairsAndFlowsBetween(t *testing.T) {
 	if _, err := svc.flowsBetween(context.Background(), adaViewer(), flowsBetweenIn{
 		Start: window.Start, End: window.End, A: "ada", B: "bob",
 	}); err == nil {
-		t.Fatal("scoped viewer queried bob")
+		t.Fatal("default scope queried bob")
+	}
+	cleared, err := svc.flowsBetween(context.Background(), adaViewer(), flowsBetweenIn{
+		Start: window.Start, End: window.End, A: "ada", B: "bob", Scope: "all",
+	})
+	if err != nil || cleared.Scope != "all" || len(cleared.Flows) != 1 || cleared.Flows[0].TxBytes != 80 {
+		t.Fatalf("scope=all flows = %+v err=%v", cleared, err)
 	}
 	if _, err := svc.topTalkers(context.Background(), Viewer{}, rankedIn{TrafficTypes: []string{"nope"}}); err == nil {
 		t.Fatal("invalid traffic type was accepted")
@@ -265,8 +303,8 @@ func TestListTailnetsHonorsGrant(t *testing.T) {
 	if _, err := svc.searchDevices(context.Background(), viewer, searchDevicesIn{}); err == nil {
 		t.Fatal("missing tailnet was accepted")
 	}
-	if _, err := svc.searchDevices(context.Background(), viewer, searchDevicesIn{Tailnet: "beta"}); err == nil {
-		t.Fatal("beta tailnet was visible")
+	if _, err := svc.searchDevices(context.Background(), viewer, searchDevicesIn{Tailnet: "beta", Scope: "all"}); err == nil {
+		t.Fatal("beta tailnet was visible with scope=all")
 	}
 	found, err := svc.searchDevices(context.Background(), viewer, searchDevicesIn{Tailnet: "alpha"})
 	if err != nil {

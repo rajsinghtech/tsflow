@@ -371,7 +371,9 @@ An hour that sits fully inside the window is read from the hourly rollup (`node_
 
 ### MCP server
 
-`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, tailnet allowlists, and identity autoscope. A viewer cannot query a tailnet outside their grant. When `TSFLOW_ACCESS_AUTOSCOPE` is `user` or `groups`, tool results include only devices in that scope. The UI starts with the same filter and can clear it. These tools keep the filter applied, so an assistant does not receive other devices. The REST API is unchanged and still does not enforce that device filter. There is no separate MCP credential.
+`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
+
+Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes. The REST API still does not enforce the device filter.
 
 Tools are `list_tailnets`, `search_devices`, `get_device`, `top_talkers`, `top_pairs`, `flows_between`, `device_peers`, `device_timeline`, `new_connections`, and `stats_overview`. They read stored rollups. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Windows default to the last hour and stop at 7 days. List results default to 20 rows and stop at 100.
 

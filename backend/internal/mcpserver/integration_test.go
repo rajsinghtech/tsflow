@@ -147,20 +147,35 @@ func TestMCPClientEnforcesTailnetAndDeviceScope(t *testing.T) {
 
 	var devices searchDevicesOut
 	callTool(t, session, "search_devices", map[string]any{"tailnet": "alpha", "query": ""}, &devices)
-	if devices.Count != 1 || devices.Devices[0].ID != "ada" {
-		t.Fatalf("devices = %+v", devices.Devices)
+	if devices.Scope != "mine" || devices.Count != 1 || devices.Devices[0].ID != "ada" {
+		t.Fatalf("default devices = %+v", devices)
 	}
-	for _, device := range devices.Devices {
-		if device.ID == "bob" || device.ID == "beta-node" {
-			t.Fatalf("scoped search returned %s", device.ID)
+	var everyone searchDevicesOut
+	callTool(t, session, "search_devices", map[string]any{"tailnet": "alpha", "scope": "all"}, &everyone)
+	if everyone.Scope != "all" || everyone.Count != 2 {
+		t.Fatalf("scope=all devices = %+v", everyone)
+	}
+	saw := map[string]bool{}
+	for _, device := range everyone.Devices {
+		saw[device.ID] = true
+		if device.ID == "beta-node" {
+			t.Fatal("scope=all returned a device from another tailnet")
 		}
+	}
+	if !saw["ada"] || !saw["bob"] {
+		t.Fatalf("scope=all devices = %+v", everyone.Devices)
 	}
 
 	if _, isErr, _ := callToolRaw(t, session, "get_device", map[string]any{"tailnet": "alpha", "device": "bob-phone"}); !isErr {
-		t.Fatal("get_device returned bob's phone")
+		t.Fatal("default get_device returned bob's phone")
 	}
-	if _, isErr, _ := callToolRaw(t, session, "search_devices", map[string]any{"tailnet": "beta"}); !isErr {
-		t.Fatal("beta tailnet was accepted")
+	var bob getDeviceOut
+	callTool(t, session, "get_device", map[string]any{"tailnet": "alpha", "device": "bob-phone", "scope": "all"}, &bob)
+	if bob.Device.ID != "bob" || bob.Scope != "all" {
+		t.Fatalf("scope=all bob = %+v", bob)
+	}
+	if _, isErr, _ := callToolRaw(t, session, "search_devices", map[string]any{"tailnet": "beta", "scope": "all"}); !isErr {
+		t.Fatal("beta tailnet was accepted with scope=all")
 	}
 
 	var talkers talkersOut
