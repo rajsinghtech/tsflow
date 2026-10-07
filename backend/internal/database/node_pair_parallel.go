@@ -139,16 +139,29 @@ func closedSpans(hours []int64, minutes [][2]int64) []closedSpan {
 // A live window has a few of them, each a full poll's worth of rows.
 const openMinuteChunk = 2 * minuteSeconds
 
+// maxOpenMinuteItems caps the work items for minutes after the mark. A long
+// minute span (no rollup yet, or a mark far behind) uses wider chunks.
+const maxOpenMinuteItems = 32
+
 // openSpans turns the snapshot-bound part of a plan into work items: each
 // filling-hour span as one item and the minutes after the mark in chunks.
+// minutes should already be clamped to the rows that exist.
 func openSpans(hours, minutes [][2]int64) []closedSpan {
 	var spans []closedSpan
 	for _, h := range hours {
 		spans = append(spans, closedSpan{lo: h[0], hi: h[1], hours: true, open: true})
 	}
+	var total int64
 	for _, m := range minutes {
-		for lo := m[0]; lo < m[1]; lo += openMinuteChunk {
-			hi := lo + openMinuteChunk
+		total += m[1] - m[0]
+	}
+	chunk := int64(openMinuteChunk)
+	if total > chunk*maxOpenMinuteItems {
+		chunk = (total/maxOpenMinuteItems/minuteSeconds + 1) * minuteSeconds
+	}
+	for _, m := range minutes {
+		for lo := m[0]; lo < m[1]; lo += chunk {
+			hi := lo + chunk
 			if hi > m[1] {
 				hi = m[1]
 			}
@@ -156,6 +169,41 @@ func openSpans(hours, minutes [][2]int64) []closedSpan {
 		}
 	}
 	return spans
+}
+
+const minuteSeekMinSQL = `
+	SELECT MIN(bucket) FROM node_pairs
+	WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
+const minuteSeekMaxSQL = `
+	SELECT MAX(bucket) FROM node_pairs
+	WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
+// clampMinuteSpans narrows each span to the minute rows it holds, with two
+// primary-key seeks, and drops empty spans. A window that starts at the
+// epoch, or ends far in the future, then splits only the minutes that have
+// data.
+func clampMinuteSpans(ctx context.Context, q queryRower, tailnetID string, spans [][2]int64) ([][2]int64, error) {
+	var out [][2]int64
+	for _, span := range spans {
+		var lo, hi sql.NullInt64
+		if err := q.QueryRowContext(ctx, minuteSeekMinSQL, tailnetID, span[0], span[1]).Scan(&lo); err != nil {
+			return nil, fmt.Errorf("failed to bound minute span: %w", err)
+		}
+		if !lo.Valid {
+			continue
+		}
+		if err := q.QueryRowContext(ctx, minuteSeekMaxSQL, tailnetID, span[0], span[1]).Scan(&hi); err != nil {
+			return nil, fmt.Errorf("failed to bound minute span: %w", err)
+		}
+		if !hi.Valid {
+			continue
+		}
+		out = append(out, [2]int64{lo.Int64, hi.Int64 + 1})
+	}
+	return out, nil
 }
 
 // errSnapshotMoved reports that a commit for the tailnet overlapped a

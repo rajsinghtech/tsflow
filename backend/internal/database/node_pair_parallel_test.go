@@ -206,6 +206,76 @@ func TestOpenSpans(t *testing.T) {
 	if got := openSpans(nil, nil); got != nil {
 		t.Fatalf("empty plan = %+v", got)
 	}
+	// A long span uses wider chunks, capped at maxOpenMinuteItems, and the
+	// chunks still tile it exactly.
+	long := [][2]int64{{h, 200 * 24 * h}}
+	got = openSpans(nil, long)
+	if len(got) > maxOpenMinuteItems || len(got) < maxOpenMinuteItems/2 {
+		t.Fatalf("long span made %d items", len(got))
+	}
+	for i, sp := range got {
+		if sp.lo%minuteSeconds != h%minuteSeconds || sp.hours || !sp.open {
+			t.Fatalf("item %d = %+v", i, sp)
+		}
+		if i > 0 && sp.lo != got[i-1].hi {
+			t.Fatalf("items %d and %d leave a gap", i-1, i)
+		}
+	}
+	if got[0].lo != long[0][0] || got[len(got)-1].hi != long[0][1] {
+		t.Fatalf("items cover [%d, %d), want %v", got[0].lo, got[len(got)-1].hi, long[0])
+	}
+}
+
+func TestClampMinuteSpans(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := int64(1_790_000_000) / hourSeconds * hourSeconds
+	var rows []rawNodePair
+	for _, b := range []int64{base + 60, base + 600, base + 3600} {
+		rows = append(rows, rawNodePair{tailnet: DefaultTailnetID, bucket: b, src: "a", dst: "b", traffic: "virtual",
+			tx: 1, flows: 1, protocols: "[6]", protocolBytes: "{}", ports: "[]", txPorts: "[]", rxPorts: "[]", txProto: "{}", rxProto: "{}"})
+	}
+	rows = append(rows, rawNodePair{tailnet: "other", bucket: base, src: "a", dst: "b", traffic: "virtual",
+		tx: 1, flows: 1, protocols: "[6]", protocolBytes: "{}", ports: "[]", txPorts: "[]", rxPorts: "[]", txProto: "{}", rxProto: "{}"})
+	insertRawNodePairs(t, store, rows)
+	got, err := clampMinuteSpans(ctx, store.db, DefaultTailnetID, [][2]int64{{0, base + 601}, {base + 601, base + 3600}, {base + 3600, 1 << 40}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][2]int64{{base + 60, base + 601}, {base + 3600, base + 3601}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("clamped = %v, want %v", got, want)
+	}
+}
+
+// A window from the epoch with the mark far behind sparse minute rows, like
+// a poller readiness check, splits only the minutes that hold rows.
+func TestOpenRegionFromTheEpochStaysSmall(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := int64(1_790_000_000) / hourSeconds * hourSeconds
+	var rows []rawNodePair
+	for _, b := range []int64{base + 60, base + 120*hourSeconds, base + 3000*hourSeconds + 120} {
+		rows = append(rows, rawNodePair{tailnet: DefaultTailnetID, bucket: b, src: "a", dst: "b", traffic: "virtual",
+			tx: b % 997, flows: 1, protocols: "[6]", protocolBytes: "{}", ports: "[]", txPorts: "[]", rxPorts: "[]", txProto: "{}", rxProto: "{}"})
+	}
+	insertRawNodePairs(t, store, rows)
+	if err := setHourMark(ctx, store.db, DefaultTailnetID, base-hourSeconds-minuteSeconds); err != nil {
+		t.Fatal(err)
+	}
+	var items atomic.Int64
+	store.openSpanHook = func() { items.Add(1) }
+	start, end := time.Unix(0, 0).UTC(), time.Unix(base+5000*hourSeconds, 0).UTC()
+	got, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := items.Load(); n == 0 || n > maxOpenMinuteItems+1 {
+		t.Fatalf("open region made %d work items", n)
+	}
+	want, err := store.legacyNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil || !reflect.DeepEqual(want, got) {
+		t.Fatalf("epoch window err=%v\nwant %s\ngot  %s", err, pairRowsJSON(want), pairRowsJSON(got))
+	}
 }
 
 func TestSplitClosedMinutes(t *testing.T) {

@@ -116,7 +116,12 @@ func (s *SQLiteStore) readNodePairAggregates(ctx context.Context, tailnetID stri
 	grouped := make(map[pairGroupKey]*pairGroup)
 	var stable func() bool
 	if parallelOpen {
-		spans = append(spans, openSpans(openHours, openMinutes)...)
+		// Bound the minutes on this snapshot; the stable check covers it.
+		clamped, err := clampMinuteSpans(ctx, tx, tailnetID, openMinutes)
+		if err != nil {
+			return nil, err
+		}
+		spans = append(spans, openSpans(openHours, clamped)...)
 		stable = func() bool { return seq.unchangedSince(since) }
 	} else if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {
 		return nil, err
