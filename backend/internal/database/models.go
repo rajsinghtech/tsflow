@@ -104,12 +104,10 @@ const (
 
 // RankedTalker is one device over a window, with the same byte and flow
 // fields the pair and traffic-stats reads already use.
-// Owner is set when the read was filtered by tag or login. It is the merged
-// login, including a creator login copied onto a tagged device.
 type RankedTalker struct {
 	NodeID     string `json:"nodeId"`
 	Hostname   string `json:"hostname"`
-	Owner      string `json:"owner,omitempty"`
+	Owner      string `json:"owner"`
 	TxBytes    int64  `json:"txBytes"`
 	RxBytes    int64  `json:"rxBytes"`
 	TotalBytes int64  `json:"totalBytes"`
@@ -117,14 +115,13 @@ type RankedTalker struct {
 }
 
 // RankedPair is one directed src/dst over a window.
-// SrcOwner and DstOwner are set when the read was filtered by tag or login.
 type RankedPair struct {
 	SrcNodeID   string `json:"srcNodeId"`
 	SrcHostname string `json:"srcHostname"`
-	SrcOwner    string `json:"srcOwner,omitempty"`
+	SrcOwner    string `json:"srcOwner"`
 	DstNodeID   string `json:"dstNodeId"`
 	DstHostname string `json:"dstHostname"`
-	DstOwner    string `json:"dstOwner,omitempty"`
+	DstOwner    string `json:"dstOwner"`
 	TxBytes     int64  `json:"txBytes"`
 	RxBytes     int64  `json:"rxBytes"`
 	TotalBytes  int64  `json:"totalBytes"`
@@ -133,19 +130,32 @@ type RankedPair struct {
 
 // RankQuery selects one page of a ranked read.
 // An empty Sort means bytes. Limit <= 0 selects RankDefaultLimit.
-// Tag, User, and Q are empty for an unfiltered read. Tag and User are both
-// required when both are set. Q matches a login, tag, hostname, name, or address.
 type RankQuery struct {
 	Limit        int
 	Offset       int
 	Sort         string
 	TrafficTypes []string
-	Tag          string
-	User         string
-	Q            string
+	// NodeIDs and Match narrow the ranking before it is paged. A talker is
+	// kept when its stored id is in NodeIDs or contains Match; a pair is kept
+	// when either endpoint is. Both empty means no filter. The request's q
+	// search sets them.
+	NodeIDs []string
+	Match   string
+	// Search is the caller's search text, echoed back in metadata.
+	Search string
+	// Tag, User, and Q scope the read on the server through the merged node
+	// metadata (identity.go). They are not request parameters.
+	Tag  string
+	User string
+	Q    string
 	// ExactUser requires the full login. The me scope sets this from the
-	// viewer identity. A client-supplied user filter stays a substring.
+	// viewer identity.
 	ExactUser bool
+}
+
+// Filtered reports whether the query narrows the ranking to some nodes.
+func (q RankQuery) Filtered() bool {
+	return len(q.NodeIDs) > 0 || q.Match != ""
 }
 
 // PortStat represents traffic volume for a specific port/protocol

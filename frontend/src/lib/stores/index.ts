@@ -41,9 +41,20 @@ export {
 	stopStatsRefresh,
 	statsSummary,
 	statsBuckets,
-	topTalkers,
-	topPairs,
 	topPorts,
 	statsLoading,
 	statsError
 } from './stats-store';
+export {
+	rankSort,
+	rankSearch,
+	setRankSearch,
+	rankedTalkers,
+	rankedPairs,
+	loadRankings,
+	loadRankedTalkers,
+	loadRankedPairs,
+	setRankSort,
+	startRankingsRefresh,
+	stopRankingsRefresh
+} from './rankings-store';

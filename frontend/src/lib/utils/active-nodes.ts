@@ -26,3 +26,11 @@ export function averageBytesPerNode(totalBytes: number, nodeCount: number): numb
 	if (!Number.isFinite(totalBytes) || totalBytes <= 0 || nodeCount <= 0) return 0;
 	return totalBytes / nodeCount;
 }
+
+// The header's traffic summary comes from the graph (Traffic) or the overview
+// stats (Analytics). Other pages load neither, so a summary there would read
+// as an idle tailnet. Show it on those two pages, or when graph data is
+// already loaded.
+export function headerShowsStats(path: string, hasNetworkData: boolean): boolean {
+	return path === '/' || path === '/analytics' || hasNetworkData;
+}

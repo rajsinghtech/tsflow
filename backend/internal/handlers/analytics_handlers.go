@@ -23,10 +23,11 @@ type rankMetadata struct {
 	HasMore      bool      `json:"hasMore"`
 	Sort         string    `json:"sort"`
 	TrafficTypes []string  `json:"trafficTypes,omitempty"`
-	Tag          string    `json:"tag,omitempty"`
-	User         string    `json:"user,omitempty"`
-	Q            string    `json:"q,omitempty"`
+	Query        string    `json:"q,omitempty"`
 }
+
+// rankMaxSearchLen bounds the q search text.
+const rankMaxSearchLen = 320
 
 // GetRankedTalkers returns one page of devices ranked over a time window.
 func (h *Handlers) GetRankedTalkers(c *gin.Context) {
@@ -52,6 +53,14 @@ func (h *Handlers) GetRankedTalkers(c *gin.Context) {
 		return
 	}
 
+	if !h.applyRankSearch(tn.poller, c.Query("q"), &query) {
+		c.JSON(http.StatusOK, gin.H{
+			"talkers":  []database.RankedTalker{},
+			"metadata": rankMeta(tn.id, startTime, endTime, query, 0, false),
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 	talkers, hasMore, err := h.store.ListRankedTalkers(ctx, tn.id, startTime, endTime, query)
@@ -66,7 +75,7 @@ func (h *Handlers) GetRankedTalkers(c *gin.Context) {
 	if talkers == nil {
 		talkers = []database.RankedTalker{}
 	}
-	labelRankedTalkers(talkers)
+	talkers = h.resolveRankedTalkers(tn.poller, talkers, query.Sort)
 	c.JSON(http.StatusOK, gin.H{
 		"talkers":  talkers,
 		"metadata": rankMeta(tn.id, startTime, endTime, query, len(talkers), hasMore),
@@ -97,6 +106,14 @@ func (h *Handlers) GetRankedPairs(c *gin.Context) {
 		return
 	}
 
+	if !h.applyRankSearch(tn.poller, c.Query("q"), &query) {
+		c.JSON(http.StatusOK, gin.H{
+			"pairs":    []database.RankedPair{},
+			"metadata": rankMeta(tn.id, startTime, endTime, query, 0, false),
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
 	pairs, hasMore, err := h.store.ListRankedPairs(ctx, tn.id, startTime, endTime, query)
@@ -111,7 +128,7 @@ func (h *Handlers) GetRankedPairs(c *gin.Context) {
 	if pairs == nil {
 		pairs = []database.RankedPair{}
 	}
-	labelRankedPairs(pairs)
+	pairs = h.resolveRankedPairs(tn.poller, pairs, query.Sort)
 	c.JSON(http.StatusOK, gin.H{
 		"pairs":    pairs,
 		"metadata": rankMeta(tn.id, startTime, endTime, query, len(pairs), hasMore),
@@ -142,17 +159,13 @@ func (h *Handlers) parseRankQuery(c *gin.Context) (database.RankQuery, error) {
 		return query, err
 	}
 	query.TrafficTypes = trafficTypes
-	query.Tag = strings.TrimSpace(c.Query("tag"))
-	query.User = strings.TrimSpace(c.Query("user"))
-	query.Q = strings.TrimSpace(c.Query("q"))
-	if _, err := query.Identity(); err != nil {
-		return query, err
+	if len(strings.TrimSpace(c.Query("q"))) > rankMaxSearchLen {
+		return query, fmt.Errorf("q must be at most %d characters", rankMaxSearchLen)
 	}
 	return query, nil
 }
 
 func rankMeta(tailnet string, start, end time.Time, query database.RankQuery, count int, hasMore bool) rankMetadata {
-	identity, _ := query.Identity()
 	return rankMetadata{
 		Start:        start,
 		End:          end,
@@ -163,8 +176,6 @@ func rankMeta(tailnet string, start, end time.Time, query database.RankQuery, co
 		HasMore:      hasMore,
 		Sort:         query.Sort,
 		TrafficTypes: query.TrafficTypes,
-		Tag:          identity.Tag,
-		User:         identity.User,
-		Q:            identity.Q,
+		Query:        query.Search,
 	}
 }

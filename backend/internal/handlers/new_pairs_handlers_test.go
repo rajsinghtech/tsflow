@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -65,5 +66,49 @@ func TestNewPairsEndpoint(t *testing.T) {
 	wCode, _ := serve(dataRouter(missing), http.MethodGet, "/api/analytics/new-pairs"+window)
 	if wCode != http.StatusServiceUnavailable {
 		t.Fatalf("missing store status=%d", wCode)
+	}
+}
+
+// A lookback that reaches back before the oldest stored minute cannot rule
+// out older sightings, so the response says the lookback is incomplete.
+func TestNewPairsReportsLookbackCoverage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
+	window := rankWindow(start, start.Add(time.Hour))
+	oldest := start.Add(-3 * 24 * time.Hour)
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
+		{Bucket: oldest.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]"},
+		{Bucket: start.Unix() + 60, SrcNodeID: "b", DstNodeID: "c", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type meta struct {
+		Metadata struct {
+			LookbackStart    time.Time  `json:"lookbackStart"`
+			DataStart        *time.Time `json:"dataStart"`
+			LookbackComplete bool       `json:"lookbackComplete"`
+		} `json:"metadata"`
+	}
+	get := func(lookback string) meta {
+		t.Helper()
+		code, body := serve(dataRouter(h), http.MethodGet, "/api/analytics/new-pairs"+window+"&lookback="+lookback)
+		if code != http.StatusOK {
+			t.Fatalf("lookback=%s: %d %s", lookback, code, body)
+		}
+		var out meta
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	week := get("7d").Metadata
+	if week.LookbackComplete || week.DataStart == nil || !week.DataStart.Equal(oldest) || !week.LookbackStart.Equal(start.Add(-7*24*time.Hour)) {
+		t.Fatalf("7d lookback: %+v", week)
+	}
+	day := get("24h").Metadata
+	if !day.LookbackComplete || !day.LookbackStart.Equal(start.Add(-24*time.Hour)) {
+		t.Fatalf("24h lookback: %+v", day)
 	}
 }

@@ -3,6 +3,7 @@ import type { Device, DeviceScope, NetworkLog, NetworkNode, NetworkLink } from '
 import { tailscaleService, type AggregatedFlow } from '#lib/services';
 import { convertAggregatedFlowsToNetworkLogs } from '#lib/utils/aggregate-logs';
 import { processNetworkLogs } from '#lib/utils/network-processor';
+import { withLinkTotals } from '#lib/utils/node-link-totals';
 import { isValidIPv4, isIPv6 } from '#lib/utils/ip-utils';
 import { nodeMatchesDeviceScope, hasDeviceScope } from '#lib/utils/device-scope';
 import { buildNodeSearchIndex, searchNodeIds } from '#lib/utils/node-search-index';
@@ -38,6 +39,12 @@ const trafficFilteredEdges = derived([processedNetwork, debouncedFilterStore], (
 	});
 });
 
+// Nodes with TX, RX, totals, and connections counted over the selected traffic
+// types only, so a node card agrees with its edges and the header.
+const countedNodes = derived([processedNetwork, trafficFilteredEdges], ([$network, $edges]) =>
+	withLinkTotals($network.nodes, $edges)
+);
+
 // Get node IDs that have at least one connection after traffic type filtering
 const nodesWithTrafficConnections = derived(trafficFilteredEdges, ($edges) => {
 	const nodeIds = new Set<string>();
@@ -59,10 +66,10 @@ const nodeSearchIndex = derived(processedNetwork, ($network) => buildNodeSearchI
 
 // Primary matched nodes (nodes directly matching the search query)
 export const primaryMatchedNodes = derived(
-	[processedNetwork, debouncedFilterStore, nodesWithTrafficConnections, nodeSearchIndex],
-	([$network, $filters, $connectedNodeIds, $index]) => {
+	[countedNodes, debouncedFilterStore, nodesWithTrafficConnections, nodeSearchIndex],
+	([$nodes, $filters, $connectedNodeIds, $index]) => {
 		const matchedIds = searchNodeIds($index, $filters.search);
-		return $network.nodes.filter((node) => {
+		return $nodes.filter((node) => {
 			if (!$connectedNodeIds.has(node.id)) return false;
 			if (matchedIds && !matchedIds.has(node.id)) return false;
 			return nodeMatchesDeviceScope(node, $filters.deviceScope);
@@ -106,17 +113,17 @@ const connectedToMatchedNodes = derived(
 
 // Filtered nodes: primary matches + their connected nodes
 export const filteredNodes = derived(
-	[processedNetwork, primaryMatchedNodes, connectedToMatchedNodes, nodesWithTrafficConnections, debouncedFilterStore],
-	([$network, $primaryNodes, $connectedIds, $connectedNodeIds, $filters]) => {
+	[countedNodes, primaryMatchedNodes, connectedToMatchedNodes, nodesWithTrafficConnections, debouncedFilterStore],
+	([$countedNodes, $primaryNodes, $connectedIds, $connectedNodeIds, $filters]) => {
 		const primaryIds = new Set($primaryNodes.map((n) => n.id));
 
 		// If nothing narrows the view, return all nodes with connections
 		if (!viewIsNarrowed($filters.search, $filters.deviceScope)) {
-			return $network.nodes.filter((node) => $connectedNodeIds.has(node.id));
+			return $countedNodes.filter((node) => $connectedNodeIds.has(node.id));
 		}
 
 		// Return primary matches + connected nodes
-		return $network.nodes.filter((node) => {
+		return $countedNodes.filter((node) => {
 			if (!$connectedNodeIds.has(node.id)) return false;
 			return primaryIds.has(node.id) || $connectedIds.has(node.id);
 		});
