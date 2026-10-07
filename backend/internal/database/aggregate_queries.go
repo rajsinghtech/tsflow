@@ -74,7 +74,8 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, tailnetID string, r
 	}
 	defer tx.Rollback()
 
-	if err := upsertNodePairsTx(ctx, tx, tailnetID, results.NodePairs); err != nil {
+	touches := hourTouches{}
+	if err := upsertNodePairsTx(ctx, tx, tailnetID, results.NodePairs, touches); err != nil {
 		return err
 	}
 	if err := upsertBandwidthTx(ctx, tx, tailnetID, results.Bandwidth); err != nil {
@@ -95,7 +96,7 @@ func (s *SQLiteStore) CommitPollResults(ctx context.Context, tailnetID string, r
 		}
 	}
 
-	return s.commitWrite(tx, tailnetID)
+	return s.commitWriteTouching(tx, tailnetID, touches)
 }
 
 // CommitObjectIngest atomically writes aggregates for one immutable object and
@@ -142,7 +143,8 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 	if err := recordObjectMetadataTx(ctx, tx, tailnetID, result.Key, nodeMetadataIDs(result.NodeMetadata)); err != nil {
 		return err
 	}
-	if err := upsertNodePairsTx(ctx, tx, tailnetID, result.NodePairs); err != nil {
+	touches := hourTouches{}
+	if err := upsertNodePairsTx(ctx, tx, tailnetID, result.NodePairs, touches); err != nil {
 		return err
 	}
 	if err := upsertBandwidthTx(ctx, tx, tailnetID, result.Bandwidth); err != nil {
@@ -169,7 +171,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 		}
 	}
 
-	return s.commitWrite(tx, tailnetID)
+	return s.commitWriteTouching(tx, tailnetID, touches)
 }
 
 func nodeMetadataIDs(nodes []NodeMetadata) []string {
@@ -182,7 +184,11 @@ func nodeMetadataIDs(nodes []NodeMetadata) []string {
 	return ids
 }
 
-func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggregates []NodePairAggregate) error {
+// upsertNodePairsTx adds each minute delta to node_pairs, and to the hourly
+// row when the minute is already rolled up. Hours changed that way are added
+// to touches so the caller can drop them from the closed-hour cache after
+// the commit.
+func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggregates []NodePairAggregate, touches hourTouches) error {
 	if len(aggregates) == 0 {
 		return nil
 	}
@@ -339,6 +345,7 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggreg
 		// delta. The row is the source of truth either way; this keeps the
 		// hour equal to the sum of its minutes.
 		if bucket <= mark {
+			touches.add(bucket)
 			if err := mergeHourDelta(ctx, tx, tailnetID, bucket, hourDelta{
 				src: agg.SrcNodeID, dst: agg.DstNodeID, traffic: agg.TrafficType,
 				tx: agg.TxBytes, rx: agg.RxBytes, txPkts: agg.TxPkts, rxPkts: agg.RxPkts,
@@ -481,13 +488,14 @@ func (s *SQLiteStore) UpsertNodePairAggregates(ctx context.Context, tailnetID st
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if err := upsertNodePairsTx(ctx, tx, tailnetID, aggregates); err != nil {
+	touches := hourTouches{}
+	if err := upsertNodePairsTx(ctx, tx, tailnetID, aggregates, touches); err != nil {
 		return err
 	}
 	if err := rollClosedMinutes(ctx, tx, tailnetID, time.Now().UTC().Unix()); err != nil {
 		return err
 	}
-	return s.commitWrite(tx, tailnetID)
+	return s.commitWriteTouching(tx, tailnetID, touches)
 }
 
 // UpsertBandwidth upserts total bandwidth into bandwidth.
@@ -1082,6 +1090,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
 			WHERE np.tailnet_id = ? AND %s%s
+			  AND j.key IS NOT NULL -- a bare number has no protocol
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
 			       CAST(j.value AS INTEGER) AS proto,
@@ -1283,7 +1292,8 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 
 	protoSource, protoArgs := plan.unionPairRows(tailnetID,
 		"bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
-		"min_bucket AS bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
+		// The null protocol key that hour rows keep has no protocol number.
+		"min_bucket AS bucket, tx_bytes, rx_bytes, "+hourProtocolBytesForStatsSQL+", protocols",
 		protoClause, protoTypeArgs,
 	)
 	fallback := plan.fallbackRanges()
@@ -1318,6 +1328,7 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 			FROM (%s) AS np, json_each(
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
+			WHERE j.key IS NOT NULL -- a bare number has no protocol
 			%s
 		)
 		SELECT b, proto, SUM(bytes)
@@ -2061,3 +2072,10 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 
 	return result, nil
 }
+
+// hourProtocolBytesForStatsSQL selects a node_pair_hours row's
+// protocol_bytes without the null protocol key, which json_each would turn
+// into protocol 0. Minute rows give that key no protocol number either.
+const hourProtocolBytesForStatsSQL = `CASE WHEN json_valid(protocol_bytes)
+	THEN json_remove(protocol_bytes, '$."` + hourNullProtocolKey + `"')
+	ELSE protocol_bytes END AS protocol_bytes`

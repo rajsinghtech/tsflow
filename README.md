@@ -344,6 +344,7 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
 | `TSFLOW_POLL_DELAY` | API backend only. Each poll fetches logs up to now minus this delay, because the logs API can publish a message a little after its logged time and a window is never re-read. Set `0` to poll up to now. S3 and GCS polling use `TSFLOW_S3_LOOKBACK` instead. | `2m` |
+| `TSFLOW_GRAPH_CACHE_MB` | Memory cap, in MiB, for the cache of closed hours that the graph view reads. Each cached hour stays until a late write or retention changes it, so wide live windows only read the current hour from disk. Each hour takes about 0.5 MiB at 1k nodes, 2.3 MiB at 5k and 9 MiB at 20k, so the default holds a full day at 20k nodes. Least-recently-used hours are evicted at the cap. Set `0` to disable. | `256` |
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
 | `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
 | `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -67,6 +68,33 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if s.nodePairReadHook != nil {
 		s.nodePairReadHook()
 	}
+	aggs, err := s.readNodePairAggregates(ctx, tailnetID, startUnix, endUnix, true)
+	if errors.Is(err, errSnapshotMoved) {
+		s.openReadFallbacks.Add(1)
+		return s.readNodePairAggregates(ctx, tailnetID, startUnix, endUnix, false)
+	}
+	return aggs, err
+}
+
+// readNodePairAggregates plans the window on one snapshot and reads it.
+//
+// Closed hours and closed minutes (at or before the mark) are read after
+// that snapshot, in parallel. Only a late write can change them, and it
+// updates the minute row and the hour row in one commit. Each bucket is read
+// from exactly one of the two tables, so a newer snapshot cannot double
+// count.
+//
+// The filling hour and the minutes after the mark must be read on the
+// planning snapshot, because a moving mark shifts rows between the tables.
+// With parallelOpen, and no commit for the tailnet in flight, they are read
+// in parallel on separate snapshots instead, and the result is kept only if
+// no commit for the tailnet started before the last of them was read: then
+// every snapshot holds the same rows. Otherwise it returns errSnapshotMoved
+// and the caller reads again with the open part on the planning snapshot.
+func (s *SQLiteStore) readNodePairAggregates(ctx context.Context, tailnetID string, startUnix, endUnix int64, parallelOpen bool) ([]NodePairAggregate, error) {
+	seq := s.commitSeqFor(tailnetID)
+	since, quiet := seq.quiet()
+	parallelOpen = parallelOpen && quiet
 
 	tx, err := s.beginRead(ctx)
 	if err != nil {
@@ -78,11 +106,33 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if err != nil {
 		return nil, err
 	}
-	grouped := make(map[pairGroupKey]*pairGroup)
-	if err := collectPairGroups(ctx, tx, tailnetID, plan, grouped); err != nil {
+	closedHourRanges, openHours := splitClosedHours(plan.hours, plan.mark)
+	closedHours, err := listRolledHours(ctx, tx, tailnetID, closedHourRanges)
+	if err != nil {
 		return nil, err
 	}
-	return sortedPairAggregates(grouped)
+	closedMinutes, openMinutes := splitClosedMinutes(plan.minutes, plan.mark)
+	spans := closedSpans(closedHours, closedMinutes)
+	grouped := make(map[pairGroupKey]*pairGroup)
+	var stable func() bool
+	if parallelOpen {
+		// Bound the minutes on this snapshot; the stable check covers it.
+		clamped, err := clampMinuteSpans(ctx, tx, tailnetID, openMinutes)
+		if err != nil {
+			return nil, err
+		}
+		spans = append(spans, openSpans(openHours, clamped)...)
+		stable = func() bool { return seq.unchangedSince(since) }
+	} else if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {
+		return nil, err
+	}
+	if err := tx.Rollback(); err != nil {
+		return nil, fmt.Errorf("failed to end read transaction: %w", err)
+	}
+	if s.closedReadHook != nil {
+		s.closedReadHook()
+	}
+	return s.aggregateWithClosedSpans(ctx, tailnetID, spans, grouped, stable)
 }
 
 func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan hourPlan, grouped map[pairGroupKey]*pairGroup) error {
@@ -100,7 +150,7 @@ func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan
 		if err != nil {
 			return fmt.Errorf("failed to query node pairs: %w", err)
 		}
-		if err := readPairRows(rows, grouped, false); err != nil {
+		if err := readHourPairRows(rows, grouped); err != nil {
 			return err
 		}
 	}
@@ -108,6 +158,16 @@ func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan
 }
 
 func readPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty bool) error {
+	return scanPairRows(rows, grouped, dirty, false)
+}
+
+// readHourPairRows is readPairRows for node_pair_hours rows, whose protocol
+// columns may carry a null protocol key (see formatHourProtocolBytes).
+func readHourPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup) error {
+	return scanPairRows(rows, grouped, false, true)
+}
+
+func scanPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty, hourRows bool) error {
 	defer rows.Close()
 	for rows.Next() {
 		var bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64
@@ -129,7 +189,7 @@ func readPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty boo
 			group = newPairGroup()
 			grouped[key] = group
 		}
-		if err := group.add(bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
+		if err := group.addRow(hourRows, bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
 			return fmt.Errorf("failed to scan node pair: %w", err)
 		}
 		if dirty {
@@ -154,6 +214,12 @@ func sortedPairAggregates(grouped map[pairGroupKey]*pairGroup) ([]NodePairAggreg
 		}
 		aggregates = append(aggregates, agg)
 	}
+	sortPairAggregates(aggregates)
+	return aggregates, nil
+}
+
+// sortPairAggregates orders by total bytes, then by key.
+func sortPairAggregates(aggregates []NodePairAggregate) {
 	sort.Slice(aggregates, func(i, j int) bool {
 		left := aggregates[i].TxBytes + aggregates[i].RxBytes
 		right := aggregates[j].TxBytes + aggregates[j].RxBytes
@@ -168,7 +234,6 @@ func sortedPairAggregates(grouped map[pairGroupKey]*pairGroup) ([]NodePairAggreg
 		}
 		return aggregates[i].TrafficType < aggregates[j].TrafficType
 	})
-	return aggregates, nil
 }
 
 type pairGroupKey struct {
@@ -188,8 +253,19 @@ func (s *sumState) add(n int64, numeric bool) {
 	s.numeric = true
 }
 
+// smallSumsLimit is how many keys a sum set scans linearly before it builds
+// an index. Most pairs carry one to three protocols and a few ports, and a
+// map per set was most of the read's allocations.
+const smallSumsLimit = 16
+
+type protoEntry struct {
+	key int
+	st  sumState
+}
+
 type protoSums struct {
-	byKey   map[int]sumState
+	items   []protoEntry
+	index   map[int]int // position in items, once len(items) > smallSumsLimit
 	nullKey sumState
 	hasNull bool
 }
@@ -200,13 +276,32 @@ func (p *protoSums) add(key int, keyNull bool, n int64, numeric bool) {
 		p.hasNull = true
 		return
 	}
-	if p.byKey == nil {
-		p.byKey = make(map[int]sumState)
-	}
-	state := p.byKey[key]
-	state.add(n, numeric)
 	// A JSON null value still creates the key, with a null sum until a number arrives.
-	p.byKey[key] = state
+	p.slot(key).add(n, numeric)
+}
+
+func (p *protoSums) slot(key int) *sumState {
+	if p.index != nil {
+		if i, ok := p.index[key]; ok {
+			return &p.items[i].st
+		}
+	} else {
+		for i := range p.items {
+			if p.items[i].key == key {
+				return &p.items[i].st
+			}
+		}
+	}
+	p.items = append(p.items, protoEntry{key: key})
+	if p.index != nil {
+		p.index[key] = len(p.items) - 1
+	} else if len(p.items) > smallSumsLimit {
+		p.index = make(map[int]int, len(p.items)*2)
+		for i, item := range p.items {
+			p.index[item.key] = i
+		}
+	}
+	return &p.items[len(p.items)-1].st
 }
 
 type portKey struct {
@@ -216,17 +311,42 @@ type portKey struct {
 	proto     int
 }
 
+type portEntry struct {
+	key portKey
+	st  sumState
+}
+
 type portSums struct {
-	byKey map[portKey]sumState
+	items []portEntry
+	index map[portKey]int // position in items, once len(items) > smallSumsLimit
 }
 
 func (p *portSums) add(key portKey, n int64, numeric bool) {
-	if p.byKey == nil {
-		p.byKey = make(map[portKey]sumState)
+	p.slot(key).add(n, numeric)
+}
+
+func (p *portSums) slot(key portKey) *sumState {
+	if p.index != nil {
+		if i, ok := p.index[key]; ok {
+			return &p.items[i].st
+		}
+	} else {
+		for i := range p.items {
+			if p.items[i].key == key {
+				return &p.items[i].st
+			}
+		}
 	}
-	state := p.byKey[key]
-	state.add(n, numeric)
-	p.byKey[key] = state
+	p.items = append(p.items, portEntry{key: key})
+	if p.index != nil {
+		p.index[key] = len(p.items) - 1
+	} else if len(p.items) > smallSumsLimit {
+		p.index = make(map[portKey]int, len(p.items)*2)
+		for i, item := range p.items {
+			p.index[item.key] = i
+		}
+	}
+	return &p.items[len(p.items)-1].st
 }
 
 type pairGroup struct {
@@ -258,6 +378,19 @@ func (g *pairGroup) add(
 	bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64,
 	protocolBytes, ports, txProto, rxProto, txPorts, rxPorts sql.NullString,
 ) error {
+	return g.addRow(false, bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts)
+}
+
+// addRow adds one stored row. hourRow decodes the protocol columns of a
+// node_pair_hours row, which may carry a null protocol key.
+func (g *pairGroup) addRow(hourRow bool,
+	bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64,
+	protocolBytes, ports, txProto, rxProto, txPorts, rxPorts sql.NullString,
+) error {
+	mergeProto := mergeProtocolColumn
+	if hourRow {
+		mergeProto = mergeHourProtocolColumn
+	}
 	if bucket.Valid && (!g.hasBucket || bucket.Int64 < g.bucket) {
 		g.bucket = bucket.Int64
 		g.hasBucket = true
@@ -275,13 +408,13 @@ func (g *pairGroup) add(
 		g.directional = dir
 		g.hasDir = true
 	}
-	if err := mergeProtocolColumn(&g.protocols, nullString(protocolBytes)); err != nil {
+	if err := mergeProto(&g.protocols, nullString(protocolBytes)); err != nil {
 		return err
 	}
-	if err := mergeProtocolColumn(&g.txProto, nullString(txProto)); err != nil {
+	if err := mergeProto(&g.txProto, nullString(txProto)); err != nil {
 		return err
 	}
-	if err := mergeProtocolColumn(&g.rxProto, nullString(rxProto)); err != nil {
+	if err := mergeProto(&g.rxProto, nullString(rxProto)); err != nil {
 		return err
 	}
 	if err := mergePortColumn(&g.ports, nullString(ports)); err != nil {
@@ -379,33 +512,30 @@ func formatProtocols(sums protoSums) string {
 }
 
 func formatProtocolBytes(sums protoSums) string {
-	if len(sums.byKey) == 0 {
+	if len(sums.items) == 0 {
 		return "{}"
 	}
-	keys := make([]int, 0, len(sums.byKey))
-	for key := range sums.byKey {
-		keys = append(keys, key)
-	}
-	sort.Ints(keys)
+	items := append([]protoEntry(nil), sums.items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].key < items[j].key })
 	var b strings.Builder
 	b.WriteByte('{')
-	for i, key := range keys {
+	for i, item := range items {
 		if i > 0 {
 			b.WriteByte(',')
 		}
 		b.WriteByte('"')
-		b.WriteString(strconv.Itoa(key))
+		b.WriteString(strconv.Itoa(item.key))
 		b.WriteString(`":`)
-		writeSum(&b, sums.byKey[key])
+		writeSum(&b, item.st)
 	}
 	b.WriteByte('}')
 	return b.String()
 }
 
 func protoItems(sums protoSums) []protoItem {
-	items := make([]protoItem, 0, len(sums.byKey)+1)
-	for key, state := range sums.byKey {
-		items = append(items, protoItem{key: key, n: state.n, numeric: state.numeric})
+	items := make([]protoItem, 0, len(sums.items)+1)
+	for _, item := range sums.items {
+		items = append(items, protoItem{key: item.key, n: item.st.n, numeric: item.st.numeric})
 	}
 	if sums.hasNull {
 		items = append(items, protoItem{keyNull: true, n: sums.nullKey.n, numeric: sums.nullKey.numeric})
@@ -424,12 +554,12 @@ func formatPorts(sums portSums) string {
 }
 
 func formatPortsLimit(sums portSums, limit int) string {
-	if len(sums.byKey) == 0 {
+	if len(sums.items) == 0 {
 		return "[]"
 	}
-	items := make([]portItem, 0, len(sums.byKey))
-	for key, state := range sums.byKey {
-		items = append(items, portItem{key: key, n: state.n, numeric: state.numeric})
+	items := make([]portItem, 0, len(sums.items))
+	for _, item := range sums.items {
+		items = append(items, portItem{key: item.key, n: item.st.n, numeric: item.st.numeric})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		a, b := items[i], items[j]
@@ -506,6 +636,59 @@ func mergeProtocolColumn(dst *protoSums, raw string) error {
 		return nil
 	}
 	applyProtocolValue(dst, value)
+	return nil
+}
+
+// hourNullProtocolKey is the object key under which a node_pair_hours row
+// stores the sum of a null protocol key. A minute row's protocol_bytes that
+// is a bare JSON scalar has such a key, and json_each gives it no key at
+// all, so the hour row needs a name for it. Hour rows only ever get integer
+// keys otherwise: a literal "null" key in a minute row means protocol 0 and
+// rolls up as "0".
+const hourNullProtocolKey = "null"
+
+// formatHourProtocolBytes is formatProtocolBytes plus the null protocol key,
+// for node_pair_hours rows.
+func formatHourProtocolBytes(sums protoSums) string {
+	out := formatProtocolBytes(sums)
+	if !sums.hasNull {
+		return out
+	}
+	var b strings.Builder
+	b.WriteString(out[:len(out)-1])
+	if out != "{}" {
+		b.WriteByte(',')
+	}
+	b.WriteString(`"` + hourNullProtocolKey + `":`)
+	writeSum(&b, sums.nullKey)
+	b.WriteByte('}')
+	return b.String()
+}
+
+// mergeHourProtocolColumn is mergeProtocolColumn for a node_pair_hours row.
+func mergeHourProtocolColumn(dst *protoSums, raw string) error {
+	if !strings.Contains(raw, `"`+hourNullProtocolKey+`"`) {
+		return mergeProtocolColumn(dst, raw)
+	}
+	value, ok, err := decodeSQLiteJSON(raw)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if value.kind != kindObject {
+		applyProtocolValue(dst, value)
+		return nil
+	}
+	for _, field := range value.obj {
+		n, numeric := castSQLiteValue(field.val)
+		if field.key == hourNullProtocolKey {
+			dst.add(0, true, n, numeric)
+			continue
+		}
+		dst.add(int(sqliteAtoi(field.key)), false, n, numeric)
+	}
 	return nil
 }
 

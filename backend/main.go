@@ -88,6 +88,17 @@ func main() {
 		log.Fatalf("Failed to create database store: %v", err)
 	}
 
+	cacheBytes, err := cfg.GraphCacheBytes()
+	if err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	store.SetClosedHourCacheBytes(cacheBytes)
+	if cacheBytes > 0 {
+		log.Printf("Graph cache: up to %d MiB of closed hours", cacheBytes>>20)
+	} else {
+		log.Printf("Graph cache: disabled")
+	}
+
 	// Initialize database schema
 	ctx := context.Background()
 	if err := store.Init(ctx); err != nil {
