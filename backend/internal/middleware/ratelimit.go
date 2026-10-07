@@ -39,7 +39,30 @@ type rateLimiter struct {
 	stopChan chan struct{}
 }
 
+// normalize fills unset or invalid fields from the defaults. A zero
+// CleanupInterval used to panic in time.NewTicker, and a zero
+// RequestsPerMinute rejected every request with a nonsense Retry-After.
+// Buckets refill completely in one minute, so dropping one sooner than that
+// would forgive a client that is still over its limit.
+func (cfg RateLimitConfig) normalize() RateLimitConfig {
+	def := DefaultRateLimitConfig()
+	if cfg.RequestsPerMinute <= 0 {
+		cfg.RequestsPerMinute = def.RequestsPerMinute
+	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = def.CleanupInterval
+	}
+	if cfg.StaleAfter <= 0 {
+		cfg.StaleAfter = def.StaleAfter
+	}
+	if cfg.StaleAfter < time.Minute {
+		cfg.StaleAfter = time.Minute
+	}
+	return cfg
+}
+
 func newRateLimiter(cfg RateLimitConfig) *rateLimiter {
+	cfg = cfg.normalize()
 	rl := &rateLimiter{
 		buckets:  make(map[string]*bucket),
 		rate:     float64(cfg.RequestsPerMinute) / 60.0,
