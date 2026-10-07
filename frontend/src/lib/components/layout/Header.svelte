@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink, Waypoints } from 'lucide-svelte';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
@@ -7,7 +7,7 @@
 	import { page } from '$app/state';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
-	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerStat } from '#lib/utils';
+	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
 
 	// Tick every 10s to keep the relative time fresh
@@ -73,6 +73,7 @@
 	const primaryNav = [
 		{ href: '/', label: 'Traffic', icon: Network },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
+		{ href: '/new', label: 'New', icon: Waypoints },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
 
@@ -88,6 +89,7 @@
 	// Analytics uses the overview active-node count once stats are loaded.
 	// The top-talkers list is capped and is not a device count.
 	const hasNetworkData = $derived($networkStats.totalNodes > 0);
+	const showStats = $derived(headerShowsStats(currentPath, hasNetworkData));
 	const analyticsStatsReady = $derived(currentPath === '/analytics' && $statsSummary !== null);
 	const useNetworkStats = $derived(!analyticsStatsReady && hasNetworkData);
 
@@ -235,71 +237,75 @@
 	<!-- Takes the free space between navigation and actions. Items drop out
 	     by priority as that space narrows instead of overlapping the nav. -->
 	<div class="@container hidden min-w-0 flex-1 lg:block">
-		<div class="flex items-center justify-center gap-4 overflow-hidden whitespace-nowrap @2xl:gap-6">
-			<div class="flex items-center gap-2">
-				<Network class="h-4 w-4 text-muted-foreground" />
-				<div class="text-sm">
-					<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
-					<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
+		{#if showStats}
+			<div class="flex items-center justify-center gap-4 overflow-hidden whitespace-nowrap @2xl:gap-6">
+				<div class="flex items-center gap-2">
+					<Network class="h-4 w-4 text-muted-foreground" />
+					<div class="text-sm">
+						<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
+						<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
+					</div>
 				</div>
-			</div>
 
-			<div class="flex items-center gap-2">
-				<Link class="h-4 w-4 text-muted-foreground" />
-				<div class="text-sm">
-					<span class="font-semibold">{headerStat(statsLoaded, displayFlows, (v) => (useNetworkStats ? String(v) : v.toLocaleString()))}</span>
-					<span class="text-muted-foreground"> flows</span>
+				<div class="flex items-center gap-2">
+					<Link class="h-4 w-4 text-muted-foreground" />
+					<div class="text-sm">
+						<span class="font-semibold">{headerStat(statsLoaded, displayFlows, (v) => (useNetworkStats ? String(v) : v.toLocaleString()))}</span>
+						<span class="text-muted-foreground"> flows</span>
+					</div>
 				</div>
-			</div>
 
-			<div class="hidden h-6 w-px bg-border @sm:block"></div>
+				<div class="hidden h-6 w-px bg-border @sm:block"></div>
 
-			<div class="hidden text-sm @sm:block">
-				<span class="text-muted-foreground">Traffic:</span>
-				<span class="ml-1 font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
-			</div>
-
-			<div class="hidden text-sm @xl:block">
-				<span class="text-muted-foreground">Avg/Node:</span>
-				<span class="ml-1 font-semibold">{headerStat(statsLoaded, avgTrafficPerNode, formatBytes)}</span>
-			</div>
-
-			{#if peakNode}
-				<div class="hidden min-w-0 items-baseline text-sm @3xl:flex" title="{peakNode.displayName} ({peakNode.ip}) - {formatBytes(peakNode.totalBytes)}">
-					<span class="text-muted-foreground">Peak:</span>
-					<span class="ml-1 max-w-48 truncate font-semibold">{peakNode.displayName}</span>
-					<span class="ml-1 text-xs text-muted-foreground">({formatBytes(peakNode.totalBytes)})</span>
+				<div class="hidden text-sm @sm:block">
+					<span class="text-muted-foreground">Traffic:</span>
+					<span class="ml-1 font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
 				</div>
-			{/if}
 
-			{#if lastUpdatedLabel}
-				<div class="hidden h-6 w-px bg-border @5xl:block"></div>
-				<div class="hidden text-xs text-muted-foreground/70 @5xl:block" title={$lastUpdated?.toLocaleString()}>
-					Updated {lastUpdatedLabel}
+				<div class="hidden text-sm @xl:block">
+					<span class="text-muted-foreground">Avg/Node:</span>
+					<span class="ml-1 font-semibold">{headerStat(statsLoaded, avgTrafficPerNode, formatBytes)}</span>
 				</div>
-			{/if}
-		</div>
-	</div>
 
-	<!-- Compact stats for mobile (<md) -->
-	<div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap md:hidden">
-		<span class="text-[10px] font-semibold tabular-nums">{headerStat(statsLoaded, displayNodes)}<span class="font-normal text-muted-foreground">n</span></span>
-		<span class="text-[10px] font-semibold tabular-nums text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
-	</div>
+				{#if peakNode}
+					<div class="hidden min-w-0 items-baseline text-sm @3xl:flex" title="{peakNode.displayName} ({peakNode.ip}) - {formatBytes(peakNode.totalBytes)}">
+						<span class="text-muted-foreground">Peak:</span>
+						<span class="ml-1 max-w-48 truncate font-semibold">{peakNode.displayName}</span>
+						<span class="ml-1 text-xs text-muted-foreground">({formatBytes(peakNode.totalBytes)})</span>
+					</div>
+				{/if}
 
-	<!-- Compact stats for tablet (md only) -->
-	<div class="hidden items-center gap-3 md:flex lg:hidden">
-		<div class="text-xs">
-			<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
-			<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
-		</div>
-		<div class="text-xs">
-			<span class="font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
-		</div>
-		{#if lastUpdatedLabel}
-			<div class="text-[10px] text-muted-foreground/60">{lastUpdatedLabel}</div>
+				{#if lastUpdatedLabel}
+					<div class="hidden h-6 w-px bg-border @5xl:block"></div>
+					<div class="hidden text-xs text-muted-foreground/70 @5xl:block" title={$lastUpdated?.toLocaleString()}>
+						Updated {lastUpdatedLabel}
+					</div>
+				{/if}
+			</div>
 		{/if}
 	</div>
+
+	{#if showStats}
+		<!-- Compact stats for mobile (<md) -->
+		<div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap md:hidden">
+			<span class="text-[10px] font-semibold tabular-nums">{headerStat(statsLoaded, displayNodes)}<span class="font-normal text-muted-foreground">n</span></span>
+			<span class="text-[10px] font-semibold tabular-nums text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
+		</div>
+
+		<!-- Compact stats for tablet (md only) -->
+		<div class="hidden items-center gap-3 md:flex lg:hidden">
+			<div class="text-xs">
+				<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
+				<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
+			</div>
+			<div class="text-xs">
+				<span class="font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
+			</div>
+			{#if lastUpdatedLabel}
+				<div class="text-[10px] text-muted-foreground/60">{lastUpdatedLabel}</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Right section: Actions -->
 	<div class="flex shrink-0 items-center gap-1 sm:gap-2">

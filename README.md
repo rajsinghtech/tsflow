@@ -372,6 +372,14 @@ A talker is one device. The row has `nodeId`, `hostname`, `owner`, `txBytes`, `r
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
 
+### New connections
+
+`GET /api/analytics/new-pairs` lists directed pairs that appear in the selected window and do not appear in the lookback immediately before it. `lookback` defaults to `7d`. It also accepts `24h`, `30d`, or any duration from `1h` through `90d`. `limit`, `offset`, `start`, `end`, `tailnet`, and `trafficTypes` match the ranked pair route. Rows are ordered by first seen, newest first, then by volume. There is no alert. The page is `/new`.
+
+`metadata.lookbackStart` is where the lookback begins. `metadata.dataStart` is the earliest stored minute and is left out when nothing is stored. `metadata.lookbackComplete` is false when stored data starts after `lookbackStart`. A pair last seen before the data starts then shows up as new, and the page says so.
+
+Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
+
 ### MCP server
 
 `TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
