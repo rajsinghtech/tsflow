@@ -63,6 +63,42 @@ func planHours(start, end, mark int64) hourPlan {
 	return plan
 }
 
+// planHoursThroughMark is planHours plus the hour that is still filling.
+// That hour's rollup row holds every minute up to mark, so a window that
+// starts at or before the hour and ends at or after mark+1m can read the
+// row for [hour, mark+1m) and only scan minute rows after the mark. Live
+// windows end at "now", so this drops most of the trailing minute scan.
+//
+// It is only valid when the mark and the rows are read in one snapshot. A
+// mark that moves between the two would count the newly closed minutes in
+// both the hour row and the minute scan.
+func planHoursThroughMark(start, end, mark int64) hourPlan {
+	plan := planHours(start, end, mark)
+	if mark < 0 {
+		return plan
+	}
+	rolledUntil := mark + minuteSeconds
+	if rolledUntil%hourSeconds == 0 || end < rolledUntil {
+		return plan
+	}
+	filling := (rolledUntil / hourSeconds) * hourSeconds
+	if filling < start {
+		return plan
+	}
+	hourStart := filling
+	if len(plan.hours) > 0 {
+		hourStart = plan.hours[0][0]
+	}
+	out := hourPlan{hours: [][2]int64{{hourStart, rolledUntil}}}
+	if start < hourStart {
+		out.minutes = append(out.minutes, [2]int64{start, hourStart})
+	}
+	if rolledUntil < end {
+		out.minutes = append(out.minutes, [2]int64{rolledUntil, end})
+	}
+	return out
+}
+
 func floorMinute(unix int64) int64 {
 	if unix <= 0 {
 		return 0
@@ -74,6 +110,16 @@ func floorMinute(unix int64) int64 {
 // than an hour. Unique pairs and bandwidth charts at one-minute resolution
 // cannot be rebuilt from an hourly row.
 func (s *SQLiteStore) hourPlan(ctx context.Context, q queryRower, tailnetID string, start, end, subdiv int64) (hourPlan, error) {
+	return s.hourPlanWith(ctx, q, tailnetID, start, end, subdiv, planHours)
+}
+
+// snapshotHourPlan is hourPlan for callers that read the mark and every
+// row inside one read transaction, so the filling hour can be used.
+func (s *SQLiteStore) snapshotHourPlan(ctx context.Context, tx *sql.Tx, tailnetID string, start, end int64) (hourPlan, error) {
+	return s.hourPlanWith(ctx, tx, tailnetID, start, end, 0, planHoursThroughMark)
+}
+
+func (s *SQLiteStore) hourPlanWith(ctx context.Context, q queryRower, tailnetID string, start, end, subdiv int64, planner func(start, end, mark int64) hourPlan) (hourPlan, error) {
 	if subdiv > 0 && subdiv < hourSeconds {
 		return hourPlan{minutes: [][2]int64{{start, end}}}, nil
 	}
@@ -81,7 +127,7 @@ func (s *SQLiteStore) hourPlan(ctx context.Context, q queryRower, tailnetID stri
 	if err != nil {
 		return hourPlan{}, err
 	}
-	plan := planHours(start, end, mark)
+	plan := planner(start, end, mark)
 	if !plan.useHours() {
 		return plan, nil
 	}
