@@ -49,15 +49,25 @@ func (p *Poller) convertLogs(logsResp any) []database.FlowLog {
 	return flowLogs
 }
 
+// flowLogTime picks the time a flow row is stored under. Start (when the
+// traffic happened) aligns buckets better than logged (when the server got
+// the log, a few seconds later), but start comes from the node's clock. A
+// start after logged is impossible unless that clock runs ahead, so logged
+// wins then; otherwise those rows would land in the future.
+func flowLogTime(start, logged time.Time) time.Time {
+	if start.IsZero() {
+		return logged
+	}
+	if !logged.IsZero() && start.After(logged) {
+		return logged
+	}
+	return start
+}
+
 func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.FlowLog {
 	var flowLogs []database.FlowLog
 
-	// Use Start (when traffic actually occurred) instead of Logged (when server captured it)
-	// to avoid 5-10 second timing skew in bucket assignment
-	logTime := tsLog.Start
-	if logTime.IsZero() {
-		logTime = tsLog.Logged // fallback if Start not populated
-	}
+	logTime := flowLogTime(tsLog.Start, tsLog.Logged)
 	if logTime.IsZero() {
 		log.Printf("Warning: skipping flow log with no start or logged timestamp for node %s", tsLog.NodeID)
 		return flowLogs
@@ -113,16 +123,13 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 		log.Printf("Warning: skipping log entry with invalid nodeId type: %T", logMap["nodeId"])
 		return flowLogs
 	}
-	// Prefer "start" over "logged" for bucket alignment (consistent with convertTailscaleLog)
-	logTimeStr := getString(logMap, "start")
-	if logTimeStr == "" {
-		logTimeStr = getString(logMap, "logged")
-	}
-	logged, err := time.Parse(time.RFC3339, logTimeStr)
-	if err != nil {
+	start, startErr := time.Parse(time.RFC3339, getString(logMap, "start"))
+	serverTime, loggedErr := time.Parse(time.RFC3339, getString(logMap, "logged"))
+	if startErr != nil && loggedErr != nil {
 		log.Printf("Warning: skipping log entry with invalid timestamp for node %s", nodeID)
 		return flowLogs
 	}
+	logged := flowLogTime(start, serverTime)
 
 	// Process each traffic type
 	for _, trafficType := range []string{"virtualTraffic", "subnetTraffic", "exitTraffic", "physicalTraffic"} {
@@ -269,9 +276,9 @@ func parseInt64(raw any) (int64, bool) {
 	switch v := raw.(type) {
 	case float64:
 		// JSON numbers are decoded as float64. Reject fractional, NaN/Inf, and
-		// negative values and values at or above 2^63, which float64 rounds
-		// MaxInt64 up to. Traffic counters are unsigned in the API.
-		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) || v < 0 || v >= float64(1<<63) {
+		// negative values and values above maxFlowCounter. Traffic counters
+		// are unsigned in the API.
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) || v < 0 || v > maxFlowCounter {
 			return 0, false
 		}
 		return int64(v), true
@@ -279,11 +286,11 @@ func parseInt64(raw any) (int64, bool) {
 		return parseInt64(float64(v))
 	case json.Number:
 		value, err := v.Int64()
-		return value, err == nil && value >= 0
+		return value, err == nil && value >= 0 && value <= maxFlowCounter
 	case int:
-		return int64(v), v >= 0
+		return int64(v), v >= 0 && int64(v) <= maxFlowCounter
 	case int64:
-		return v, v >= 0
+		return v, v >= 0 && v <= maxFlowCounter
 	case uint:
 		return uint64ToInt64(uint64(v))
 	case uint64:
@@ -293,8 +300,17 @@ func parseInt64(raw any) (int64, bool) {
 	}
 }
 
+// maxFlowCounter is the largest byte or packet count accepted from one
+// flow-log record. One record covers seconds of one connection, so 2^44
+// (about 17.6 TB) is far above any real value. Stored rows are later added
+// together in Go and in SQLite SUM(), which fails the whole query on int64
+// overflow. Capping each record keeps half a million maximal records inside
+// int64, so one corrupt or hostile counter cannot break every stats read for
+// the retention period.
+const maxFlowCounter = 1 << 44
+
 func uint64ToInt64(value uint64) (int64, bool) {
-	if value > uint64(^uint64(0)>>1) {
+	if value > maxFlowCounter {
 		return 0, false
 	}
 	return int64(value), true
