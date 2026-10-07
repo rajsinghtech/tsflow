@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,16 @@ const (
 	MaxLogsInResponse = 50000
 	// MaxBuckets limits the number of time-series buckets returned
 	MaxBuckets = 5000
+	// MaxNetworkLogWindow is the longest raw /api/network-logs read.
+	// Longer ranges return 410 and point at the aggregated flow endpoint.
+	// One hour of raw logs is already large enough to exhaust a gateway timeout.
+	MaxNetworkLogWindow = 30 * time.Minute
+	// DefaultNetworkLogLimit is applied when /api/network-logs has no limit.
+	DefaultNetworkLogLimit = 1000
+	// MaxNetworkLogLimit is the largest limit /api/network-logs will honor.
+	MaxNetworkLogLimit = 5000
+	derpRelayIP        = "127.3.3.40"
+	derpRelayName      = "DERP relay"
 	// MinQueryRange prevents degenerate zero-duration queries
 	MinQueryRange = time.Second
 	// DefaultQueryTimeout is the default timeout for database queries
@@ -157,8 +168,43 @@ func (h *Handlers) parseLimitParam(c *gin.Context, defaultLimit, maxLimit int) i
 	return v
 }
 
+// derpRelayLabel names Tailscale's DERP pseudo-address. The port on that
+// address is a DERP region, not a device.
+func derpRelayLabel(nodeIDOrIP string) (string, bool) {
+	if nodeIDOrIP == derpRelayIP {
+		return derpRelayName, true
+	}
+	host, _, err := net.SplitHostPort(nodeIDOrIP)
+	if err == nil && host == derpRelayIP {
+		return derpRelayName, true
+	}
+	return "", false
+}
+
+func labelRankedTalkers(talkers []database.RankedTalker) {
+	for i := range talkers {
+		if name, ok := derpRelayLabel(talkers[i].NodeID); ok {
+			talkers[i].Hostname = name
+		}
+	}
+}
+
+func labelRankedPairs(pairs []database.RankedPair) {
+	for i := range pairs {
+		if name, ok := derpRelayLabel(pairs[i].SrcNodeID); ok {
+			pairs[i].SrcHostname = name
+		}
+		if name, ok := derpRelayLabel(pairs[i].DstNodeID); ok {
+			pairs[i].DstHostname = name
+		}
+	}
+}
+
 // resolveNodeName returns a human-readable name for a node ID or IP using the device cache.
 func (h *Handlers) resolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
+	if name, ok := derpRelayLabel(nodeIDOrIP); ok {
+		return name
+	}
 	if poller == nil {
 		return ""
 	}

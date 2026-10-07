@@ -199,8 +199,8 @@ func TestDerivedTrafficStatsIncludesPhysicalProtocolBytes(t *testing.T) {
 	ctx := context.Background()
 	base := (time.Now().UTC().Unix() / 60) * 60
 	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
-		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 125, Protocols: "[6]", ProtocolBytes: `{"6":125}`},
-		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 50, Protocols: "[17]", ProtocolBytes: `{"17":50}`},
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 125, Protocols: "[6]", ProtocolBytes: `{"6":125}`, Ports: `[{"port":27,"proto":0,"bytes":125}]`},
+		{Bucket: base, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 50, Protocols: "[17]", ProtocolBytes: `{"17":50}`, Ports: `[{"port":53,"proto":17,"bytes":50}]`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +209,23 @@ func TestDerivedTrafficStatsIncludesPhysicalProtocolBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stats) != 1 || stats[0].TCPBytes != 125 || stats[0].UDPBytes != 50 || stats[0].PhysicalBytes != 125 {
-		t.Fatalf("stats = %+v, want physical TCP bytes included", stats)
+	if len(stats) != 1 || stats[0].TCPBytes != 0 || stats[0].UDPBytes != 50 || stats[0].OtherProtoBytes != 0 || stats[0].PhysicalBytes != 125 {
+		t.Fatalf("stats = %+v, want physical bytes kept out of protocol totals", stats)
+	}
+	var ports []PortStat
+	if err := json.Unmarshal([]byte(stats[0].TopPorts), &ports); err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 1 || ports[0].Port != 53 {
+		t.Fatalf("top ports = %+v, want the virtual port only", ports)
+	}
+
+	included, err := store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, DefaultTailnetID, time.Unix(base, 0), time.Unix(base+60, 0), []string{"physical", "virtual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(included) != 1 || included[0].TCPBytes != 125 || included[0].UDPBytes != 50 || included[0].PhysicalBytes != 125 {
+		t.Fatalf("included stats = %+v, want physical protocol bytes when physical is requested", included)
 	}
 }
 
@@ -477,6 +492,20 @@ func TestCountActiveNodesIsDistinctAndUncapped(t *testing.T) {
 		t.Fatalf("virtual active nodes = %d, want 21", virtualOnly)
 	}
 
+	// A DERP transport row adds a node only when physical is requested.
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
+		Bucket: base, SrcNodeID: "n0", DstNodeID: "127.3.3.40", TrafficType: "physical",
+		TxBytes: 50, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":50}`, Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err = store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, nil); err != nil || len(ids) != 23 {
+		t.Fatalf("default active nodes = %d (%v), want 23 without the DERP address", len(ids), err)
+	}
+	if ids, err = store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, []string{"virtual", "physical"}); err != nil || len(ids) != 22 {
+		t.Fatalf("virtual+physical active nodes = %d (%v), want 22", len(ids), err)
+	}
+
 	talkers, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -510,5 +539,131 @@ func TestNodeBandwidthAndStatsUseCoarseBucketTotals(t *testing.T) {
 	}
 	if len(buckets) != 2 || buckets[0].TxBytes != 10 || buckets[0].RxBytes != 2 || buckets[1].TxBytes != 20 || buckets[1].RxBytes != 3 {
 		t.Fatalf("node bandwidth buckets = %+v, want separate minute totals", buckets)
+	}
+}
+
+func TestDefaultRankingsOmitPhysicalUntilRequested(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := (time.Now().UTC().Unix() / 60) * 60
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "host", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 30, RxBytes: 10, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":40}`},
+		{Bucket: base, SrcNodeID: "127.3.3.40", DstNodeID: "relay", TrafficType: "physical", TxBytes: 500, FlowCount: 4, Protocols: "[0]", ProtocolBytes: `{"0":500}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Unix(base, 0), time.Unix(base+60, 0)
+
+	talkers, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(talkers) != 2 || talkers[0].NodeID == "127.3.3.40" || talkers[0].TotalBytes != 40 {
+		t.Fatalf("default talkers = %+v, want the virtual pair without the DERP relay", talkers)
+	}
+	pairs, err := store.GetTopPairs(ctx, DefaultTailnetID, start, end, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].DstNodeID != "peer" || pairs[0].TotalBytes != 40 {
+		t.Fatalf("default pairs = %+v, want the virtual pair only", pairs)
+	}
+	ranked, _, err := store.ListRankedTalkers(ctx, DefaultTailnetID, start, end, RankQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranked) != 2 || ranked[0].NodeID == "127.3.3.40" || ranked[0].TotalBytes != 40 {
+		t.Fatalf("default ranked talkers = %+v", ranked)
+	}
+
+	withPhysical, err := store.GetTopTalkersByTrafficTypes(ctx, DefaultTailnetID, start, end, []string{"physical", "virtual"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withPhysical) == 0 || withPhysical[0].NodeID != "127.3.3.40" || withPhysical[0].TotalBytes != 500 {
+		t.Fatalf("explicit physical talkers = %+v, want the DERP relay first", withPhysical)
+	}
+	nodeBW, err := store.GetNodeBandwidth(ctx, DefaultTailnetID, start, end, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodeBW) != 1 || nodeBW[0].TxBytes != 30 {
+		t.Fatalf("node bandwidth = %+v, want virtual TX only", nodeBW)
+	}
+}
+
+func TestCountDistinctPairsUsesRollupAcrossTheWindow(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	// A completed hour in the past so the rollup can absorb the minute rows.
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{
+		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`},
+		{Bucket: base + 3600, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`},
+		{Bucket: base + 3600 + 60, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 9, FlowCount: 1, Protocols: "[0]", ProtocolBytes: `{"0":9}`},
+		{Bucket: base + 3600 + 120, SrcNodeID: "a", DstNodeID: "127.3.3.40", TrafficType: "physical", TxBytes: 9, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":9}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.backfillHourRollups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM node_pairs WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?`, DefaultTailnetID, base, base+2*3600); err != nil {
+		t.Fatal(err)
+	}
+
+	start, end := time.Unix(base, 0).UTC(), time.Unix(base+2*3600, 0).UTC()
+	got, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("distinct pairs = %v, want 2 from the hourly rollup after minute rows were removed, without physical", got)
+	}
+	virtualOnly, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, []string{"virtual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(virtualOnly) != 2 {
+		t.Fatalf("virtual distinct pairs = %v, want 2", virtualOnly)
+	}
+	withPhysical, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, []string{"virtual", "physical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withPhysical) != 3 {
+		t.Fatalf("virtual+physical distinct pairs = %v, want 3 (a-b listed once)", withPhysical)
+	}
+}
+
+func TestDistinctPairsMixesHourRollupAndPartialEdges(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	hour := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
+	row := func(bucket int64, src, dst string) NodePairAggregate {
+		return NodePairAggregate{Bucket: bucket, SrcNodeID: src, DstNodeID: dst, TrafficType: "virtual",
+			TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]"}
+	}
+	// a->b appears in the partial hour before, every minute of the full hour,
+	// and the partial hour after. c->d only in the leading edge, e->f only in
+	// the trailing edge, g->h only inside the full hour.
+	rows := []NodePairAggregate{row(hour-120, "a", "b"), row(hour-60, "c", "d")}
+	for m := int64(0); m < 60; m++ {
+		rows = append(rows, row(hour+m*60, "a", "b"))
+	}
+	rows = append(rows, row(hour+600, "g", "h"), row(hour+3600, "a", "b"), row(hour+3600+60, "e", "f"))
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.backfillHourRollups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Unix(hour-30*60, 0).UTC(), time.Unix(hour+3600+30*60, 0).UTC()
+	got, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("distinct pairs = %v, want a-b, c-d, e-f, g-h once each", got)
 	}
 }

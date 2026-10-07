@@ -644,7 +644,14 @@ func (s *SQLiteStore) GetBandwidthByTrafficTypes(ctx context.Context, tailnetID 
 }
 
 // GetNodeBandwidth retrieves bandwidth for a specific node, bucketed by window size.
+// Physical transport is omitted; it duplicates the virtual, subnet, and exit bytes.
 func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, start, end time.Time, nodeID string) ([]BandwidthBucket, error) {
+	return s.GetNodeBandwidthByTrafficTypes(ctx, tailnetID, start, end, nodeID, nil)
+}
+
+// GetNodeBandwidthByTrafficTypes is GetNodeBandwidth limited to the requested
+// traffic types. An empty list keeps the default, which omits physical.
+func (s *SQLiteStore) GetNodeBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, nodeID string, trafficTypes []string) ([]BandwidthBucket, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
@@ -662,13 +669,14 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 	if err != nil {
 		return nil, err
 	}
+	typeClause, typeArgs := countedTrafficClause(trafficTypes)
 	var query string
 	var args []any
 	if plan.useHours() {
 		source, sourceArgs := plan.unionPairRows(tailnetID,
 			"bucket, src_node_id, dst_node_id, tx_bytes, rx_bytes",
 			"min_bucket AS bucket, src_node_id, dst_node_id, tx_bytes, rx_bytes",
-			"", nil,
+			typeClause, typeArgs,
 		)
 		query = fmt.Sprintf(`
 		WITH pair_rows AS (%s),
@@ -703,7 +711,7 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 			       SUM(tx_bytes) AS tx,
 			       SUM(rx_bytes) AS rx
 			FROM node_pairs
-			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?%s
 			GROUP BY b, src_node_id
 			UNION ALL
 			SELECT (bucket / %d) * %d AS b,
@@ -712,7 +720,7 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 			       SUM(tx_bytes) AS rx
 			FROM node_pairs
 			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
-			  AND src_node_id != dst_node_id
+			  AND src_node_id != dst_node_id%s
 			GROUP BY b, dst_node_id
 		)
 		SELECT b, SUM(tx), SUM(rx)
@@ -720,8 +728,11 @@ func (s *SQLiteStore) GetNodeBandwidth(ctx context.Context, tailnetID string, st
 		WHERE node_id = ?
 		GROUP BY b
 		ORDER BY b ASC
-	`, bs, bs, bs, bs)
-		args = []any{tailnetID, startUnix, endUnix, tailnetID, startUnix, endUnix, nodeID}
+	`, bs, bs, typeClause, bs, bs, typeClause)
+		args = append([]any{tailnetID, startUnix, endUnix}, typeArgs...)
+		args = append(args, tailnetID, startUnix, endUnix)
+		args = append(args, typeArgs...)
+		args = append(args, nodeID)
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -977,6 +988,8 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		}
 	}
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	protoClause, protoTypeArgs := countedTrafficClause(trafficTypes)
+	portClause, portTypeArgs := portAccountingClause(trafficTypes)
 	rangeSQL, rangeArgs := bucketRangePredicate("bucket", ranges)
 	query := fmt.Sprintf(`
 		WITH filtered_pairs AS (
@@ -1087,12 +1100,12 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		SELECT b, proto, SUM(bytes)
 		FROM protocol_values
 		GROUP BY b, proto
-	`, bs, bs, protoRangeSQL, typeClause, bs, bs, protoRangeSQL, typeClause)
+	`, bs, bs, protoRangeSQL, protoClause, bs, bs, protoRangeSQL, protoClause)
 	protoArgs := append([]any{tailnetID}, protoRangeArgs...)
-	protoArgs = append(protoArgs, typeArgs...)
+	protoArgs = append(protoArgs, protoTypeArgs...)
 	protoArgs = append(protoArgs, tailnetID)
 	protoArgs = append(protoArgs, protoRangeArgs...)
-	protoArgs = append(protoArgs, typeArgs...)
+	protoArgs = append(protoArgs, protoTypeArgs...)
 	protoRows, err := tx.QueryContext(ctx, protoQuery, protoArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pair protocols: %w", err)
@@ -1150,8 +1163,10 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		FROM ranked_ports
 		WHERE rn <= 20
 			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
-	`, bs, bs, rangeSQL, typeClause)
-	portRows, err := tx.QueryContext(ctx, portQuery, args...)
+	`, bs, bs, rangeSQL, portClause)
+	portArgs := append([]any{tailnetID}, rangeArgs...)
+	portArgs = append(portArgs, portTypeArgs...)
+	portRows, err := tx.QueryContext(ctx, portQuery, portArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node pair ports: %w", err)
 	}
@@ -1196,6 +1211,8 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 // middle only when a rolled row was stored without protocol byte totals.
 func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID string, bs int64, plan hourPlan, trafficTypes []string) ([]TrafficStats, error) {
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	protoClause, protoTypeArgs := countedTrafficClause(trafficTypes)
+	portClause, portTypeArgs := portAccountingClause(trafficTypes)
 	source, sourceArgs := plan.unionPairRows(tailnetID,
 		"bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count, protocol_bytes, protocols, ports",
 		"min_bucket AS bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count, protocol_bytes, protocols, ports",
@@ -1267,7 +1284,7 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 	protoSource, protoArgs := plan.unionPairRows(tailnetID,
 		"bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
 		"min_bucket AS bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
-		typeClause, typeArgs,
+		protoClause, protoTypeArgs,
 	)
 	fallback := plan.fallbackRanges()
 	var fallbackSQL string
@@ -1289,9 +1306,9 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
 			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
-		`, bs, bs, fallbackPred, typeClause)
+		`, bs, bs, fallbackPred, protoClause)
 		fallbackArgs = append([]any{tailnetID}, fallbackPredArgs...)
-		fallbackArgs = append(fallbackArgs, typeArgs...)
+		fallbackArgs = append(fallbackArgs, protoTypeArgs...)
 	}
 	protoQuery := fmt.Sprintf(`
 		WITH protocol_values AS (
@@ -1344,7 +1361,7 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 	portSource, portArgs := plan.unionPairRows(tailnetID,
 		"bucket, ports",
 		"min_bucket AS bucket, ports",
-		typeClause+" AND ports != '[]'", typeArgs,
+		portClause+" AND ports != '[]'", portTypeArgs,
 	)
 	portQuery := fmt.Sprintf(`
 		WITH port_totals AS (
@@ -1409,7 +1426,9 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 // the window. A self-pair lists its node once. This is the population the
 // top-talkers ranking is drawn from, before its limit. The same device can be
 // stored under more than one id (an address before the device was known, or
-// the legacy numeric id), so callers resolve ids before counting.
+// the legacy numeric id), so callers resolve ids before counting. An empty
+// trafficTypes list leaves out physical rows, whose peers are WireGuard
+// endpoints and DERP addresses rather than devices.
 func (s *SQLiteStore) ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
@@ -1424,7 +1443,7 @@ func (s *SQLiteStore) ActiveNodeIDs(ctx context.Context, tailnetID string, start
 	if err != nil {
 		return nil, err
 	}
-	clause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	clause, typeArgs := countedTrafficClause(trafficTypes)
 	source, args := plan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id",
 		"src_node_id, dst_node_id",
@@ -1485,7 +1504,7 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start
 		source, sourceArgs := plan.unionPairRows(tailnetID,
 			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
 			"src_node_id, dst_node_id, tx_bytes, rx_bytes",
-			"", nil,
+			excludePhysicalSQL, nil,
 		)
 		query := fmt.Sprintf(`
 		WITH pair_rows AS (%s),
@@ -1514,13 +1533,13 @@ func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start
 		WITH node_bytes AS (
 			SELECT src_node_id AS node_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
-			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?`+excludePhysicalSQL+`
 			GROUP BY src_node_id
 			UNION ALL
 			SELECT dst_node_id AS node_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
 			FROM node_pairs
 			WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
-			  AND src_node_id != dst_node_id
+			  AND src_node_id != dst_node_id`+excludePhysicalSQL+`
 			GROUP BY dst_node_id
 		), totals AS (
 			SELECT node_id, SUM(tx) AS tx, SUM(rx) AS rx
@@ -1661,7 +1680,7 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, tailnetID string, start, 
 		source, sourceArgs := plan.unionPairRows(tailnetID,
 			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
 			"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
-			"", nil,
+			excludePhysicalSQL, nil,
 		)
 		query := fmt.Sprintf(`
 		SELECT src_node_id, dst_node_id,
@@ -1679,7 +1698,7 @@ func (s *SQLiteStore) GetTopPairs(ctx context.Context, tailnetID string, start, 
 		       SUM(tx_bytes), SUM(rx_bytes),
 		       SUM(tx_bytes + rx_bytes) AS total, SUM(flow_count)
 		FROM node_pairs
-		WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+		WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?`+excludePhysicalSQL+`
 		GROUP BY src_node_id, dst_node_id
 		ORDER BY total DESC, src_node_id ASC, dst_node_id ASC
 		LIMIT ?
@@ -1770,6 +1789,73 @@ func (s *SQLiteStore) GetTopPairsByTrafficTypes(ctx context.Context, tailnetID s
 	return results, rows.Err()
 }
 
+// excludePhysicalSQL drops WireGuard transport rows from default totals.
+// Those bytes carry virtual, subnet, and exit traffic that is already counted.
+const excludePhysicalSQL = " AND traffic_type != 'physical'"
+
+// countedTrafficClause is the traffic-type filter for overall totals, protocol
+// totals, and rankings. An empty list means every type except physical. An
+// explicit list is used as given, so physical is included only when requested.
+func countedTrafficClause(trafficTypes []string) (string, []any) {
+	if len(trafficTypes) == 0 {
+		return excludePhysicalSQL, nil
+	}
+	return trafficTypeWhereClause(trafficTypes)
+}
+
+// portAccountingClause keeps DERP region numbers and other physical
+// pseudo-ports out of top-port rankings even when physical bytes are requested.
+func portAccountingClause(trafficTypes []string) (string, []any) {
+	clause, args := trafficTypeWhereClause(trafficTypes)
+	return clause + excludePhysicalSQL, args
+}
+
+// DistinctPairs lists the distinct src/dst pairs across the whole window.
+// Complete hours are read from node_pair_hours; partial hours stay on minute
+// rows, and the union is de-duplicated so a pair seen in both is listed once.
+// An empty trafficTypes list leaves out physical rows, as the totals do.
+// Ids are as stored, so callers resolve aliases before counting.
+func (s *SQLiteStore) DistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([][2]string, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return nil, err
+	}
+	startUnix, endUnix, err := nodePairBounds(start, end)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return nil, err
+	}
+	clause, typeArgs := countedTrafficClause(trafficTypes)
+	source, args := plan.unionPairRows(tailnetID,
+		"src_node_id, dst_node_id",
+		"src_node_id, dst_node_id",
+		clause, typeArgs,
+	)
+	if source == "" {
+		return nil, nil
+	}
+	query := fmt.Sprintf(`SELECT DISTINCT src_node_id, dst_node_id FROM (%s) AS pair_rows`, source)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list distinct pairs: %w", err)
+	}
+	defer rows.Close()
+	var pairs [][2]string
+	for rows.Next() {
+		var pair [2]string
+		if err := rows.Scan(&pair[0], &pair[1]); err != nil {
+			return nil, fmt.Errorf("failed to scan distinct pair: %w", err)
+		}
+		pairs = append(pairs, pair)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list distinct pairs: %w", err)
+	}
+	return pairs, nil
+}
+
 func trafficTypeWhereClause(trafficTypes []string) (string, []any) {
 	if len(trafficTypes) == 0 {
 		return "", nil
@@ -1817,8 +1903,8 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		return nil, err
 	}
 	if plan.useHours() {
-		srcSource, srcArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", " AND src_node_id = ?", []any{nodeID})
-		dstSource, dstArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", " AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
+		srcSource, srcArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", excludePhysicalSQL+" AND src_node_id = ?", []any{nodeID})
+		dstSource, dstArgs := plan.unionPairRows(tailnetID, "tx_bytes, rx_bytes", "tx_bytes, rx_bytes", excludePhysicalSQL+" AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
 		totalQuery := fmt.Sprintf(`
 		WITH node_bytes AS (
 			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx FROM (%s) AS src_rows
@@ -1834,12 +1920,12 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		WITH node_bytes AS (
 			SELECT SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx
 			FROM node_pairs
-			WHERE tailnet_id = ? AND src_node_id = ? AND bucket >= ? AND bucket < ?
+			WHERE tailnet_id = ? AND src_node_id = ? AND bucket >= ? AND bucket < ?`+excludePhysicalSQL+`
 			UNION ALL
 			SELECT SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx
 			FROM node_pairs
 			WHERE tailnet_id = ? AND dst_node_id = ? AND bucket >= ? AND bucket < ?
-			  AND src_node_id != dst_node_id
+			  AND src_node_id != dst_node_id`+excludePhysicalSQL+`
 		)
 		SELECT COALESCE(SUM(tx), 0), COALESCE(SUM(rx), 0)
 		FROM node_bytes
@@ -1852,11 +1938,11 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		srcSource, srcArgs := plan.unionPairRows(tailnetID,
 			"dst_node_id, tx_bytes, rx_bytes, flow_count",
 			"dst_node_id, tx_bytes, rx_bytes, flow_count",
-			" AND src_node_id = ?", []any{nodeID})
+			excludePhysicalSQL+" AND src_node_id = ?", []any{nodeID})
 		dstSource, dstArgs := plan.unionPairRows(tailnetID,
 			"src_node_id, tx_bytes, rx_bytes, flow_count",
 			"src_node_id, tx_bytes, rx_bytes, flow_count",
-			" AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
+			excludePhysicalSQL+" AND dst_node_id = ? AND src_node_id != dst_node_id", []any{nodeID})
 		peerQuery := fmt.Sprintf(`
 		SELECT peer_id, SUM(tx), SUM(rx), SUM(tx+rx) AS total, SUM(fc)
 		FROM (
@@ -1879,13 +1965,13 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		FROM (
 			SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS fc
 			FROM node_pairs
-			WHERE tailnet_id = ? AND src_node_id = ? AND bucket >= ? AND bucket < ?
+			WHERE tailnet_id = ? AND src_node_id = ? AND bucket >= ? AND bucket < ?`+excludePhysicalSQL+`
 			GROUP BY dst_node_id
 			UNION ALL
 			SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS fc
 			FROM node_pairs
 			WHERE tailnet_id = ? AND dst_node_id = ? AND bucket >= ? AND bucket < ?
-			  AND src_node_id != dst_node_id
+			  AND src_node_id != dst_node_id`+excludePhysicalSQL+`
 			GROUP BY src_node_id
 		)
 		GROUP BY peer_id
@@ -1915,7 +2001,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 	var portRows *sql.Rows
 	if plan.useHours() {
 		source, sourceArgs := plan.unionPairRows(tailnetID, "ports", "ports",
-			" AND (src_node_id = ? OR dst_node_id = ?) AND ports != '[]'", []any{nodeID, nodeID})
+			excludePhysicalSQL+" AND (src_node_id = ? OR dst_node_id = ?) AND ports != '[]'", []any{nodeID, nodeID})
 		portRows, err = tx.QueryContext(ctx, fmt.Sprintf("SELECT ports FROM (%s) AS pair_rows", source), sourceArgs...)
 	} else {
 		portRows, err = tx.QueryContext(ctx, `
@@ -1923,7 +2009,7 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 		WHERE tailnet_id = ?
 		  AND (src_node_id = ? OR dst_node_id = ?)
 		  AND bucket >= ? AND bucket < ?
-		  AND ports != '[]'
+		  AND ports != '[]'`+excludePhysicalSQL+`
 	`, tailnetID, nodeID, nodeID, startUnix, endUnix)
 	}
 	if err != nil {

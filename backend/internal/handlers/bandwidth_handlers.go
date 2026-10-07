@@ -107,13 +107,19 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		defer cancel()
 
 		if nodeID != "" {
+			nodeBandwidth := func(id string) ([]database.BandwidthBucket, error) {
+				if len(trafficTypes) > 0 {
+					return h.store.GetNodeBandwidthByTrafficTypes(ctx, tn.id, startTime, endTime, id, trafficTypes)
+				}
+				return h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, id)
+			}
 			if len(queryIDs) == 1 {
-				buckets, err = h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, nodeID)
+				buckets, err = nodeBandwidth(nodeID)
 			} else {
 				parts := make([][]database.BandwidthBucket, 0, len(queryIDs))
 				for _, id := range queryIDs {
 					var part []database.BandwidthBucket
-					part, err = h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, id)
+					part, err = nodeBandwidth(id)
 					if err != nil {
 						break
 					}
@@ -123,7 +129,10 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 					buckets = mergeBandwidthBuckets(parts...)
 				}
 			}
-		} else if len(trafficTypes) > 0 && len(trafficTypes) < 4 {
+		} else if len(trafficTypes) > 0 {
+			// Any explicit list, including all four types, is read from node
+			// pairs so physical is included only when the caller asked for it.
+			// The pre-aggregated bandwidth table omits physical transport.
 			buckets, err = h.store.GetBandwidthByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes)
 		} else {
 			buckets, err = h.store.GetBandwidth(ctx, tn.id, startTime, endTime)
@@ -175,6 +184,8 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		bucketSeconds = bucketSizeForRange(startTime, endTime)
 	}
 
+	applyBucketCoverage(buckets, startTime, endTime, bucketSeconds)
+
 	c.JSON(http.StatusOK, gin.H{
 		"buckets": buckets,
 		"metadata": gin.H{
@@ -188,6 +199,37 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 			"bucketSeconds": bucketSeconds,
 		},
 	})
+}
+
+// applyBucketCoverage records how many seconds of each bucket sit inside the
+// query window. Dividing a partial first or last bucket by the full bucket
+// size understates its throughput.
+func applyBucketCoverage(buckets []database.BandwidthBucket, start, end time.Time, bucketSeconds int64) {
+	if bucketSeconds < 1 {
+		bucketSeconds = 60
+	}
+	startUnix := start.UTC().Unix()
+	endUnix := end.UTC().Unix()
+	for i := range buckets {
+		bucketStart := buckets[i].Time.UTC().Unix()
+		bucketEnd := bucketStart + bucketSeconds
+		covStart := bucketStart
+		if startUnix > covStart {
+			covStart = startUnix
+		}
+		covEnd := bucketEnd
+		if endUnix < covEnd {
+			covEnd = endUnix
+		}
+		seconds := covEnd - covStart
+		if seconds < 1 {
+			seconds = 1
+		}
+		if seconds > bucketSeconds {
+			seconds = bucketSeconds
+		}
+		buckets[i].Seconds = seconds
+	}
 }
 
 func mergeBandwidthBuckets(parts ...[]database.BandwidthBucket) []database.BandwidthBucket {
@@ -365,6 +407,7 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 	if allBuckets == nil {
 		allBuckets = []database.BandwidthBucket{}
 	}
+	applyBucketCoverage(allBuckets, startTime, endTime, bucketSeconds)
 
 	c.JSON(http.StatusOK, gin.H{
 		"buckets": allBuckets,

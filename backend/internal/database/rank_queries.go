@@ -97,7 +97,7 @@ func (s *SQLiteStore) prepareRank(ctx context.Context, tailnetID string, start, 
 	if err != nil {
 		return "", nil, 0, 0, "", err
 	}
-	clause, typeArgs := trafficTypeWhereClause(query.TrafficTypes)
+	clause, typeArgs := countedTrafficClause(query.TrafficTypes)
 	source, args := plan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",
 		"src_node_id, dst_node_id, tx_bytes, rx_bytes, flow_count",

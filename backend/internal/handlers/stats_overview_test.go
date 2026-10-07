@@ -251,6 +251,7 @@ func legacyOverview(t *testing.T, store *database.SQLiteStore, tailnetID string,
 	}
 	body.Buckets = buckets
 	body.Metadata.BucketCount = len(buckets)
+	var maxUniquePairs int64
 	for _, b := range buckets {
 		body.Summary.TCPBytes += b.TCPBytes
 		body.Summary.UDPBytes += b.UDPBytes
@@ -260,9 +261,17 @@ func legacyOverview(t *testing.T, store *database.SQLiteStore, tailnetID string,
 		body.Summary.SubnetBytes += b.SubnetBytes
 		body.Summary.PhysicalBytes += b.PhysicalBytes
 		body.Summary.TotalFlows += b.TotalFlows
-		if b.UniquePairs > body.Summary.UniquePairs {
-			body.Summary.UniquePairs = b.UniquePairs
+		if b.UniquePairs > maxUniquePairs {
+			maxUniquePairs = b.UniquePairs
 		}
+	}
+	distinct, err := store.DistinctPairs(ctx, tailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Summary.UniquePairs = int64(len(distinct))
+	if body.Summary.UniquePairs == 0 {
+		body.Summary.UniquePairs = maxUniquePairs
 	}
 	return body
 }
@@ -362,6 +371,8 @@ func TestStatsOverviewReportsDistinctActiveNodes(t *testing.T) {
 		{Bucket: base.Unix(), SrcNodeID: "b", DstNodeID: "c", TrafficType: "virtual", TxBytes: 10, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":11}`, Ports: "[]"},
 		{Bucket: base.Unix(), SrcNodeID: "self", DstNodeID: "self", TrafficType: "subnet", TxBytes: 5, RxBytes: 2, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":7}`, Ports: "[]"},
 		{Bucket: base.Unix(), SrcNodeID: "exit-src", DstNodeID: "exit-dst", TrafficType: "exit", TxBytes: 9, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":9}`, Ports: "[]"},
+		// WireGuard transport to a DERP relay: not a device unless physical is requested.
+		{Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "127.3.3.40", TrafficType: "physical", TxBytes: 300, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":300}`, Ports: "[]"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -378,9 +389,19 @@ func TestStatsOverviewReportsDistinctActiveNodes(t *testing.T) {
 		t.Fatalf("totalNodes = %d, want 6", body.Summary.TotalNodes)
 	}
 
+	if body.Summary.UniquePairs != 4 {
+		t.Fatalf("uniquePairs = %d, want 4 without the physical DERP pair", body.Summary.UniquePairs)
+	}
+
 	filtered := readOverview(t, store, base, base.Add(time.Minute), "virtual")
 	if filtered.Summary.TotalNodes != 3 {
 		t.Fatalf("virtual totalNodes = %d, want 3", filtered.Summary.TotalNodes)
+	}
+
+	physical := readOverview(t, store, base, base.Add(time.Minute), "physical")
+	if physical.Summary.TotalNodes != 2 || physical.Summary.UniquePairs != 1 {
+		t.Fatalf("physical totalNodes = %d uniquePairs = %d, want 2 and 1",
+			physical.Summary.TotalNodes, physical.Summary.UniquePairs)
 	}
 }
 
@@ -398,6 +419,7 @@ func TestStatsOverviewCountsOneDeviceStoredUnderSeveralIDs(t *testing.T) {
 		row(base.Unix(), "1002", "nPeer0001CNTRL"),
 		row(base.Unix()+60, "nBuild001CNTRL", "nPeer0001CNTRL"),
 		row(base.Unix()+120, "100.64.0.20", "203.0.113.7"),
+		row(base.Unix()+180, "1002", "203.0.113.7"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -423,5 +445,9 @@ func TestStatsOverviewCountsOneDeviceStoredUnderSeveralIDs(t *testing.T) {
 	// build (three stored ids), peer, and the external address.
 	if body.Summary.TotalNodes != 3 {
 		t.Fatalf("totalNodes = %d, want 3", body.Summary.TotalNodes)
+	}
+	// build->peer under two ids and build->203.0.113.7 under two ids.
+	if body.Summary.UniquePairs != 2 {
+		t.Fatalf("uniquePairs = %d, want 2", body.Summary.UniquePairs)
 	}
 }

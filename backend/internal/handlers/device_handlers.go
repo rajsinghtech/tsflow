@@ -84,7 +84,7 @@ func (h *Handlers) GetDNSNameservers(c *gin.Context) {
 		}
 		log.Printf("ERROR GetDNSNameservers: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to fetch DNS nameservers",
+			"error": err.Error(),
 		})
 		return
 	}

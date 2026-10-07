@@ -110,8 +110,32 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 	}
 
+	// Per-bucket uniquePairs is the busiest minute or hour, which undercounts
+	// a window. Count distinct endpoints across the whole range instead, using
+	// hourly rollups where they already cover the middle of the window.
 	countCtx, countCancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
 	defer countCancel()
+	storedPairs, err := h.store.DistinctPairs(countCtx, tn.id, startTime, endTime, trafficTypes)
+	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
+		log.Printf("ERROR GetStatsOverview unique pairs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to count unique pairs",
+		})
+		return
+	}
+	// One device can be stored under several ids (legacy numeric id, stable
+	// id, or an address before it was known), so resolve before counting.
+	resolve := memoizeResolve(func(id string) string {
+		return h.resolveNodeID(tn.poller, id)
+	})
+	distinctPairs := countDistinctPairs(storedPairs, resolve)
+	if distinctPairs == 0 {
+		distinctPairs = maxUniquePairs
+	}
+
 	activeIDs, err := h.store.ActiveNodeIDs(countCtx, tn.id, startTime, endTime, trafficTypes)
 	if err != nil {
 		if writeContextError(c, err) {
@@ -123,9 +147,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		})
 		return
 	}
-	totalNodes := countDistinctNodes(activeIDs, func(id string) string {
-		return h.resolveNodeID(tn.poller, id)
-	})
+	totalNodes := countDistinctNodes(activeIDs, resolve)
 
 	c.JSON(http.StatusOK, gin.H{
 		"summary": gin.H{
@@ -137,7 +159,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"subnetBytes":     subnetBytes,
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,
-			"uniquePairs":     maxUniquePairs,
+			"uniquePairs":     distinctPairs,
 			"totalNodes":      totalNodes,
 		},
 		"buckets": buckets,
@@ -567,6 +589,33 @@ func mergeNodeDetails(nodeID string, parts []*database.NodeDetailStats, resolve 
 // countDistinctNodes counts stored node ids after resolving each to its
 // canonical device id, the same normalization top talkers applies. One device
 // can be stored under an address, its legacy numeric id, and its stable id.
+// memoizeResolve caches id resolution for one request. Pair lists repeat
+// each id many times, and every lookup takes the device cache lock.
+func memoizeResolve(resolve func(string) string) func(string) string {
+	seen := make(map[string]string)
+	return func(id string) string {
+		if canonical, ok := seen[id]; ok {
+			return canonical
+		}
+		canonical := resolve(id)
+		seen[id] = canonical
+		return canonical
+	}
+}
+
+// countDistinctPairs counts src/dst pairs after resolving each id, so a pair
+// stored under two ids for the same device is counted once.
+func countDistinctPairs(pairs [][2]string, resolve func(string) string) int64 {
+	seen := make(map[[2]string]struct{}, len(pairs))
+	for _, pair := range pairs {
+		if resolve != nil {
+			pair = [2]string{resolve(pair[0]), resolve(pair[1])}
+		}
+		seen[pair] = struct{}{}
+	}
+	return int64(len(seen))
+}
+
 func countDistinctNodes(ids []string, resolve func(string) string) int64 {
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
