@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,9 @@ type rankMetadata struct {
 	HasMore      bool      `json:"hasMore"`
 	Sort         string    `json:"sort"`
 	TrafficTypes []string  `json:"trafficTypes,omitempty"`
+	Tag          string    `json:"tag,omitempty"`
+	User         string    `json:"user,omitempty"`
+	Q            string    `json:"q,omitempty"`
 }
 
 // GetRankedTalkers returns one page of devices ranked over a time window.
@@ -132,10 +136,17 @@ func (h *Handlers) parseRankQuery(c *gin.Context) (database.RankQuery, error) {
 		return query, err
 	}
 	query.TrafficTypes = trafficTypes
+	query.Tag = strings.TrimSpace(c.Query("tag"))
+	query.User = strings.TrimSpace(c.Query("user"))
+	query.Q = strings.TrimSpace(c.Query("q"))
+	if _, err := query.Identity(); err != nil {
+		return query, err
+	}
 	return query, nil
 }
 
 func rankMeta(tailnet string, start, end time.Time, query database.RankQuery, count int, hasMore bool) rankMetadata {
+	identity, _ := query.Identity()
 	return rankMetadata{
 		Start:        start,
 		End:          end,
@@ -146,5 +157,8 @@ func rankMeta(tailnet string, start, end time.Time, query database.RankQuery, co
 		HasMore:      hasMore,
 		Sort:         query.Sort,
 		TrafficTypes: query.TrafficTypes,
+		Tag:          identity.Tag,
+		User:         identity.User,
+		Q:            identity.Q,
 	}
 }

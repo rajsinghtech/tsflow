@@ -200,6 +200,87 @@ export const tailscaleService = {
 		return api.get(url, { signal });
 	},
 
+	async getRankedTalkers(
+		start: Date,
+		end: Date,
+		options?: {
+			limit?: number;
+			offset?: number;
+			sort?: 'bytes' | 'flows';
+			trafficTypes?: string[];
+			tag?: string;
+			user?: string;
+			q?: string;
+			signal?: AbortSignal;
+		}
+	): Promise<{
+		talkers: Array<{
+			nodeId: string;
+			hostname: string;
+			owner?: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		metadata: { count: number; hasMore: boolean; tag?: string; user?: string; q?: string };
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 100),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.sort) params.set('sort', options.sort);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) params.set('trafficTypes', options.trafficTypes.join(','));
+		if (options?.tag) params.set('tag', options.tag);
+		if (options?.user) params.set('user', options.user);
+		if (options?.q) params.set('q', options.q);
+		return api.get(`/analytics/talkers?${params.toString()}`, { signal: options?.signal });
+	},
+
+	async getRankedPairs(
+		start: Date,
+		end: Date,
+		options?: {
+			limit?: number;
+			offset?: number;
+			sort?: 'bytes' | 'flows';
+			trafficTypes?: string[];
+			tag?: string;
+			user?: string;
+			q?: string;
+			signal?: AbortSignal;
+		}
+	): Promise<{
+		pairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			srcOwner?: string;
+			dstNodeId: string;
+			dstHostname: string;
+			dstOwner?: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		metadata: { count: number; hasMore: boolean };
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 100),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.sort) params.set('sort', options.sort);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) params.set('trafficTypes', options.trafficTypes.join(','));
+		if (options?.tag) params.set('tag', options.tag);
+		if (options?.user) params.set('user', options.user);
+		if (options?.q) params.set('q', options.q);
+		return api.get(`/analytics/pairs?${params.toString()}`, { signal: options?.signal });
+	},
+
 	async getDeviceTimeline(
 		nodeId: string,
 		start: Date,

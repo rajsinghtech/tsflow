@@ -179,6 +179,56 @@ func TestRankedAnalyticsSelectsTailnet(t *testing.T) {
 	}
 }
 
+func TestRankedAnalyticsFiltersTagAndUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Minute)
+	end := start.Add(20 * time.Minute)
+	window := rankWindow(start, end)
+	base := start.Unix()
+	if err := store.UpsertNodeMetadata(context.Background(), database.DefaultTailnetID, []database.NodeMetadata{
+		{NodeID: "nBuild001CNTRL", Hostname: "build", Tags: []string{"tag:prod"}, IPs: []string{"100.64.0.21"}},
+		{NodeID: "424242", Owner: "ada@example.com", Tags: []string{"tag:prod"}, IPs: []string{"100.64.0.21"}},
+		{NodeID: "nOther01CNTRL", Hostname: "laptop", Owner: "bob@example.com", Tags: []string{"tag:ops"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
+		{Bucket: base, SrcNodeID: "nBuild001CNTRL", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 30, RxBytes: 4, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":34}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "424242", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 10, RxBytes: 1, FlowCount: 2, Protocols: "[6]", ProtocolBytes: `{"6":11}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "nOther01CNTRL", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 80, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":81}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "nBuild001CNTRL", DstNodeID: "127.3.3.40", TrafficType: "physical", TxBytes: 900, FlowCount: 1, Protocols: "[0]", ProtocolBytes: `{"0":900}`, Ports: "[]"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&user="+url.QueryEscape("ada@example.com"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"owner":"ada@example.com"`) ||
+		!strings.Contains(string(body), `"totalBytes":45`) || strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) || strings.Contains(string(body), `"totalBytes":900`) {
+		t.Fatalf("user filter: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&tag="+url.QueryEscape("tag:prod"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"srcNodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"totalBytes":45`) ||
+		strings.Contains(string(body), "127.3.3.40") || !strings.Contains(string(body), `"tag":"prod"`) {
+		t.Fatalf("tag filter: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&tag=prod&trafficTypes=physical")
+	if code != http.StatusOK || !strings.Contains(string(body), `"dstNodeId":"127.3.3.40"`) || !strings.Contains(string(body), `"dstHostname":"DERP relay"`) ||
+		strings.Contains(string(body), `"dstNodeId":"peer"`) {
+		t.Fatalf("physical tag filter: %d %s", code, body)
+	}
+	code, _ = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&tag="+url.QueryEscape(strings.Repeat("p", 200)))
+	if code != http.StatusBadRequest {
+		t.Fatalf("long tag status=%d", code)
+	}
+
+	plainCode, plainBody := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window)
+	if plainCode != http.StatusOK || strings.Contains(string(plainBody), `"owner"`) || strings.Contains(string(plainBody), `"tag"`) {
+		t.Fatalf("unfiltered talkers changed: %d %s", plainCode, plainBody)
+	}
+}
+
 func rankWindow(start, end time.Time) string {
 	return "?start=" + url.QueryEscape(start.Format(time.RFC3339)) + "&end=" + url.QueryEscape(end.Format(time.RFC3339))
 }

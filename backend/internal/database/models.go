@@ -104,9 +104,12 @@ const (
 
 // RankedTalker is one device over a window, with the same byte and flow
 // fields the pair and traffic-stats reads already use.
+// Owner is set when the read was filtered by tag or login. It is the merged
+// login, including a creator login copied onto a tagged device.
 type RankedTalker struct {
 	NodeID     string `json:"nodeId"`
 	Hostname   string `json:"hostname"`
+	Owner      string `json:"owner,omitempty"`
 	TxBytes    int64  `json:"txBytes"`
 	RxBytes    int64  `json:"rxBytes"`
 	TotalBytes int64  `json:"totalBytes"`
@@ -114,11 +117,14 @@ type RankedTalker struct {
 }
 
 // RankedPair is one directed src/dst over a window.
+// SrcOwner and DstOwner are set when the read was filtered by tag or login.
 type RankedPair struct {
 	SrcNodeID   string `json:"srcNodeId"`
 	SrcHostname string `json:"srcHostname"`
+	SrcOwner    string `json:"srcOwner,omitempty"`
 	DstNodeID   string `json:"dstNodeId"`
 	DstHostname string `json:"dstHostname"`
+	DstOwner    string `json:"dstOwner,omitempty"`
 	TxBytes     int64  `json:"txBytes"`
 	RxBytes     int64  `json:"rxBytes"`
 	TotalBytes  int64  `json:"totalBytes"`
@@ -127,11 +133,16 @@ type RankedPair struct {
 
 // RankQuery selects one page of a ranked read.
 // An empty Sort means bytes. Limit <= 0 selects RankDefaultLimit.
+// Tag, User, and Q are empty for an unfiltered read. Tag and User are both
+// required when both are set. Q matches a login, tag, hostname, name, or address.
 type RankQuery struct {
 	Limit        int
 	Offset       int
 	Sort         string
 	TrafficTypes []string
+	Tag          string
+	User         string
+	Q            string
 }
 
 // PortStat represents traffic volume for a specific port/protocol

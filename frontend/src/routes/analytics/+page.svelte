@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal } from 'lucide-svelte';
+	import { Activity, Network, Link, ArrowUpDown, Loader2, RefreshCw, CalendarClock, SlidersHorizontal, X } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import DonutChart from '#lib/components/charts/DonutChart.svelte';
 	import BarChart from '#lib/components/charts/BarChart.svelte';
@@ -20,8 +20,10 @@
 		queryTimeWindow,
 		hasStoredData,
 		dataSourceStore,
-		filterStore
+		filterStore,
+		debouncedFilterStore
 	} from '#lib/stores';
+	import { analyticsIdentityQuery, describeIdentityQuery } from '#lib/analytics/identity-query';
 	import { formatBytes, resolveActiveNodeCount } from '#lib/utils';
 	import { getPortLabel } from '#lib/utils/protocol';
 	import type { TrafficType } from '#lib/types';
@@ -50,6 +52,23 @@
 	onDestroy(() => {
 		stopStatsRefresh();
 	});
+
+	// The first run is the value already loaded by startStatsRefresh. Later
+	// changes to the shared search box reload the talker and pair tables.
+	let seenSearch: string | null = null;
+	$effect(() => {
+		const search = $debouncedFilterStore.search;
+		if (seenSearch === null) {
+			seenSearch = search;
+			return;
+		}
+		if (seenSearch === search) return;
+		seenSearch = search;
+		loadStats();
+	});
+
+	const identity = $derived(analyticsIdentityQuery($debouncedFilterStore.search));
+	const identityLabel = $derived(identity ? describeIdentityQuery(identity) : '');
 
 	type TalkerField = 'totalBytes' | 'txBytes' | 'rxBytes';
 	type PairField = 'totalBytes' | 'flowCount';
@@ -260,6 +279,30 @@
 
 					<div class="h-6 w-px bg-border"></div>
 
+					<div class="relative min-w-[12rem] flex-1">
+						<label class="sr-only" for="analytics-search">Search by tag or login</label>
+						<input
+							id="analytics-search"
+							type="text"
+							placeholder="tag:prod or ada@example.com"
+							class="w-full rounded-md border border-input bg-background py-1 pl-2 pr-7 text-xs"
+							value={$filterStore.search}
+							oninput={(e) => filterStore.setSearch(e.currentTarget.value)}
+						/>
+						{#if $filterStore.search}
+							<button
+								type="button"
+								class="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+								aria-label="Clear search"
+								onclick={() => filterStore.setSearch('')}
+							>
+								<X class="h-3 w-3" />
+							</button>
+						{/if}
+					</div>
+
+					<div class="h-6 w-px bg-border"></div>
+
 					<div class="flex items-center gap-1 text-xs text-muted-foreground">
 						<SlidersHorizontal class="h-3.5 w-3.5" />
 						<span class="hidden sm:inline">Traffic</span>
@@ -296,6 +339,14 @@
 					</div>
 				{/if}
 			</div>
+
+			{#if identity}
+				<p class="mb-4 text-xs text-muted-foreground">
+					Talkers and pairs match {identityLabel}. The totals on this page stay the whole tailnet for this window.
+				</p>
+			{:else if $debouncedFilterStore.search.trim().toLowerCase().startsWith('ip:')}
+				<p class="mb-4 text-xs text-muted-foreground">IP search filters the graph. Analytics stays on the whole tailnet.</p>
+			{/if}
 
 			<!-- Overview Cards -->
 			<div class="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:gap-3 lg:grid-cols-4">
@@ -360,8 +411,12 @@
 					{#if sortedTalkers.length === 0}
 						<div class="flex flex-col items-center justify-center py-8 text-center">
 							<Network class="mb-2 h-8 w-8 text-muted-foreground/30" />
-							<p class="text-sm text-muted-foreground">No device traffic recorded yet</p>
-							<p class="mt-1 text-xs text-muted-foreground/60">Traffic data will appear here once devices start communicating</p>
+							{#if identity}
+								<p class="text-sm text-muted-foreground">No devices match {identityLabel}</p>
+							{:else}
+								<p class="text-sm text-muted-foreground">No device traffic recorded yet</p>
+								<p class="mt-1 text-xs text-muted-foreground/60">Traffic data will appear here once devices start communicating</p>
+							{/if}
 						</div>
 					{:else}
 					<!-- Desktop/Tablet table -->
@@ -466,8 +521,12 @@
 					{#if sortedPairs.length === 0}
 						<div class="flex flex-col items-center justify-center py-8 text-center">
 							<Link class="mb-2 h-8 w-8 text-muted-foreground/30" />
-							<p class="text-sm text-muted-foreground">No communication pairs detected</p>
-							<p class="mt-1 text-xs text-muted-foreground/60">Pairs will appear once traffic flows between devices</p>
+							{#if identity}
+								<p class="text-sm text-muted-foreground">No pairs match {identityLabel}</p>
+							{:else}
+								<p class="text-sm text-muted-foreground">No communication pairs detected</p>
+								<p class="mt-1 text-xs text-muted-foreground/60">Pairs will appear once traffic flows between devices</p>
+							{/if}
 						</div>
 					{:else}
 					<!-- Desktop/Tablet table -->

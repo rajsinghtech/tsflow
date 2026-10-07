@@ -5,7 +5,7 @@ import { convertAggregatedFlowsToNetworkLogs } from '#lib/utils/aggregate-logs';
 import { processNetworkLogs } from '#lib/utils/network-processor';
 import { isValidIPv4, isIPv6 } from '#lib/utils/ip-utils';
 import { nodeMatchesDeviceScope, hasDeviceScope } from '#lib/utils/device-scope';
-import { nodeMatchesSearch } from '#lib/utils/node-search';
+import { buildNodeSearchIndex, searchNodeIds } from '#lib/utils/node-search-index';
 import { filterStore, debouncedFilterStore } from './filter-store';
 import { uiStore } from './ui-store';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
@@ -52,13 +52,20 @@ function viewIsNarrowed(search: string, scope: DeviceScope | null): boolean {
 	return search.trim() !== '' || hasDeviceScope(scope);
 }
 
+// Prepared once per graph update so a tag or login search does not re-walk
+// every device field on each keystroke. At ~20k nodes the scan stays on the
+// lowercase fields built here.
+const nodeSearchIndex = derived(processedNetwork, ($network) => buildNodeSearchIndex($network.nodes));
+
 // Primary matched nodes (nodes directly matching the search query)
 export const primaryMatchedNodes = derived(
-	[processedNetwork, debouncedFilterStore, nodesWithTrafficConnections],
-	([$network, $filters, $connectedNodeIds]) => {
+	[processedNetwork, debouncedFilterStore, nodesWithTrafficConnections, nodeSearchIndex],
+	([$network, $filters, $connectedNodeIds, $index]) => {
+		const matchedIds = searchNodeIds($index, $filters.search);
 		return $network.nodes.filter((node) => {
 			if (!$connectedNodeIds.has(node.id)) return false;
-			return nodeMatchesSearch(node, $filters.search) && nodeMatchesDeviceScope(node, $filters.deviceScope);
+			if (matchedIds && !matchedIds.has(node.id)) return false;
+			return nodeMatchesDeviceScope(node, $filters.deviceScope);
 		});
 	}
 );
