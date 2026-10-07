@@ -144,3 +144,133 @@ func TestDeviceCache_UpsertNodeMetadata(t *testing.T) {
 		t.Fatalf("unexpected node metadata entry: %+v", entry)
 	}
 }
+
+func TestPreferStableDeviceID(t *testing.T) {
+	canonical, alias := preferStableDeviceID("5973675649221043", "nAliceLaptop1CNTRL")
+	if canonical != "nAliceLaptop1CNTRL" || alias != "5973675649221043" {
+		t.Fatalf("canonical=%q alias=%q", canonical, alias)
+	}
+	canonical, alias = preferStableDeviceID("device-1", "")
+	if canonical != "device-1" || alias != "" {
+		t.Fatalf("single id canonical=%q alias=%q", canonical, alias)
+	}
+}
+
+func TestDeviceCache_MergesFlowMetadataIntoAPIDevice(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{{
+		ID:        "nAliceLaptop1CNTRL",
+		LegacyID:  "5973675649221043",
+		Name:      "laptop.example.ts.net",
+		Hostname:  "laptop",
+		User:      "alice@example.com",
+		Addresses: []string{"100.64.0.8", "fd7a:115c:a1e0::8"},
+		Tags:      []string{"tag:eng"},
+	}})
+
+	cache.UpsertFromFlowLogMetadata(map[string]any{
+		"srcNode": map[string]any{
+			"nodeId":    "5973675649221043",
+			"name":      "laptop.example.ts.net",
+			"user":      "alice@example.com",
+			"addresses": []any{"100.64.0.8"},
+		},
+	})
+	cache.UpsertNodeMetadata([]database.NodeMetadata{{
+		NodeID:   "5973675649221043",
+		Name:     "laptop.example.ts.net",
+		Hostname: "laptop",
+		Owner:    "alice@example.com",
+		IPs:      []string{"100.64.0.8"},
+	}})
+
+	devices := cache.Devices()
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d: %+v", len(devices), devices)
+	}
+	if devices[0].ID != "nAliceLaptop1CNTRL" {
+		t.Fatalf("expected stable id, got %s", devices[0].ID)
+	}
+	if devices[0].User != "alice@example.com" {
+		t.Fatalf("expected user login to survive the merge, got %q", devices[0].User)
+	}
+	if cache.ResolveIP("100.64.0.8") != "nAliceLaptop1CNTRL" {
+		t.Fatalf("ResolveIP = %s", cache.ResolveIP("100.64.0.8"))
+	}
+	byLegacy := cache.GetDevice("5973675649221043")
+	byStable := cache.GetDevice("nAliceLaptop1CNTRL")
+	if byLegacy == nil || byStable == nil || byLegacy.ID != "nAliceLaptop1CNTRL" || byLegacy != byStable {
+		t.Fatalf("legacy and stable ids should resolve to one entry: legacy=%v stable=%v", byLegacy, byStable)
+	}
+	ids := cache.EquivalentIDs("5973675649221043")
+	if len(ids) != 2 || ids[0] != "nAliceLaptop1CNTRL" || ids[1] != "5973675649221043" {
+		t.Fatalf("equivalent ids = %v", ids)
+	}
+}
+
+func TestDeviceCache_MergesFlowMetadataByTailscaleAddress(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{{
+		ID:        "nAliceLaptop1CNTRL",
+		LegacyID:  "5973675649221043",
+		Name:      "laptop.example.ts.net",
+		Hostname:  "laptop",
+		User:      "alice@example.com",
+		Addresses: []string{"100.64.0.8"},
+	}})
+
+	cache.UpsertFromFlowLogMetadata(map[string]any{
+		"srcNode": map[string]any{
+			"nodeId":    "nOtherSeen11CNTRL",
+			"name":      "laptop.example.ts.net",
+			"addresses": []any{"100.64.0.8", "fd7a:115c:a1e0::8"},
+			"user":      "alice@example.com",
+		},
+	})
+
+	if len(cache.Devices()) != 1 {
+		t.Fatalf("address fallback should merge, got %+v", cache.Devices())
+	}
+	if got := cache.GetDevice("nOtherSeen11CNTRL"); got == nil || got.ID != "nAliceLaptop1CNTRL" {
+		t.Fatalf("flow id should alias the API device, got %+v", got)
+	}
+	if cache.ResolveIP("fd7a:115c:a1e0::8") != "nAliceLaptop1CNTRL" {
+		t.Fatalf("merged tailscale address should resolve to the stable id")
+	}
+}
+
+func TestDeviceCache_DoesNotMergeOnNonTailscaleAddress(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.Update([]Device{{
+		ID:        "nAliceLaptop1CNTRL",
+		Name:      "laptop.example.ts.net",
+		Addresses: []string{"192.168.1.9"},
+	}})
+	cache.UpsertNodeMetadata([]database.NodeMetadata{{
+		NodeID: "424242",
+		Name:   "other.example.ts.net",
+		IPs:    []string{"192.168.1.9"},
+	}})
+	if len(cache.Devices()) != 2 {
+		t.Fatalf("shared LAN address must not merge devices, got %+v", cache.Devices())
+	}
+}
+
+func TestDeviceCache_KeepsFlowOnlyDevice(t *testing.T) {
+	cache := NewDeviceCache()
+	cache.UpsertFromFlowLogMetadata(map[string]any{
+		"dstNodes": []any{map[string]any{
+			"nodeId":    "5973675649221043",
+			"name":      "retired.example.ts.net",
+			"user":      "alice@example.com",
+			"addresses": []any{"100.64.0.9"},
+		}},
+	})
+	devices := cache.Devices()
+	if len(devices) != 1 {
+		t.Fatalf("expected the flow-only device, got %+v", devices)
+	}
+	if devices[0].ID != "5973675649221043" || devices[0].User != "alice@example.com" {
+		t.Fatalf("flow-only device = %+v", devices[0])
+	}
+}

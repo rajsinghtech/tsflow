@@ -3,6 +3,7 @@
 	import { Server, Globe, Network, Radio, Cloud } from 'lucide-svelte';
 	import { formatBytes } from '#lib/utils';
 	import { highlightedNodeIds, hasSelection } from '#lib/stores/ui-store';
+	import { searchMatchedNodeIds } from '#lib/stores/network-store';
 	import type { NetworkNode } from '#lib/types';
 
 	interface Props {
@@ -26,7 +27,8 @@
 
 	// Selection state
 	const isHighlighted = $derived($highlightedNodeIds.has(data.id));
-	const isDimmed = $derived($hasSelection && !isHighlighted);
+	const searchMatch = $derived($searchMatchedNodeIds.has(data.id));
+	const isDimmed = $derived($hasSelection && !isHighlighted && !searchMatch);
 
 	// Determine node color based on type
 	const nodeColor = $derived.by(() => {
@@ -84,8 +86,8 @@
 	class="min-w-[180px] w-fit rounded-lg border-2 bg-card shadow-lg transition-all duration-200 dark:shadow-lg shadow-md shadow-black/10"
 	class:opacity-25={isDimmed}
 	class:grayscale={isDimmed}
-	class:ring-2={isHighlighted && $hasSelection}
-	class:ring-primary={isHighlighted && $hasSelection}
+	class:ring-2={(isHighlighted && $hasSelection) || searchMatch}
+	class:ring-primary={(isHighlighted && $hasSelection) || searchMatch}
 	style="border-color: {nodeColor}"
 >
 	<Handle type="target" position={Position.Top} class="!opacity-0" />

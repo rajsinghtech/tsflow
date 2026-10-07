@@ -1,6 +1,10 @@
 package services
 
 import (
+	"math"
+	"net"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -8,11 +12,14 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 )
 
-// DeviceCache maps IPs to device info for fast lookups
+// DeviceCache maps IPs and node ids to device info for fast lookups.
+// One physical node can be seen under both the stable Tailscale node id
+// and the legacy numeric id. Those refer to a single cache entry.
 type DeviceCache struct {
 	mu          sync.RWMutex
 	ipToDevice  map[string]*DeviceCacheEntry
 	idToDevice  map[string]*DeviceCacheEntry
+	aliases     map[string]string // alternate id -> canonical id
 	lastRefresh time.Time
 }
 
@@ -24,13 +31,31 @@ type DeviceCacheEntry struct {
 	IPs         []string
 	Tags        []string
 	IsTailscale bool
+	// legacyID is the other id carried by a not-yet-adopted flow node.
+	legacyID string
 }
 
 func NewDeviceCache() *DeviceCache {
 	return &DeviceCache{
 		ipToDevice: make(map[string]*DeviceCacheEntry),
 		idToDevice: make(map[string]*DeviceCacheEntry),
+		aliases:    make(map[string]string),
 	}
+}
+
+// preferStableDeviceID chooses the id exposed for a Tailscale API device.
+// nodeId is the stable id. id is the legacy numeric id. When the API sends
+// only one of them, that value stays the canonical id and there is no alias.
+func preferStableDeviceID(legacyID, stableID string) (canonical, alias string) {
+	legacyID = strings.TrimSpace(legacyID)
+	stableID = strings.TrimSpace(stableID)
+	if stableID != "" && stableID != legacyID {
+		return stableID, legacyID
+	}
+	if legacyID != "" {
+		return legacyID, ""
+	}
+	return stableID, ""
 }
 
 func (c *DeviceCache) Update(devices []Device) {
@@ -39,18 +64,23 @@ func (c *DeviceCache) Update(devices []Device) {
 
 	c.ipToDevice = make(map[string]*DeviceCacheEntry)
 	c.idToDevice = make(map[string]*DeviceCacheEntry)
+	c.aliases = make(map[string]string)
 
 	for _, d := range devices {
+		if d.ID == "" {
+			continue
+		}
 		entry := &DeviceCacheEntry{
 			ID:          d.ID,
 			Name:        d.Name,
 			Hostname:    d.Hostname,
 			Owner:       d.User,
-			IPs:         d.Addresses,
-			Tags:        d.Tags,
+			IPs:         append([]string(nil), d.Addresses...),
+			Tags:        append([]string(nil), d.Tags...),
 			IsTailscale: true,
 		}
 		c.idToDevice[d.ID] = entry
+		c.aliasLocked(d.LegacyID, d.ID)
 		for _, ip := range d.Addresses {
 			c.ipToDevice[ip] = entry
 		}
@@ -61,17 +91,19 @@ func (c *DeviceCache) Update(devices []Device) {
 // UpsertFromFlowLogMetadata adds device identities embedded in exported
 // Tailscale network-flow log objects. Object-store ingestion can therefore
 // resolve names and tags without waiting for a separate devices API refresh.
+// A flow-log node that is the same device as an API node is merged into that
+// API device instead of stored a second time.
 func (c *DeviceCache) UpsertFromFlowLogMetadata(logMap map[string]any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if src, ok := logMap["srcNode"].(map[string]any); ok {
-		c.upsertMetadataLocked(src)
+		c.adoptLocked(entryFromFlowNode(src))
 	}
 	if dstNodes, ok := logMap["dstNodes"].([]any); ok {
 		for _, item := range dstNodes {
 			if node, ok := item.(map[string]any); ok {
-				c.upsertMetadataLocked(node)
+				c.adoptLocked(entryFromFlowNode(node))
 			}
 		}
 	}
@@ -96,7 +128,7 @@ func (c *DeviceCache) UpsertNodeMetadata(nodes []database.NodeMetadata) {
 				hostname = hostname[:dot]
 			}
 		}
-		entry := &DeviceCacheEntry{
+		c.adoptLocked(&DeviceCacheEntry{
 			ID:          node.NodeID,
 			Name:        node.Name,
 			Hostname:    hostname,
@@ -104,57 +136,248 @@ func (c *DeviceCache) UpsertNodeMetadata(nodes []database.NodeMetadata) {
 			IPs:         append([]string(nil), node.IPs...),
 			Tags:        append([]string(nil), node.Tags...),
 			IsTailscale: true,
-		}
-		c.idToDevice[node.NodeID] = entry
-		for _, ip := range node.IPs {
-			c.ipToDevice[ip] = entry
-		}
+		})
 	}
 	c.lastRefresh = time.Now()
 }
 
-func (c *DeviceCache) upsertMetadataLocked(node map[string]any) {
-	id, _ := node["nodeId"].(string)
+func entryFromFlowNode(node map[string]any) *DeviceCacheEntry {
+	id, legacy := flowNodeIDs(node)
 	if id == "" {
-		return
+		return nil
 	}
-
 	name, _ := node["name"].(string)
 	hostname := name
 	if dot := strings.Index(hostname, "."); dot > 0 {
 		hostname = hostname[:dot]
 	}
-
-	var addresses []string
-	if rawAddrs, ok := node["addresses"].([]any); ok {
-		for _, raw := range rawAddrs {
-			if addr, ok := raw.(string); ok && addr != "" {
-				addresses = append(addresses, addr)
-			}
-		}
+	owner, _ := node["user"].(string)
+	if owner == "" {
+		owner, _ = node["owner"].(string)
 	}
-
-	var tags []string
-	if rawTags, ok := node["tags"].([]any); ok {
-		for _, raw := range rawTags {
-			if tag, ok := raw.(string); ok && tag != "" {
-				tags = append(tags, tag)
-			}
-		}
-	}
-
-	entry := &DeviceCacheEntry{
+	return &DeviceCacheEntry{
 		ID:          id,
 		Name:        name,
 		Hostname:    hostname,
-		IPs:         addresses,
-		Tags:        tags,
+		Owner:       owner,
+		IPs:         stringList(node["addresses"]),
+		Tags:        stringList(node["tags"]),
 		IsTailscale: true,
+		legacyID:    legacy,
 	}
-	c.idToDevice[id] = entry
-	for _, ip := range addresses {
-		c.ipToDevice[ip] = entry
+}
+
+func flowNodeIDs(node map[string]any) (id, legacy string) {
+	id = scalarID(node["nodeId"])
+	legacy = scalarID(node["id"])
+	if id == "" {
+		return legacy, ""
 	}
+	if legacy == id {
+		legacy = ""
+	}
+	return id, legacy
+}
+
+func scalarID(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case jsonNumber:
+		return strings.TrimSpace(typed.String())
+	case float64:
+		if typed == 0 || math.Trunc(typed) != typed || math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return ""
+		}
+		return strconv.FormatFloat(typed, 'f', 0, 64)
+	default:
+		return ""
+	}
+}
+
+// jsonNumber is the encoding/json.Number interface, accepted without importing
+// encoding/json into every call site that already decoded into map[string]any.
+type jsonNumber interface {
+	String() string
+}
+
+func stringList(raw any) []string {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if str, ok := value.(string); ok && str != "" {
+			result = append(result, str)
+		}
+	}
+	return result
+}
+
+func (c *DeviceCache) adoptLocked(incoming *DeviceCacheEntry) {
+	if incoming == nil || incoming.ID == "" {
+		return
+	}
+	if c.aliases == nil {
+		c.aliases = make(map[string]string)
+	}
+	legacy := incoming.legacyID
+	if existing := c.matchLocked(incoming); existing != nil {
+		incoming.legacyID = ""
+		c.mergeLocked(existing, incoming, legacy)
+		return
+	}
+	incoming.legacyID = ""
+	c.idToDevice[incoming.ID] = incoming
+	c.aliasLocked(legacy, incoming.ID)
+	for _, ip := range incoming.IPs {
+		c.ipToDevice[ip] = incoming
+	}
+}
+
+func (c *DeviceCache) matchLocked(incoming *DeviceCacheEntry) *DeviceCacheEntry {
+	if existing := c.deviceLocked(incoming.ID); existing != nil {
+		return existing
+	}
+	if incoming.legacyID != "" {
+		if existing := c.deviceLocked(incoming.legacyID); existing != nil {
+			return existing
+		}
+	}
+	for _, ip := range incoming.IPs {
+		if !isTailscaleIP(ip) {
+			continue
+		}
+		if existing, ok := c.ipToDevice[ip]; ok && existing != nil {
+			return existing
+		}
+	}
+	return nil
+}
+
+func (c *DeviceCache) mergeLocked(existing, incoming *DeviceCacheEntry, legacy string) {
+	if existing.Name == "" {
+		existing.Name = incoming.Name
+	}
+	if existing.Hostname == "" {
+		existing.Hostname = incoming.Hostname
+	}
+	if existing.Owner == "" {
+		existing.Owner = incoming.Owner
+	}
+	existing.IPs = unionStrings(existing.IPs, incoming.IPs)
+	existing.Tags = unionStrings(existing.Tags, incoming.Tags)
+	if next := preferredID(existing.ID, incoming.ID); next != existing.ID {
+		c.rekeyLocked(existing, next)
+	}
+	c.aliasLocked(incoming.ID, existing.ID)
+	c.aliasLocked(legacy, existing.ID)
+	c.aliasLocked(incoming.legacyID, existing.ID)
+	for _, ip := range existing.IPs {
+		c.ipToDevice[ip] = existing
+	}
+}
+
+func (c *DeviceCache) deviceLocked(id string) *DeviceCacheEntry {
+	if id == "" {
+		return nil
+	}
+	if entry, ok := c.idToDevice[id]; ok {
+		return entry
+	}
+	if canonical, ok := c.aliases[id]; ok {
+		return c.idToDevice[canonical]
+	}
+	return nil
+}
+
+func (c *DeviceCache) aliasLocked(alias, canonical string) {
+	if alias == "" || canonical == "" || alias == canonical {
+		return
+	}
+	if c.aliases == nil {
+		c.aliases = make(map[string]string)
+	}
+	if _, exists := c.idToDevice[alias]; exists {
+		return
+	}
+	c.aliases[alias] = canonical
+}
+
+func (c *DeviceCache) rekeyLocked(entry *DeviceCacheEntry, newID string) {
+	if entry == nil || newID == "" || entry.ID == newID {
+		return
+	}
+	old := entry.ID
+	delete(c.idToDevice, old)
+	entry.ID = newID
+	c.idToDevice[newID] = entry
+	if c.aliases == nil {
+		c.aliases = make(map[string]string)
+	}
+	c.aliases[old] = newID
+	for alias, canonical := range c.aliases {
+		if canonical == old {
+			c.aliases[alias] = newID
+		}
+	}
+	delete(c.aliases, newID)
+}
+
+func preferredID(current, incoming string) string {
+	if isStableNodeID(incoming) && !isStableNodeID(current) {
+		return incoming
+	}
+	return current
+}
+
+func isStableNodeID(id string) bool {
+	return len(id) >= 8 && strings.HasSuffix(id, "CNTRL")
+}
+
+func isTailscaleIP(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127
+	}
+	// fd7a:115c:a1e0::/48
+	return len(ip) == net.IPv6len &&
+		ip[0] == 0xfd && ip[1] == 0x7a &&
+		ip[2] == 0x11 && ip[3] == 0x5c &&
+		ip[4] == 0xa1 && ip[5] == 0xe0
+}
+
+func unionStrings(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, item := range base {
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	for _, item := range extra {
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (c *DeviceCache) Devices() []Device {
@@ -176,7 +399,29 @@ func (c *DeviceCache) Devices() []Device {
 	return devices
 }
 
-// ResolveIP returns the device ID for an IP, or the IP itself if not found
+// EquivalentIDs returns the canonical id and every alias for the same node.
+// An unknown id is returned unchanged so callers can still query stored rows.
+func (c *DeviceCache) EquivalentIDs(id string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if id == "" {
+		return nil
+	}
+	entry := c.deviceLocked(id)
+	if entry == nil {
+		return []string{id}
+	}
+	extras := make([]string, 0, 1)
+	for alias, canonical := range c.aliases {
+		if canonical == entry.ID && alias != entry.ID {
+			extras = append(extras, alias)
+		}
+	}
+	sort.Strings(extras)
+	return append([]string{entry.ID}, extras...)
+}
+
+// ResolveIP returns the canonical device ID for an IP, or the IP itself if not found.
 func (c *DeviceCache) ResolveIP(ip string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -184,14 +429,14 @@ func (c *DeviceCache) ResolveIP(ip string) string {
 	if entry, ok := c.ipToDevice[ip]; ok {
 		return entry.ID
 	}
-	return ip // Return IP as-is for external addresses
+	return ip
 }
 
-// GetDevice returns device info by ID
+// GetDevice returns device info by canonical id or any alias.
 func (c *DeviceCache) GetDevice(id string) *DeviceCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.idToDevice[id]
+	return c.deviceLocked(id)
 }
 
 // GetDeviceByIP returns device info by IP address

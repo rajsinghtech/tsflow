@@ -38,7 +38,11 @@ func (ts *TailscaleService) HasCredentials() bool {
 }
 
 type Device struct {
-	ID                        string   `json:"id"`
+	ID     string `json:"id"`
+	NodeID string `json:"nodeId,omitempty"`
+	// LegacyID is the numeric Tailscale id when ID is the stable nodeId.
+	// It is not part of the device JSON tsflow serves.
+	LegacyID                  string   `json:"-"`
 	Name                      string   `json:"name"`
 	Hostname                  string   `json:"hostname"`
 	User                      string   `json:"user"`
@@ -273,8 +277,10 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 				lastSeen = device.LastSeen.Time.Format(time.RFC3339)
 				online = !device.LastSeen.IsZero() && time.Since(device.LastSeen.Time) < 2*time.Minute
 			}
+			canonical, legacy := preferStableDeviceID(device.ID, device.NodeID)
 			ourDevices = append(ourDevices, Device{
-				ID:                        device.ID,
+				ID:                        canonical,
+				LegacyID:                  legacy,
 				Name:                      device.Name,
 				Hostname:                  device.Hostname,
 				User:                      device.User,
@@ -313,6 +319,13 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 	var response DevicesResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal devices response: %w", err)
+	}
+	for i := range response.Devices {
+		device := &response.Devices[i]
+		canonical, legacy := preferStableDeviceID(device.ID, device.NodeID)
+		device.ID = canonical
+		device.LegacyID = legacy
+		device.NodeID = ""
 	}
 
 	return &response, nil

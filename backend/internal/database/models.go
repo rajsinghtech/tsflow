@@ -173,8 +173,9 @@ type ObjectIngestResult struct {
 }
 
 // NodeMetadata stores node identities embedded in exported flow-log objects.
-// Tailscale flow logs use n...CNTRL node IDs that are distinct from the live
-// Devices API IDs, so this metadata is required to render historical data.
+// A flow log may identify a node by its stable nodeId or by the legacy numeric
+// id. The device cache merges that record into the API device when they are
+// the same node.
 type NodeMetadata struct {
 	NodeID   string    `json:"nodeId"`
 	Name     string    `json:"name"`
