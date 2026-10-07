@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -67,6 +68,33 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if s.nodePairReadHook != nil {
 		s.nodePairReadHook()
 	}
+	aggs, err := s.readNodePairAggregates(ctx, tailnetID, startUnix, endUnix, true)
+	if errors.Is(err, errSnapshotMoved) {
+		s.openReadFallbacks.Add(1)
+		return s.readNodePairAggregates(ctx, tailnetID, startUnix, endUnix, false)
+	}
+	return aggs, err
+}
+
+// readNodePairAggregates plans the window on one snapshot and reads it.
+//
+// Closed hours and closed minutes (at or before the mark) are read after
+// that snapshot, in parallel. Only a late write can change them, and it
+// updates the minute row and the hour row in one commit. Each bucket is read
+// from exactly one of the two tables, so a newer snapshot cannot double
+// count.
+//
+// The filling hour and the minutes after the mark must be read on the
+// planning snapshot, because a moving mark shifts rows between the tables.
+// With parallelOpen, and no commit for the tailnet in flight, they are read
+// in parallel on separate snapshots instead, and the result is kept only if
+// no commit for the tailnet started before the last of them was read: then
+// every snapshot holds the same rows. Otherwise it returns errSnapshotMoved
+// and the caller reads again with the open part on the planning snapshot.
+func (s *SQLiteStore) readNodePairAggregates(ctx context.Context, tailnetID string, startUnix, endUnix int64, parallelOpen bool) ([]NodePairAggregate, error) {
+	seq := s.commitSeqFor(tailnetID)
+	since, quiet := seq.quiet()
+	parallelOpen = parallelOpen && quiet
 
 	tx, err := s.beginRead(ctx)
 	if err != nil {
@@ -78,20 +106,19 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if err != nil {
 		return nil, err
 	}
-	// Closed hours and closed minutes (at or before the mark) are read after
-	// this snapshot ends, in parallel. Only a late write can change them, and
-	// it updates the minute row and the hour row in one commit. Each bucket
-	// is read from exactly one of the two tables, so a newer snapshot cannot
-	// double count. The filling hour and minutes after the mark stay on this
-	// snapshot, because a moving mark would shift rows between the tables.
 	closedHourRanges, openHours := splitClosedHours(plan.hours, plan.mark)
 	closedHours, err := listRolledHours(ctx, tx, tailnetID, closedHourRanges)
 	if err != nil {
 		return nil, err
 	}
 	closedMinutes, openMinutes := splitClosedMinutes(plan.minutes, plan.mark)
+	spans := closedSpans(closedHours, closedMinutes)
 	grouped := make(map[pairGroupKey]*pairGroup)
-	if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {
+	var stable func() bool
+	if parallelOpen {
+		spans = append(spans, openSpans(openHours, openMinutes)...)
+		stable = func() bool { return seq.unchangedSince(since) }
+	} else if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {
 		return nil, err
 	}
 	if err := tx.Rollback(); err != nil {
@@ -100,7 +127,7 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if s.closedReadHook != nil {
 		s.closedReadHook()
 	}
-	return s.aggregateWithClosedSpans(ctx, tailnetID, closedSpans(closedHours, closedMinutes), grouped)
+	return s.aggregateWithClosedSpans(ctx, tailnetID, spans, grouped, stable)
 }
 
 func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan hourPlan, grouped map[pairGroupKey]*pairGroup) error {

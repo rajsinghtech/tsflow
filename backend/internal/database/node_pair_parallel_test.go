@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -190,13 +191,35 @@ func TestParallelClosedHoursMatchMinuteScan(t *testing.T) {
 	assertFixtureWindows(t, store, mark, 60)
 }
 
+func TestOpenSpans(t *testing.T) {
+	const h = hourSeconds
+	got := openSpans([][2]int64{{4 * h, 4*h + 25*60}}, [][2]int64{{4*h + 25*60, 4*h + 30*60}})
+	want := []closedSpan{
+		{lo: 4 * h, hi: 4*h + 25*60, hours: true, open: true},
+		{lo: 4*h + 25*60, hi: 4*h + 27*60, open: true},
+		{lo: 4*h + 27*60, hi: 4*h + 29*60, open: true},
+		{lo: 4*h + 29*60, hi: 4*h + 30*60, open: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("open spans = %+v, want %+v", got, want)
+	}
+	if got := openSpans(nil, nil); got != nil {
+		t.Fatalf("empty plan = %+v", got)
+	}
+}
+
 func TestSplitClosedMinutes(t *testing.T) {
 	const h = hourSeconds
 	mark := 4*h + 29*60 // rolled through 4:29, so 4:30 is the first open minute
 	closed, open := splitClosedMinutes([][2]int64{{3*h + 35*60, 4 * h}, {4 * h, 4*h + 40*60}}, mark)
-	wantClosed := [][2]int64{
-		{3*h + 35*60, 3*h + 45*60}, {3*h + 45*60, 3*h + 55*60}, {3*h + 55*60, 4 * h},
-		{4 * h, 4*h + 10*60}, {4*h + 10*60, 4*h + 20*60}, {4*h + 20*60, 4*h + 30*60},
+	var wantClosed [][2]int64
+	for _, seg := range [][2]int64{{3*h + 35*60, 4 * h}, {4 * h, 4*h + 30*60}} {
+		for lo := seg[0]; lo < seg[1]; lo += closedMinuteChunk {
+			wantClosed = append(wantClosed, [2]int64{lo, min(lo+closedMinuteChunk, seg[1])})
+		}
+	}
+	if len(wantClosed) < 4 {
+		t.Fatalf("fixture: %d chunks do not exercise the split", len(wantClosed))
 	}
 	if !reflect.DeepEqual(closed, wantClosed) {
 		t.Fatalf("closed = %v, want %v", closed, wantClosed)
@@ -215,9 +238,11 @@ func TestSplitClosedMinutes(t *testing.T) {
 
 // A commit that lands between the snapshot and the parallel reads must not
 // leak into rows the snapshot owns. A poll that adds minutes after the mark
-// and rolls the filling hour forward leaves the answer at the pre-commit
-// state. A late write into a closed hour is read in full on the newer
-// snapshot, so the answer is the post-commit state. Neither double counts.
+// and rolls the filling hour forward leaves the sequential read at the
+// pre-commit state; the parallel read sees the overlap and starts over at
+// the post-commit state. A late write into a closed hour is read in full on
+// the newer snapshot, so the answer is the post-commit state. Nothing is
+// double counted.
 func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 	prev := maxClosedHourReaders
 	maxClosedHourReaders = 4
@@ -232,7 +257,7 @@ func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	fired := false
-	store.closedReadHook = func() {
+	pollHook := func() {
 		if fired {
 			return
 		}
@@ -249,7 +274,9 @@ func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	got, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	store.closedReadHook = pollHook
+	// With the open part on the planning snapshot, the poll is not seen.
+	got, err := store.readNodePairAggregates(ctx, DefaultTailnetID, start.Unix(), end.Unix(), false)
 	if err != nil || !fired {
 		t.Fatalf("read err=%v hook fired=%v", err, fired)
 	}
@@ -259,6 +286,26 @@ func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 	newMark, _ := readHourMark(ctx, store.db, DefaultTailnetID)
 	if newMark != mark+5*minuteSeconds {
 		t.Fatalf("fixture: hook poll should move the mark, got %d", newMark)
+	}
+
+	// Read in parallel, the open part overlaps the poll, so the read starts
+	// over and answers exactly as of after the poll.
+	store, _ = buildManyHourStore(t)
+	store.closedReadHook = pollHook
+	fired = false
+	got, err = store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil || !fired {
+		t.Fatalf("parallel read err=%v hook fired=%v", err, fired)
+	}
+	store.closedReadHook = nil
+	if want, err = store.legacyNodePairAggregates(ctx, DefaultTailnetID, start, end); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("parallel read across a poll\nwant %s\ngot  %s", pairRowsJSON(want), pairRowsJSON(got))
+	}
+	if n := store.openReadFallbacks.Load(); n != 1 {
+		t.Fatalf("fallbacks = %d, want 1", n)
 	}
 
 	// Late write into a closed hour inside the window.
@@ -281,5 +328,159 @@ func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 	}
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("late write into a closed hour was not read exactly once\nwant %s\ngot  %s", pairRowsJSON(want), pairRowsJSON(got))
+	}
+}
+
+// A poll that rolls minutes into the filling hour and moves the mark while
+// the open spans are being read must not count those minutes twice. The
+// read sees the commit and starts over on one snapshot.
+func TestParallelOpenRegionAcrossAMarkMove(t *testing.T) {
+	prev := maxClosedHourReaders
+	maxClosedHourReaders = 4
+	t.Cleanup(func() { maxClosedHourReaders = prev })
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		start  int64
+		hookAt int // fire on this open span
+	}{
+		{"first span", manyHourBase + 26*hourSeconds, 1},
+		{"last span", manyHourBase + 26*hourSeconds, 4},
+		{"filling hour only", manyHourBase + 29*hourSeconds, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, mark := buildManyHourStore(t)
+			// Minutes after the mark, so the window has an open region to split.
+			var rows []rawNodePair
+			for _, m := range []int64{1, 2, 3, 4, 5, 6, 8} { // the fixture already has mark+7m
+				seen := map[[3]string]bool{}
+				for i, tmpl := range manyHourTemplates() {
+					if k := [3]string{tmpl.src, tmpl.dst, tmpl.traffic}; seen[k] {
+						continue
+					} else {
+						seen[k] = true
+					}
+					row := tmpl
+					row.tailnet = DefaultTailnetID
+					row.bucket = mark + m*minuteSeconds
+					row.tx, row.rx, row.txPkts, row.flows = 100*m+int64(i), m, 1, 1
+					rows = append(rows, row)
+				}
+			}
+			insertRawNodePairs(t, store, rows)
+			start := time.Unix(tc.start, 0).UTC()
+			end := time.Unix(mark+9*minuteSeconds, 0).UTC()
+
+			var spans atomic.Int64
+			var hookErr error
+			store.openSpanHook = func() {
+				if int(spans.Add(1)) != tc.hookAt {
+					return
+				}
+				// Roll four more minutes into the filling hour and move the mark.
+				unlock := store.lockTailnet(DefaultTailnetID)
+				defer unlock()
+				tx, err := store.beginWrite(ctx, DefaultTailnetID)
+				if err != nil {
+					hookErr = err
+					return
+				}
+				defer tx.Rollback()
+				if err := rollClosedMinutes(ctx, tx, DefaultTailnetID, mark+5*minuteSeconds); err != nil {
+					hookErr = err
+					return
+				}
+				hookErr = store.commitWrite(tx, DefaultTailnetID)
+			}
+			got, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+			if err != nil || hookErr != nil {
+				t.Fatalf("read err=%v hook err=%v", err, hookErr)
+			}
+			store.openSpanHook = nil
+			if m, _ := readHourMark(ctx, store.db, DefaultTailnetID); m != mark+4*minuteSeconds {
+				t.Fatalf("fixture: mark = %d, want %d", m, mark+4*minuteSeconds)
+			}
+			want, err := store.legacyNodePairAggregates(ctx, DefaultTailnetID, start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("read across a mark move\nwant %s\ngot  %s", pairRowsJSON(want), pairRowsJSON(got))
+			}
+			if n := store.openReadFallbacks.Load(); n != 1 {
+				t.Fatalf("fallbacks = %d, want 1", n)
+			}
+			// A quiet read takes the parallel path and gives the same answer.
+			again, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+			if err != nil || !reflect.DeepEqual(want, again) || store.openReadFallbacks.Load() != 1 {
+				t.Fatalf("quiet read err=%v fallbacks=%d equal=%v", err, store.openReadFallbacks.Load(), reflect.DeepEqual(want, again))
+			}
+		})
+	}
+}
+
+// A read that starts while a commit for its tailnet is in flight keeps the
+// open part on one snapshot and sees the state before that commit.
+func TestReadDuringACommitStaysOnOneSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, mark := buildManyHourStore(t)
+	start := time.Unix(manyHourBase+27*hourSeconds, 0).UTC()
+	end := time.Unix(mark+9*minuteSeconds, 0).UTC()
+	want, err := store.legacyNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var opened atomic.Int64
+	store.openSpanHook = func() { opened.Add(1) }
+	var got []NodePairAggregate
+	var readErr error
+	store.beforeCommit = func(tailnetID string) {
+		if tailnetID == DefaultTailnetID && got == nil {
+			got, readErr = store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+		}
+	}
+	lateWrite(t, store, DefaultTailnetID, mark+2*minuteSeconds, "tag:app", "tag:db", 31337, 443)
+	store.beforeCommit = nil
+	if readErr != nil || !reflect.DeepEqual(want, got) {
+		t.Fatalf("read during a commit err=%v\nwant %s\ngot  %s", readErr, pairRowsJSON(want), pairRowsJSON(got))
+	}
+	if opened.Load() != 0 {
+		t.Fatalf("read during a commit split the open part into %d spans", opened.Load())
+	}
+}
+
+// The filling hour is read from its rollup row on every request, even if
+// the cache holds an entry under the same hour.
+func TestOpenFillingHourNeverUsesTheCache(t *testing.T) {
+	ctx := context.Background()
+	store, mark := buildManyHourStore(t)
+	store.SetClosedHourCacheBytes(64 << 20)
+	filling := mark / hourSeconds * hourSeconds
+	stale := map[pairGroupKey]*pairGroup{}
+	var g pairGroup
+	g.tx.add(1<<40, true)
+	g.rx.add(0, true)
+	g.txPkts.add(1, true)
+	g.rxPkts.add(0, true)
+	g.flows.add(1, true)
+	g.bucket, g.hasBucket = filling, true
+	stale[pairGroupKey{src: "stale", dst: "entry", traffic: "virtual"}] = &g
+	entry := packHour(DefaultTailnetID, filling, stale)
+	if entry == nil {
+		t.Fatal("fixture: stale entry did not pack")
+	}
+	store.hourCache.put(entry, store.hourCache.start())
+	if store.hourCache.get(DefaultTailnetID, filling) == nil {
+		t.Fatal("fixture: stale entry not cached")
+	}
+	start := time.Unix(filling-2*hourSeconds, 0).UTC()
+	end := time.Unix(mark+6*minuteSeconds, 0).UTC()
+	want, err := store.legacyNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, start, end)
+	if err != nil || !reflect.DeepEqual(want, got) {
+		t.Fatalf("filling hour read err=%v\nwant %s\ngot  %s", err, pairRowsJSON(want), pairRowsJSON(got))
 	}
 }

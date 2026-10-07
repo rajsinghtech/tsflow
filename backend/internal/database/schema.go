@@ -63,6 +63,17 @@ type SQLiteStore struct {
 	// before closed spans are read. Tests commit writes there.
 	closedReadHook func()
 
+	// commitSeqs maps a tailnet ID to its *commitSeq.
+	commitSeqs sync.Map
+
+	// openSpanHook, when set, runs before each open span of a parallel graph
+	// read queries. Tests commit writes there.
+	openSpanHook func()
+
+	// openReadFallbacks counts parallel graph reads redone on one snapshot
+	// because a commit for the tailnet overlapped them.
+	openReadFallbacks atomic.Int64
+
 	// hourCache holds merged rows of closed hours for the graph read. Nil
 	// disables it. Set by SetClosedHourCacheBytes before the store is used.
 	hourCache *closedHourCache
