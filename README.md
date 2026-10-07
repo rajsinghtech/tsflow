@@ -144,6 +144,7 @@ JSON uses the same fields:
 |----------|-------------|---------|
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
+| `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
 
 #### tsnet Serve Mode
 

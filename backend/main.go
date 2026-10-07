@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -152,21 +151,7 @@ func main() {
 	// Add gzip compression middleware
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 
-	corsConfig := cors.DefaultConfig()
-	// Configure CORS based on allowed origins. Production deployments must
-	// explicitly opt into cross-origin origins.
-	if len(cfg.AllowedCORSOrigins) > 0 {
-		corsConfig.AllowOrigins = cfg.AllowedCORSOrigins
-	} else if strings.EqualFold(cfg.Environment, "production") {
-		corsConfig.AllowOriginFunc = func(string) bool { return false }
-	} else {
-		corsConfig.AllowOriginFunc = func(origin string) bool {
-			return true
-		}
-	}
-	corsConfig.AllowCredentials = true
-	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+	corsConfig := middleware.CORSConfig(cfg.Environment, cfg.AllowedCORSOrigins)
 	router.Use(cors.New(corsConfig))
 
 	// Add CSP middleware for security
