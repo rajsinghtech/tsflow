@@ -55,6 +55,7 @@ const (
 	MaxNetworkLogLimit = 5000
 	derpRelayIP        = "127.3.3.40"
 	derpRelayName      = "DERP relay"
+	exitInternetName   = "Internet (exit node)"
 	// MinQueryRange prevents degenerate zero-duration queries
 	MinQueryRange = time.Second
 	// DefaultQueryTimeout is the default timeout for database queries
@@ -170,12 +171,6 @@ func (h *Handlers) parseLimitParam(c *gin.Context, defaultLimit, maxLimit int) i
 
 // derpRelayLabel names Tailscale's DERP pseudo-address. The port on that
 // address is a DERP region, not a device.
-// DERPRelayName labels Tailscale's DERP pseudo-address. The port on that
-// address is a DERP region, not a device.
-func DERPRelayName(nodeIDOrIP string) (string, bool) {
-	return derpRelayLabel(nodeIDOrIP)
-}
-
 func derpRelayLabel(nodeIDOrIP string) (string, bool) {
 	if nodeIDOrIP == derpRelayIP {
 		return derpRelayName, true
@@ -187,9 +182,25 @@ func derpRelayLabel(nodeIDOrIP string) (string, bool) {
 	return "", false
 }
 
+// PseudoEndpointName labels endpoints that are not devices: the DERP
+// pseudo-address and the public side of anonymized exit traffic.
+func PseudoEndpointName(nodeIDOrIP string) (string, bool) {
+	return pseudoEndpointLabel(nodeIDOrIP)
+}
+
+func pseudoEndpointLabel(nodeIDOrIP string) (string, bool) {
+	if name, ok := derpRelayLabel(nodeIDOrIP); ok {
+		return name, true
+	}
+	if nodeIDOrIP == services.ExitInternetEndpoint {
+		return exitInternetName, true
+	}
+	return "", false
+}
+
 func labelRankedTalkers(talkers []database.RankedTalker) {
 	for i := range talkers {
-		if name, ok := derpRelayLabel(talkers[i].NodeID); ok {
+		if name, ok := pseudoEndpointLabel(talkers[i].NodeID); ok {
 			talkers[i].Hostname = name
 		}
 	}
@@ -197,10 +208,10 @@ func labelRankedTalkers(talkers []database.RankedTalker) {
 
 func labelRankedPairs(pairs []database.RankedPair) {
 	for i := range pairs {
-		if name, ok := derpRelayLabel(pairs[i].SrcNodeID); ok {
+		if name, ok := pseudoEndpointLabel(pairs[i].SrcNodeID); ok {
 			pairs[i].SrcHostname = name
 		}
-		if name, ok := derpRelayLabel(pairs[i].DstNodeID); ok {
+		if name, ok := pseudoEndpointLabel(pairs[i].DstNodeID); ok {
 			pairs[i].DstHostname = name
 		}
 	}
@@ -208,7 +219,7 @@ func labelRankedPairs(pairs []database.RankedPair) {
 
 // resolveNodeName returns a human-readable name for a node ID or IP using the device cache.
 func (h *Handlers) resolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
-	if name, ok := derpRelayLabel(nodeIDOrIP); ok {
+	if name, ok := pseudoEndpointLabel(nodeIDOrIP); ok {
 		return name
 	}
 	if poller == nil {
