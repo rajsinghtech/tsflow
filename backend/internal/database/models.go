@@ -252,6 +252,7 @@ type Store interface {
 	// ActiveNodeIDs lists the distinct stored node ids with traffic in the
 	// window. A self-pair lists its node once. Ranking limits do not apply.
 	// Ids are as stored, so callers resolve aliases before counting devices.
+	// An empty trafficTypes list leaves out physical rows.
 	ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
 	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
@@ -261,10 +262,11 @@ type Store interface {
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
-	// CountDistinctPairs counts src/dst pairs across the whole window.
-	// Complete hours come from the hourly rollup. An empty trafficTypes
-	// list counts every stored traffic type.
-	CountDistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error)
+	// DistinctPairs lists the distinct stored src/dst pairs across the whole
+	// window. Complete hours come from the hourly rollup. An empty
+	// trafficTypes list leaves out physical rows. Ids are as stored, so
+	// callers resolve aliases before counting pairs.
+	DistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([][2]string, error)
 
 	// Atomic poll commit
 	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error

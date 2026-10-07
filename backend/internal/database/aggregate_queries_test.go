@@ -492,6 +492,20 @@ func TestCountActiveNodesIsDistinctAndUncapped(t *testing.T) {
 		t.Fatalf("virtual active nodes = %d, want 21", virtualOnly)
 	}
 
+	// A DERP transport row adds a node only when physical is requested.
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, []NodePairAggregate{{
+		Bucket: base, SrcNodeID: "n0", DstNodeID: "127.3.3.40", TrafficType: "physical",
+		TxBytes: 50, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":50}`, Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err = store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, nil); err != nil || len(ids) != 23 {
+		t.Fatalf("default active nodes = %d (%v), want 23 without the DERP address", len(ids), err)
+	}
+	if ids, err = store.ActiveNodeIDs(ctx, DefaultTailnetID, start, end, []string{"virtual", "physical"}); err != nil || len(ids) != 22 {
+		t.Fatalf("virtual+physical active nodes = %d (%v), want 22", len(ids), err)
+	}
+
 	talkers, err := store.GetTopTalkers(ctx, DefaultTailnetID, start, end, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -587,6 +601,7 @@ func TestCountDistinctPairsUsesRollupAcrossTheWindow(t *testing.T) {
 		{Bucket: base, SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`},
 		{Bucket: base + 3600, SrcNodeID: "c", DstNodeID: "d", TrafficType: "virtual", TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`},
 		{Bucket: base + 3600 + 60, SrcNodeID: "a", DstNodeID: "b", TrafficType: "physical", TxBytes: 9, FlowCount: 1, Protocols: "[0]", ProtocolBytes: `{"0":9}`},
+		{Bucket: base + 3600 + 120, SrcNodeID: "a", DstNodeID: "127.3.3.40", TrafficType: "physical", TxBytes: 9, FlowCount: 1, Protocols: "[17]", ProtocolBytes: `{"17":9}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -598,18 +613,57 @@ func TestCountDistinctPairsUsesRollupAcrossTheWindow(t *testing.T) {
 	}
 
 	start, end := time.Unix(base, 0).UTC(), time.Unix(base+2*3600, 0).UTC()
-	got, err := store.CountDistinctPairs(ctx, DefaultTailnetID, start, end, nil)
+	got, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != 2 {
-		t.Fatalf("distinct pairs = %d, want 2 from the hourly rollup after minute rows were removed", got)
+	if len(got) != 2 {
+		t.Fatalf("distinct pairs = %v, want 2 from the hourly rollup after minute rows were removed, without physical", got)
 	}
-	virtualOnly, err := store.CountDistinctPairs(ctx, DefaultTailnetID, start, end, []string{"virtual"})
+	virtualOnly, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, []string{"virtual"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if virtualOnly != 2 {
-		t.Fatalf("virtual distinct pairs = %d, want 2", virtualOnly)
+	if len(virtualOnly) != 2 {
+		t.Fatalf("virtual distinct pairs = %v, want 2", virtualOnly)
+	}
+	withPhysical, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, []string{"virtual", "physical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withPhysical) != 3 {
+		t.Fatalf("virtual+physical distinct pairs = %v, want 3 (a-b listed once)", withPhysical)
+	}
+}
+
+func TestDistinctPairsMixesHourRollupAndPartialEdges(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	hour := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
+	row := func(bucket int64, src, dst string) NodePairAggregate {
+		return NodePairAggregate{Bucket: bucket, SrcNodeID: src, DstNodeID: dst, TrafficType: "virtual",
+			TxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":1}`, Ports: "[]"}
+	}
+	// a->b appears in the partial hour before, every minute of the full hour,
+	// and the partial hour after. c->d only in the leading edge, e->f only in
+	// the trailing edge, g->h only inside the full hour.
+	rows := []NodePairAggregate{row(hour-120, "a", "b"), row(hour-60, "c", "d")}
+	for m := int64(0); m < 60; m++ {
+		rows = append(rows, row(hour+m*60, "a", "b"))
+	}
+	rows = append(rows, row(hour+600, "g", "h"), row(hour+3600, "a", "b"), row(hour+3600+60, "e", "f"))
+	if err := store.UpsertNodePairAggregates(ctx, DefaultTailnetID, rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.backfillHourRollups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Unix(hour-30*60, 0).UTC(), time.Unix(hour+3600+30*60, 0).UTC()
+	got, err := store.DistinctPairs(ctx, DefaultTailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("distinct pairs = %v, want a-b, c-d, e-f, g-h once each", got)
 	}
 }

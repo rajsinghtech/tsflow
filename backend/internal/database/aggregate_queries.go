@@ -1426,7 +1426,9 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 // the window. A self-pair lists its node once. This is the population the
 // top-talkers ranking is drawn from, before its limit. The same device can be
 // stored under more than one id (an address before the device was known, or
-// the legacy numeric id), so callers resolve ids before counting.
+// the legacy numeric id), so callers resolve ids before counting. An empty
+// trafficTypes list leaves out physical rows, whose peers are WireGuard
+// endpoints and DERP addresses rather than devices.
 func (s *SQLiteStore) ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
@@ -1441,7 +1443,7 @@ func (s *SQLiteStore) ActiveNodeIDs(ctx context.Context, tailnetID string, start
 	if err != nil {
 		return nil, err
 	}
-	clause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	clause, typeArgs := countedTrafficClause(trafficTypes)
 	source, args := plan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id",
 		"src_node_id, dst_node_id",
@@ -1808,36 +1810,50 @@ func portAccountingClause(trafficTypes []string) (string, []any) {
 	return clause + excludePhysicalSQL, args
 }
 
-// CountDistinctPairs counts endpoint pairs across the whole window.
-// Complete hours are read from node_pair_hours; partial hours stay on minute rows.
-// An empty trafficTypes list counts every stored type, including physical.
-func (s *SQLiteStore) CountDistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error) {
+// DistinctPairs lists the distinct src/dst pairs across the whole window.
+// Complete hours are read from node_pair_hours; partial hours stay on minute
+// rows, and the union is de-duplicated so a pair seen in both is listed once.
+// An empty trafficTypes list leaves out physical rows, as the totals do.
+// Ids are as stored, so callers resolve aliases before counting.
+func (s *SQLiteStore) DistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([][2]string, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
-		return 0, err
+		return nil, err
 	}
 	startUnix, endUnix, err := nodePairBounds(start, end)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	clause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	clause, typeArgs := countedTrafficClause(trafficTypes)
 	source, args := plan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id",
 		"src_node_id, dst_node_id",
 		clause, typeArgs,
 	)
 	if source == "" {
-		return 0, nil
+		return nil, nil
 	}
-	query := fmt.Sprintf(`SELECT COUNT(*) FROM (SELECT DISTINCT src_node_id, dst_node_id FROM (%s) AS pair_rows)`, source)
-	var n int64
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
-		return 0, fmt.Errorf("failed to count distinct pairs: %w", err)
+	query := fmt.Sprintf(`SELECT DISTINCT src_node_id, dst_node_id FROM (%s) AS pair_rows`, source)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list distinct pairs: %w", err)
 	}
-	return n, nil
+	defer rows.Close()
+	var pairs [][2]string
+	for rows.Next() {
+		var pair [2]string
+		if err := rows.Scan(&pair[0], &pair[1]); err != nil {
+			return nil, fmt.Errorf("failed to scan distinct pair: %w", err)
+		}
+		pairs = append(pairs, pair)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list distinct pairs: %w", err)
+	}
+	return pairs, nil
 }
 
 func trafficTypeWhereClause(trafficTypes []string) (string, []any) {
