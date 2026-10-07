@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
 func TestRankedAnalyticsSingleTailnetAndEmpty(t *testing.T) {
@@ -176,6 +177,79 @@ func TestRankedAnalyticsSelectsTailnet(t *testing.T) {
 	if betaCode != http.StatusOK || !strings.Contains(string(betaBody), `"totalBytes":226`) || strings.Contains(string(betaBody), `"totalBytes":115`) ||
 		!strings.Contains(string(betaBody), `"tailnet":"beta"`) {
 		t.Fatalf("beta pairs: %d %s", betaCode, betaBody)
+	}
+}
+
+func TestRankedAnalyticsSearchByTagAndLogin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Minute)
+	end := start.Add(20 * time.Minute)
+	window := rankWindow(start, end)
+	base := start.Unix()
+	if err := store.UpsertNodeMetadata(context.Background(), database.DefaultTailnetID, []database.NodeMetadata{
+		{NodeID: "nBuild001CNTRL", Hostname: "build", Tags: []string{"tag:prod"}, IPs: []string{"100.64.0.21"}},
+		{NodeID: "424242", Owner: "ada@example.com", Tags: []string{"tag:prod"}, IPs: []string{"100.64.0.21"}},
+		{NodeID: "nOther01CNTRL", Hostname: "laptop", Owner: "bob@example.com", Tags: []string{"tag:ops"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, []database.NodePairAggregate{
+		{Bucket: base, SrcNodeID: "nBuild001CNTRL", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 30, RxBytes: 4, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":34}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "424242", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 10, RxBytes: 1, FlowCount: 2, Protocols: "[6]", ProtocolBytes: `{"6":11}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "nOther01CNTRL", DstNodeID: "peer", TrafficType: "virtual", TxBytes: 80, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":81}`, Ports: "[]"},
+		{Bucket: base, SrcNodeID: "nBuild001CNTRL", DstNodeID: "127.3.3.40", TrafficType: "physical", TxBytes: 900, FlowCount: 1, Protocols: "[0]", ProtocolBytes: `{"0":900}`, Ports: "[]"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cache sees the API device (tagged, no user) and is hydrated from the
+	// stored metadata, as the poller does on each device refresh.
+	poller := services.NewPoller(nil, store, services.DefaultPollerConfig())
+	poller.GetDeviceCache().Update([]services.Device{
+		{ID: "nBuild001CNTRL", NodeID: "nBuild001CNTRL", Hostname: "build", Addresses: []string{"100.64.0.21"}, Tags: []string{"tag:prod"}},
+		{ID: "nOther01CNTRL", NodeID: "nOther01CNTRL", Hostname: "laptop", User: "bob@example.com", Tags: []string{"tag:ops"}},
+	})
+	metadata, err := store.GetNodeMetadata(context.Background(), database.DefaultTailnetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poller.GetDeviceCache().UpsertNodeMetadata(metadata)
+	h.poller = poller
+
+	code, body := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("ada@example.com"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"owner":"ada@example.com"`) ||
+		!strings.Contains(string(body), `"totalBytes":45`) || strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) || strings.Contains(string(body), `"totalBytes":900`) {
+		t.Fatalf("login search: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("user@ada"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) || strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) {
+		t.Fatalf("user@ search: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&q="+url.QueryEscape("tag:prod"))
+	if code != http.StatusOK || !strings.Contains(string(body), `"srcNodeId":"nBuild001CNTRL"`) || !strings.Contains(string(body), `"totalBytes":45`) ||
+		strings.Contains(string(body), "127.3.3.40") || strings.Contains(string(body), `"srcNodeId":"nOther01CNTRL"`) || !strings.Contains(string(body), `"q":"tag:prod"`) {
+		t.Fatalf("tag search: %d %s", code, body)
+	}
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/pairs"+window+"&q=tag:prod&trafficTypes=physical")
+	if code != http.StatusOK || !strings.Contains(string(body), `"dstNodeId":"127.3.3.40"`) || !strings.Contains(string(body), `"dstHostname":"DERP relay"`) ||
+		strings.Contains(string(body), `"dstNodeId":"peer"`) {
+		t.Fatalf("physical tag search: %d %s", code, body)
+	}
+	code, _ = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&q="+url.QueryEscape("tag:"+strings.Repeat("p", 400)))
+	if code != http.StatusBadRequest {
+		t.Fatalf("long search status=%d", code)
+	}
+	// The separate tag and user parameters are not part of the API; q is.
+	code, body = serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window+"&tag=ops")
+	if code != http.StatusOK || !strings.Contains(string(body), `"nodeId":"nOther01CNTRL"`) || !strings.Contains(string(body), `"nodeId":"nBuild001CNTRL"`) {
+		t.Fatalf("tag param should be ignored: %d %s", code, body)
+	}
+
+	plainCode, plainBody := serve(dataRouter(h), http.MethodGet, "/api/analytics/talkers"+window)
+	if plainCode != http.StatusOK || strings.Contains(string(plainBody), `"q":`) || strings.Contains(string(plainBody), `"tag"`) {
+		t.Fatalf("unfiltered talkers changed: %d %s", plainCode, plainBody)
 	}
 }
 

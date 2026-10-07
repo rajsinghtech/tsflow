@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,9 @@ type rankMetadata struct {
 	TrafficTypes []string  `json:"trafficTypes,omitempty"`
 	Query        string    `json:"q,omitempty"`
 }
+
+// rankMaxSearchLen bounds the q search text.
+const rankMaxSearchLen = 320
 
 // GetRankedTalkers returns one page of devices ranked over a time window.
 func (h *Handlers) GetRankedTalkers(c *gin.Context) {
@@ -149,6 +153,9 @@ func (h *Handlers) parseRankQuery(c *gin.Context) (database.RankQuery, error) {
 		return query, err
 	}
 	query.TrafficTypes = trafficTypes
+	if len(strings.TrimSpace(c.Query("q"))) > rankMaxSearchLen {
+		return query, fmt.Errorf("q must be at most %d characters", rankMaxSearchLen)
+	}
 	return query, nil
 }
 

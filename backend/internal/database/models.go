@@ -147,11 +147,17 @@ type RankQuery struct {
 	TrafficTypes []string
 	// NodeIDs and Match narrow the ranking before it is paged. A talker is
 	// kept when its stored id is in NodeIDs or contains Match; a pair is kept
-	// when either endpoint is. Both empty means no filter.
+	// when either endpoint is. Both empty means no filter. The request's q
+	// search sets them.
 	NodeIDs []string
 	Match   string
 	// Search is the caller's search text, echoed back in metadata.
 	Search string
+	// Tag, User, and Q scope the read on the server through the merged node
+	// metadata (identity.go). They are not request parameters.
+	Tag  string
+	User string
+	Q    string
 }
 
 // Filtered reports whether the query narrows the ranking to some nodes.
