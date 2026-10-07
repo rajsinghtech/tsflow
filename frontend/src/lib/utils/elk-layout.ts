@@ -4,8 +4,10 @@ import { FULL_GRAPH_NODE_THRESHOLD } from '#lib/graph/threshold';
 import {
 	buildElkLayoutInput,
 	calculateNodeDimensions,
+	usesQualityLayout,
 	type ElkLayoutOptions
 } from '#lib/graph/elk-input';
+import { compactBands, compactLayers } from '#lib/graph/layer-compaction';
 import { rememberLayout, tryReuseLayout, type LayoutMemory } from '#lib/graph/layout-reuse';
 
 export type { LayoutMemory };
@@ -67,6 +69,27 @@ function nodesWithElkPositions(nodes: Node[], layoutedGraph: ElkNode): Node[] {
 	});
 }
 
+// Gap between neighbors in a band after a large layout is compacted.
+export const LARGE_LAYOUT_GAP = 100;
+// Most room between bands after compaction: the layered layer spacing.
+const LARGE_LAYER_GAP = 200;
+// Width to height the squeezed layout aims for, about a wide graph panel.
+const LARGE_LAYOUT_ASPECT = 2.5;
+
+function compactPlacedNodes(nodes: Node[], gap: number): Node[] {
+	const boxes = nodes.map((node) => {
+		const size = calculateNodeDimensions(node);
+		return { x: node.position.x, y: node.position.y, width: node.width ?? size.width, height: node.height ?? size.height };
+	});
+	const xs = compactLayers(boxes, gap);
+	const left = Math.min(...xs);
+	const right = Math.max(...boxes.map((box, index) => xs[index] + box.width));
+	const ys = compactBands(boxes, LARGE_LAYER_GAP, (right - left) / LARGE_LAYOUT_ASPECT);
+	return nodes.map((node, index) =>
+		xs[index] === node.position.x && ys[index] === node.position.y ? node : { ...node, position: { x: xs[index], y: ys[index] } }
+	);
+}
+
 function reusedLayout(
 	nodes: Node[],
 	edges: Edge[],
@@ -107,7 +130,11 @@ export async function applyElkLayout(
 
 	try {
 		const layoutedGraph = await elk.layout(elkGraph);
-		const laid = { nodes: nodesWithElkPositions(nodes, layoutedGraph), edges, reused: false };
+		let placed = nodesWithElkPositions(nodes, layoutedGraph);
+		if (!usesQualityLayout(nodes.length, edges.length)) {
+			placed = compactPlacedNodes(placed, LARGE_LAYOUT_GAP);
+		}
+		const laid = { nodes: placed, edges, reused: false };
 		if (memory) rememberLayout(memory, laid.nodes);
 		return laid;
 	} catch (error) {
