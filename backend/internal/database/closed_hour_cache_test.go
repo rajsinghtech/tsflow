@@ -235,7 +235,30 @@ func TestClosedHourCacheMatchesMinuteScan(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	touched := []struct {
+		tailnet string
+		hour    int64
+	}{
+		{DefaultTailnetID, manyHourBase + 3*hourSeconds},
+		{"other", manyHourBase + 20*hourSeconds},
+		{DefaultTailnetID, manyHourBase + 12*hourSeconds},
+		{DefaultTailnetID, manyHourBase + 25*hourSeconds},
+	}
+	for _, h := range touched {
+		if store.hourCache.get(h.tailnet, h.hour) != nil {
+			t.Fatalf("late write did not drop %s hour %d", h.tailnet, h.hour)
+		}
+	}
+	if store.hourCache.get(DefaultTailnetID, manyHourBase+5*hourSeconds) == nil ||
+		store.hourCache.get("other", manyHourBase+3*hourSeconds) == nil {
+		t.Fatal("late writes dropped hours they did not touch")
+	}
 	assertFixtureWindows(t, store, mark, 60)
+	for _, h := range touched {
+		if store.hourCache.get(h.tailnet, h.hour) == nil {
+			t.Fatalf("%s hour %d was not cached again after the re-read", h.tailnet, h.hour)
+		}
+	}
 
 	// Retention cuts the fixture at hour 10, minute 30.
 	cutoff := manyHourBase + 10*hourSeconds + 30*minuteSeconds
