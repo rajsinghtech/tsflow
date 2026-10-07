@@ -434,6 +434,8 @@ func dataRouter(h *Handlers, extra ...gin.HandlerFunc) http.Handler {
 	api.GET("/analytics/talkers", h.GetRankedTalkers)
 	api.GET("/analytics/pairs", h.GetRankedPairs)
 	api.GET("/analytics/new-pairs", h.GetNewPairs)
+	api.GET("/analytics/device-timeline", h.GetDeviceTimeline)
+	api.GET("/analytics/me", h.GetViewerSummary)
 	api.GET("/stats/node/:id", h.GetNodeDetailStats)
 	api.GET("/policy", h.GetPolicy)
 	api.GET("/users", h.GetUsers)

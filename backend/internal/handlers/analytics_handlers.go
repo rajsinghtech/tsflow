@@ -49,6 +49,9 @@ func (h *Handlers) GetRankedTalkers(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !h.applyViewerScope(c, &query) {
+		return
+	}
 
 	if !h.applyRankSearch(tn.poller, c.Query("q"), &query) {
 		c.JSON(http.StatusOK, gin.H{
@@ -97,6 +100,9 @@ func (h *Handlers) GetRankedPairs(c *gin.Context) {
 	query, err := h.parseRankQuery(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.applyViewerScope(c, &query) {
 		return
 	}
 

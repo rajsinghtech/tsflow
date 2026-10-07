@@ -59,7 +59,9 @@ describe('refreshVisibleData', () => {
 	it('asks pages with their own data to reload instead of loading the graph', async () => {
 		visit('/new');
 		await refreshVisibleData();
+		visit('/me');
+		await refreshVisibleData();
 		expect(calls).toEqual({ network: 0, stats: 0, rankings: 0 });
-		expect(get(pageRefresh)).toBe(1);
+		expect(get(pageRefresh)).toBe(2);
 	});
 });

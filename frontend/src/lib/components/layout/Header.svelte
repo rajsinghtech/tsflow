@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints } from 'lucide-svelte';
+	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User } from 'lucide-svelte';
+	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
@@ -52,12 +53,15 @@
 	const currentPath = $derived(page.url.pathname);
 	const isTrafficPage = $derived(currentPath === '/');
 
-	const primaryNav = [
+	const baseNav = [
 		{ href: '/', label: 'Traffic', icon: Network },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
 		{ href: '/new', label: 'New', icon: Waypoints },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
+	const primaryNav = $derived(
+		showMeTab($viewerStore?.login) ? [{ href: '/me', label: 'Me', icon: User }, ...baseNav] : baseNav
+	);
 
 	// Traffic view uses the graph, which includes every node in that window.
 	// Analytics uses the overview active-node count once stats are loaded.
@@ -192,6 +196,7 @@
 				{@const active = currentPath === item.href}
 				<a
 					href={hrefWithTailnet(item.href, $selectedTailnetId)}
+					onclick={() => rememberTab(item.href)}
 					aria-current={active ? 'page' : undefined}
 					aria-label={item.label}
 					class="flex min-h-8 items-center gap-1.5 rounded px-1 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
