@@ -150,7 +150,7 @@ func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan
 		if err != nil {
 			return fmt.Errorf("failed to query node pairs: %w", err)
 		}
-		if err := readPairRows(rows, grouped, false); err != nil {
+		if err := readHourPairRows(rows, grouped); err != nil {
 			return err
 		}
 	}
@@ -158,6 +158,16 @@ func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan
 }
 
 func readPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty bool) error {
+	return scanPairRows(rows, grouped, dirty, false)
+}
+
+// readHourPairRows is readPairRows for node_pair_hours rows, whose protocol
+// columns may carry a null protocol key (see formatHourProtocolBytes).
+func readHourPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup) error {
+	return scanPairRows(rows, grouped, false, true)
+}
+
+func scanPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty, hourRows bool) error {
 	defer rows.Close()
 	for rows.Next() {
 		var bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64
@@ -179,7 +189,7 @@ func readPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty boo
 			group = newPairGroup()
 			grouped[key] = group
 		}
-		if err := group.add(bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
+		if err := group.addRow(hourRows, bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
 			return fmt.Errorf("failed to scan node pair: %w", err)
 		}
 		if dirty {
@@ -368,6 +378,19 @@ func (g *pairGroup) add(
 	bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64,
 	protocolBytes, ports, txProto, rxProto, txPorts, rxPorts sql.NullString,
 ) error {
+	return g.addRow(false, bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts)
+}
+
+// addRow adds one stored row. hourRow decodes the protocol columns of a
+// node_pair_hours row, which may carry a null protocol key.
+func (g *pairGroup) addRow(hourRow bool,
+	bucket, tx, rx, txPkts, rxPkts, flows, directional sql.NullInt64,
+	protocolBytes, ports, txProto, rxProto, txPorts, rxPorts sql.NullString,
+) error {
+	mergeProto := mergeProtocolColumn
+	if hourRow {
+		mergeProto = mergeHourProtocolColumn
+	}
 	if bucket.Valid && (!g.hasBucket || bucket.Int64 < g.bucket) {
 		g.bucket = bucket.Int64
 		g.hasBucket = true
@@ -385,13 +408,13 @@ func (g *pairGroup) add(
 		g.directional = dir
 		g.hasDir = true
 	}
-	if err := mergeProtocolColumn(&g.protocols, nullString(protocolBytes)); err != nil {
+	if err := mergeProto(&g.protocols, nullString(protocolBytes)); err != nil {
 		return err
 	}
-	if err := mergeProtocolColumn(&g.txProto, nullString(txProto)); err != nil {
+	if err := mergeProto(&g.txProto, nullString(txProto)); err != nil {
 		return err
 	}
-	if err := mergeProtocolColumn(&g.rxProto, nullString(rxProto)); err != nil {
+	if err := mergeProto(&g.rxProto, nullString(rxProto)); err != nil {
 		return err
 	}
 	if err := mergePortColumn(&g.ports, nullString(ports)); err != nil {
@@ -613,6 +636,59 @@ func mergeProtocolColumn(dst *protoSums, raw string) error {
 		return nil
 	}
 	applyProtocolValue(dst, value)
+	return nil
+}
+
+// hourNullProtocolKey is the object key under which a node_pair_hours row
+// stores the sum of a null protocol key. A minute row's protocol_bytes that
+// is a bare JSON scalar has such a key, and json_each gives it no key at
+// all, so the hour row needs a name for it. Hour rows only ever get integer
+// keys otherwise: a literal "null" key in a minute row means protocol 0 and
+// rolls up as "0".
+const hourNullProtocolKey = "null"
+
+// formatHourProtocolBytes is formatProtocolBytes plus the null protocol key,
+// for node_pair_hours rows.
+func formatHourProtocolBytes(sums protoSums) string {
+	out := formatProtocolBytes(sums)
+	if !sums.hasNull {
+		return out
+	}
+	var b strings.Builder
+	b.WriteString(out[:len(out)-1])
+	if out != "{}" {
+		b.WriteByte(',')
+	}
+	b.WriteString(`"` + hourNullProtocolKey + `":`)
+	writeSum(&b, sums.nullKey)
+	b.WriteByte('}')
+	return b.String()
+}
+
+// mergeHourProtocolColumn is mergeProtocolColumn for a node_pair_hours row.
+func mergeHourProtocolColumn(dst *protoSums, raw string) error {
+	if !strings.Contains(raw, `"`+hourNullProtocolKey+`"`) {
+		return mergeProtocolColumn(dst, raw)
+	}
+	value, ok, err := decodeSQLiteJSON(raw)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if value.kind != kindObject {
+		applyProtocolValue(dst, value)
+		return nil
+	}
+	for _, field := range value.obj {
+		n, numeric := castSQLiteValue(field.val)
+		if field.key == hourNullProtocolKey {
+			dst.add(0, true, n, numeric)
+			continue
+		}
+		dst.add(int(sqliteAtoi(field.key)), false, n, numeric)
+	}
 	return nil
 }
 

@@ -1291,7 +1291,8 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 
 	protoSource, protoArgs := plan.unionPairRows(tailnetID,
 		"bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
-		"min_bucket AS bucket, tx_bytes, rx_bytes, protocol_bytes, protocols",
+		// The null protocol key that hour rows keep has no protocol number.
+		"min_bucket AS bucket, tx_bytes, rx_bytes, "+hourProtocolBytesForStatsSQL+", protocols",
 		protoClause, protoTypeArgs,
 	)
 	fallback := plan.fallbackRanges()
@@ -2069,3 +2070,10 @@ func (s *SQLiteStore) GetNodeStats(ctx context.Context, tailnetID string, nodeID
 
 	return result, nil
 }
+
+// hourProtocolBytesForStatsSQL selects a node_pair_hours row's
+// protocol_bytes without the null protocol key, which json_each would turn
+// into protocol 0. Minute rows give that key no protocol number either.
+const hourProtocolBytesForStatsSQL = `CASE WHEN json_valid(protocol_bytes)
+	THEN json_remove(protocol_bytes, '$."` + hourNullProtocolKey + `"')
+	ELSE protocol_bytes END AS protocol_bytes`
