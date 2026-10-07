@@ -92,14 +92,20 @@ func NewObjectStoreSource(ctx context.Context, cfg ObjectStoreConfig) (*ObjectSt
 		return nil, err
 	}
 
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+	client := newS3Client(awsCfg, cfg)
+	return &ObjectStoreSource{cfg: cfg, blobs: &s3BlobClient{client: client, bucket: cfg.Bucket}}, nil
+}
+
+func newS3Client(awsCfg aws.Config, cfg ObjectStoreConfig) *s3.Client {
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = cfg.UsePathStyle
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
+		// Many S3-compatible stores return objects without a checksum header,
+		// and the SDK would log that once per object on every poll.
+		o.DisableLogOutputChecksumValidationSkipped = true
 	})
-
-	return &ObjectStoreSource{cfg: cfg, blobs: &s3BlobClient{client: client, bucket: cfg.Bucket}}, nil
 }
 
 type s3BlobClient struct {
