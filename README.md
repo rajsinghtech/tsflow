@@ -144,6 +144,8 @@ JSON uses the same fields:
 |----------|-------------|---------|
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
+| `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
+| `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 
 #### tsnet Serve Mode
 
@@ -273,7 +275,7 @@ TSFLOW_ACCESS_CAPABILITY=example.com/cap/tsflow
 TSFLOW_ACCESS_TRUSTED_PROXIES=127.0.0.1/32
 ```
 
-If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address is the peer. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
+If a local tailscaled socket is reachable, header mode calls WhoIs on the `X-Forwarded-For` peer instead of trusting the identity and capability headers. The right-most forwarded address, across every `X-Forwarded-For` line, is the peer. If that entry is not an IP address the request is denied. Set `TSFLOW_ACCESS_LOCAL_WHOIS=off` to always trust headers. Set it to `require`, or set `TSFLOW_ACCESS_TAILSCALED_SOCKET`, when a missing socket should stop startup. The default is `auto`: use WhoIs when the socket answers, and headers when it does not.
 
 Some proxies forward identity and a groups header, and do not forward app capabilities. Set `TSFLOW_ACCESS_GROUPS_HEADER` to that header name. Values are comma-separated and must match the keys in the grant map exactly. Load the map from `TSFLOW_ACCESS_GROUP_GRANTS` or `TSFLOW_ACCESS_GROUP_GRANTS_FILE`, not both. The values use the same grant object as the capability. A mapped group grants access. If a request has both a capability and mapped groups, the tailnet lists are unioned.
 
@@ -385,6 +387,37 @@ Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP a
 ### Me
 
 `GET /api/analytics/me` is the signed-in viewer's devices, traffic, per-device timelines, top peers, and new connections. The login is the request identity from WhoIs or the trusted proxy headers. No request parameter sets it. `me=1` on the talker, pair, new-pair, and device-timeline routes uses that same login and compares it in full, including a tagged device's creator login. On the talker and pair routes, `q` then narrows the viewer's own devices. Devices are listed busiest first. The response `metadata` carries the same `lookbackStart`, `dataStart`, and `lookbackComplete` fields as `/api/analytics/new-pairs` for `newPairs`. Without a login the route is unauthorized, and the Me tab is not shown. When a login is known, `/` opens Me unless the address has query parameters or the viewer already chose another tab. That choice is stored in `tsflow-last-tab`.
+
+### MCP server
+
+`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
+
+Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes. The REST API still does not enforce the device filter.
+
+Tools are `list_tailnets`, `search_devices`, `get_device`, `top_talkers`, `top_pairs`, `flows_between`, `device_peers`, `device_timeline`, `new_connections`, and `stats_overview`. They read stored rollups. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Windows default to the last hour and stop at 7 days. List results default to 20 rows and stop at 100.
+
+Claude and Cursor can attach the endpoint as a remote MCP server. Point the client at the tailnet URL when tsflow is served with `TSFLOW_SERVE`, or at the trusted proxy when header access is on. The client does not get a new privilege path.
+
+```json
+{
+  "mcpServers": {
+    "tsflow": {
+      "type": "http",
+      "url": "https://tsflow.example.ts.net/mcp"
+    }
+  }
+}
+```
+
+The repository has Kubernetes manifests, not a Helm chart. Set the variable on the container:
+
+```yaml
+env:
+  - name: TSFLOW_MCP_ENABLED
+    value: "true"
+```
+
+`k8s/deployment.yaml` leaves it `false`. `k8s/access-example.yaml` shows it next to the access settings. Keep the Service reachable only from the tailnet or the trusted proxy. The health port used with `TSFLOW_SERVE` does not expose `/mcp`.
 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 

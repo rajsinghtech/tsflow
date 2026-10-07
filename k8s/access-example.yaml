@@ -39,6 +39,9 @@ spec:
               value: '{"group:eng":{"tailnets":["default"]},"group:ops":{}}'
             - name: TSFLOW_ACCESS_AUTOSCOPE
               value: user
+            # Same access middleware as the UI. Off until set to "true".
+            - name: TSFLOW_MCP_ENABLED
+              value: "false"
           readinessProbe:
             httpGet:
               path: /health

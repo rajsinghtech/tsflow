@@ -106,7 +106,8 @@ export interface BandwidthResponse {
 export const tailscaleService = {
 	async getDevices(signal?: AbortSignal): Promise<Device[]> {
 		const response = await api.get<DevicesResponse>('/devices', { signal });
-		return response.devices || [];
+		// Older backends sent null for a device with no addresses.
+		return (response.devices || []).map((device) => (device.addresses ? device : { ...device, addresses: [] }));
 	},
 
 	async getNetworkLogs(start: Date, end: Date, signal?: AbortSignal): Promise<NetworkLogsResponse> {

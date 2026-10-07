@@ -258,6 +258,16 @@ func mergeBandwidthBuckets(parts ...[]database.BandwidthBucket) []database.Bandw
 	return merged
 }
 
+// ParseTrafficTypes validates a list of traffic type names.
+// An empty list means the caller did not choose, which leaves physical out.
+// The allowed names are virtual, subnet, exit, and physical.
+func ParseTrafficTypes(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	return parseBandwidthTrafficTypes(strings.Join(values, ","))
+}
+
 func parseBandwidthTrafficTypes(raw string) ([]string, error) {
 	if raw == "" {
 		return nil, nil

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -9,7 +10,48 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
+	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
+
+// QueryError is a failed read whose Public message is safe to show a client.
+type QueryError struct {
+	Status int
+	Public string
+	Err    error
+}
+
+func (e *QueryError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Public
+}
+
+func (e *QueryError) Unwrap() error { return e.Err }
+
+// StatsSummary is the network-wide total returned by the overview route.
+type StatsSummary struct {
+	TCPBytes        int64 `json:"tcpBytes"`
+	UDPBytes        int64 `json:"udpBytes"`
+	OtherProtoBytes int64 `json:"otherProtoBytes"`
+	VirtualBytes    int64 `json:"virtualBytes"`
+	ExitBytes       int64 `json:"exitBytes"`
+	SubnetBytes     int64 `json:"subnetBytes"`
+	PhysicalBytes   int64 `json:"physicalBytes"`
+	TotalFlows      int64 `json:"totalFlows"`
+	UniquePairs     int64 `json:"uniquePairs"`
+	TotalNodes      int64 `json:"totalNodes"`
+}
+
+// StatsOverviewData is the overview payload shared by the REST route and MCP.
+type StatsOverviewData struct {
+	Summary StatsSummary
+	Buckets []database.TrafficStats
+	Source  string
+}
 
 // GetStatsOverview returns network-wide statistics for a time range
 func (h *Handlers) GetStatsOverview(c *gin.Context) {
@@ -27,19 +69,54 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	var buckets []database.TrafficStats
-	source := "database"
 	trafficTypes, trafficTypesErr := parseBandwidthTrafficTypes(c.Query("trafficTypes"))
 	if trafficTypesErr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": trafficTypesErr.Error()})
 		return
 	}
 
+	data, err := h.LoadStatsOverview(c.Request.Context(), tn.id, tn.poller, startTime, endTime, trafficTypes)
+	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
+		var qe *QueryError
+		if errors.As(err, &qe) && qe.Status != 0 {
+			c.JSON(qe.Status, gin.H{"error": qe.Public})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch traffic stats"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"summary": data.Summary,
+		"buckets": data.Buckets,
+		"metadata": gin.H{
+			"start":        startTime,
+			"end":          endTime,
+			"bucketCount":  len(data.Buckets),
+			"source":       data.Source,
+			"trafficTypes": trafficTypes,
+		},
+	})
+}
+
+// LoadStatsOverview reads the same overview the REST route returns.
+// An empty trafficTypes list leaves physical transport out of the protocol
+// totals. physicalBytes stays a separate counter, including when it was not requested.
+func (h *Handlers) LoadStatsOverview(ctx context.Context, tailnetID string, poller *services.Poller, startTime, endTime time.Time, trafficTypes []string) (StatsOverviewData, error) {
+	if h == nil || h.store == nil {
+		return StatsOverviewData{}, &QueryError{Status: http.StatusServiceUnavailable, Public: "Database not configured"}
+	}
+
+	var buckets []database.TrafficStats
+	source := "database"
+
 	// Try rolling cache first for recent data
 	duration := endTime.Sub(startTime)
-	if tn.poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
-		cache := tn.poller.GetRollingCache()
+	if poller != nil && duration <= time.Hour && len(trafficTypes) == 0 {
+		cache := poller.GetRollingCache()
 		if cache.HasTrafficStatsDataFor(startTime, endTime) {
 			buckets = cache.GetTrafficStats(startTime, endTime)
 			source = "cache"
@@ -48,23 +125,18 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 
 	// Fall back to database
 	if len(buckets) == 0 {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
+		queryCtx, cancel := context.WithTimeout(ctx, AggregationQueryTimeout)
 		defer cancel()
 
+		var err error
 		if len(trafficTypes) > 0 {
-			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(ctx, tn.id, startTime, endTime, trafficTypes)
+			buckets, err = h.store.GetTrafficStatsFromNodePairsByTrafficTypes(queryCtx, tailnetID, startTime, endTime, trafficTypes)
 		} else {
-			buckets, err = h.store.GetTrafficStats(ctx, tn.id, startTime, endTime)
+			buckets, err = h.store.GetTrafficStats(queryCtx, tailnetID, startTime, endTime)
 		}
 		if err != nil {
-			if writeContextError(c, err) {
-				return
-			}
 			log.Printf("ERROR GetStatsOverview: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to fetch traffic stats",
-			})
-			return
+			return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch traffic stats", Err: err}
 		}
 		source = "database"
 
@@ -73,17 +145,10 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		// again. The unique-pair recount inside GetTrafficStats stays, so two
 		// polls that share a minute still use MAX(recount, stored).
 		if len(trafficTypes) == 0 {
-			var derivedBuckets []database.TrafficStats
-			derivedBuckets, err = h.store.FillMissingTrafficStats(ctx, tn.id, startTime, endTime, buckets)
+			derivedBuckets, err := h.store.FillMissingTrafficStats(queryCtx, tailnetID, startTime, endTime, buckets)
 			if err != nil {
-				if writeContextError(c, err) {
-					return
-				}
 				log.Printf("ERROR GetStatsOverview (derived): %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": "Failed to fetch supplemental traffic stats",
-				})
-				return
+				return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch supplemental traffic stats", Err: err}
 			}
 			if len(buckets) == 0 {
 				source = "database (derived)"
@@ -92,19 +157,17 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 	}
 
-	// Aggregate buckets into summary
-	var tcpBytes, udpBytes, otherProtoBytes int64
-	var virtualBytes, exitBytes, subnetBytes, physicalBytes int64
-	var totalFlows, maxUniquePairs int64
+	var summary StatsSummary
+	var maxUniquePairs int64
 	for _, b := range buckets {
-		tcpBytes += b.TCPBytes
-		udpBytes += b.UDPBytes
-		otherProtoBytes += b.OtherProtoBytes
-		virtualBytes += b.VirtualBytes
-		exitBytes += b.ExitBytes
-		subnetBytes += b.SubnetBytes
-		physicalBytes += b.PhysicalBytes
-		totalFlows += b.TotalFlows
+		summary.TCPBytes += b.TCPBytes
+		summary.UDPBytes += b.UDPBytes
+		summary.OtherProtoBytes += b.OtherProtoBytes
+		summary.VirtualBytes += b.VirtualBytes
+		summary.ExitBytes += b.ExitBytes
+		summary.SubnetBytes += b.SubnetBytes
+		summary.PhysicalBytes += b.PhysicalBytes
+		summary.TotalFlows += b.TotalFlows
 		if b.UniquePairs > maxUniquePairs {
 			maxUniquePairs = b.UniquePairs
 		}
@@ -113,64 +176,31 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 	// Per-bucket uniquePairs is the busiest minute or hour, which undercounts
 	// a window. Count distinct endpoints across the whole range instead, using
 	// hourly rollups where they already cover the middle of the window.
-	countCtx, countCancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
+	countCtx, countCancel := context.WithTimeout(ctx, AggregationQueryTimeout)
 	defer countCancel()
-	storedPairs, err := h.store.DistinctPairs(countCtx, tn.id, startTime, endTime, trafficTypes)
+	storedPairs, err := h.store.DistinctPairs(countCtx, tailnetID, startTime, endTime, trafficTypes)
 	if err != nil {
-		if writeContextError(c, err) {
-			return
-		}
 		log.Printf("ERROR GetStatsOverview unique pairs: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to count unique pairs",
-		})
-		return
+		return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to count unique pairs", Err: err}
 	}
 	// One device can be stored under several ids (legacy numeric id, stable
 	// id, or an address before it was known), so resolve before counting.
 	resolve := memoizeResolve(func(id string) string {
-		return h.resolveNodeID(tn.poller, id)
+		return h.resolveNodeID(poller, id)
 	})
-	distinctPairs := countDistinctPairs(storedPairs, resolve)
-	if distinctPairs == 0 {
-		distinctPairs = maxUniquePairs
+	summary.UniquePairs = countDistinctPairs(storedPairs, resolve)
+	if summary.UniquePairs == 0 {
+		summary.UniquePairs = maxUniquePairs
 	}
 
-	activeIDs, err := h.store.ActiveNodeIDs(countCtx, tn.id, startTime, endTime, trafficTypes)
+	activeIDs, err := h.store.ActiveNodeIDs(countCtx, tailnetID, startTime, endTime, trafficTypes)
 	if err != nil {
-		if writeContextError(c, err) {
-			return
-		}
 		log.Printf("ERROR GetStatsOverview active nodes: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to count active nodes",
-		})
-		return
+		return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to count active nodes", Err: err}
 	}
-	totalNodes := countDistinctNodes(activeIDs, resolve)
+	summary.TotalNodes = countDistinctNodes(activeIDs, resolve)
 
-	c.JSON(http.StatusOK, gin.H{
-		"summary": gin.H{
-			"tcpBytes":        tcpBytes,
-			"udpBytes":        udpBytes,
-			"otherProtoBytes": otherProtoBytes,
-			"virtualBytes":    virtualBytes,
-			"exitBytes":       exitBytes,
-			"subnetBytes":     subnetBytes,
-			"physicalBytes":   physicalBytes,
-			"totalFlows":      totalFlows,
-			"uniquePairs":     distinctPairs,
-			"totalNodes":      totalNodes,
-		},
-		"buckets": buckets,
-		"metadata": gin.H{
-			"start":        startTime,
-			"end":          endTime,
-			"bucketCount":  len(buckets),
-			"source":       source,
-			"trafficTypes": trafficTypes,
-		},
-	})
+	return StatsOverviewData{Summary: summary, Buckets: buckets, Source: source}, nil
 }
 
 // mergeTrafficStatsBuckets adds derived buckets that are absent from the

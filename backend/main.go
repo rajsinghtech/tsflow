@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
+	"github.com/rajsinghtech/tsflow/backend/internal/mcpserver"
 	"github.com/rajsinghtech/tsflow/backend/internal/middleware"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 	"github.com/rajsinghtech/tsflow/backend/internal/tsnetserve"
@@ -149,24 +149,11 @@ func main() {
 
 	router.HandleMethodNotAllowed = true
 
-	// Add gzip compression middleware
-	router.Use(gzip.Gzip(gzip.DefaultCompression))
+	// Add gzip compression middleware. /mcp is left uncompressed so
+	// streamable HTTP responses are not wrapped.
+	router.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{"/mcp"})))
 
-	corsConfig := cors.DefaultConfig()
-	// Configure CORS based on allowed origins. Production deployments must
-	// explicitly opt into cross-origin origins.
-	if len(cfg.AllowedCORSOrigins) > 0 {
-		corsConfig.AllowOrigins = cfg.AllowedCORSOrigins
-	} else if strings.EqualFold(cfg.Environment, "production") {
-		corsConfig.AllowOriginFunc = func(string) bool { return false }
-	} else {
-		corsConfig.AllowOriginFunc = func(origin string) bool {
-			return true
-		}
-	}
-	corsConfig.AllowCredentials = true
-	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+	corsConfig := middleware.CORSConfig(cfg.Environment, cfg.AllowedCORSOrigins)
 	router.Use(cors.New(corsConfig))
 
 	// Add CSP middleware for security
@@ -226,6 +213,14 @@ func main() {
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
 	}
+
+	mcpserver.Mount(router, mcpserver.Options{
+		Enabled:  cfg.MCPEnabled,
+		Access:   cfg.Access,
+		WhoIs:    requestWhoIs,
+		Handlers: handlerService,
+		Version:  Version,
+	})
 
 	// Register embedded frontend (must be after API routes)
 	if err := frontend.RegisterFrontend(router); err != nil {
