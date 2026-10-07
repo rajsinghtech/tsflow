@@ -83,7 +83,7 @@ func TestLoadParsesValidatedEnvironmentValues(t *testing.T) {
 		"TAILSCALE_TAILNET", "VITE_TAILSCALE_TAILNET", "TSFLOW_TAILNETS_FILE",
 		"PORT", "VITE_PORT", "TSFLOW_SERVE", "TSFLOW_FUNNEL", "TSFLOW_S3_PATH_STYLE",
 		"TSFLOW_S3_MAX_OBJECTS_PER_POLL", "TAILSCALE_OAUTH_SCOPES", "TSFLOW_TAGS",
-		"TSFLOW_POLL_INTERVAL", "TSFLOW_INITIAL_BACKFILL", "TSFLOW_RETENTION", "TSFLOW_S3_LOOKBACK",
+		"TSFLOW_POLL_INTERVAL", "TSFLOW_INITIAL_BACKFILL", "TSFLOW_POLL_DELAY", "TSFLOW_RETENTION", "TSFLOW_S3_LOOKBACK",
 		"TSFLOW_ACCESS_CAPABILITY", "TSFLOW_ACCESS_MODE", "TSFLOW_ACCESS_TRUSTED_PROXIES",
 		"TSFLOW_ACCESS_CAPABILITY_HEADER", "TSFLOW_ACCESS_USER_HEADER", "TSFLOW_ACCESS_NAME_HEADER",
 		"TSFLOW_ACCESS_GROUPS_HEADER", "TSFLOW_ACCESS_GROUP_GRANTS",
@@ -149,6 +149,8 @@ func TestValidateRejectsUnsafeDurationsAndObjectStoreValues(t *testing.T) {
 		{name: "negative backfill", mutate: func(c *Config) { c.InitialBackfill = "-1m" }, want: "TSFLOW_INITIAL_BACKFILL"},
 		{name: "zero backfill", mutate: func(c *Config) { c.InitialBackfill = "0s" }, want: "TSFLOW_INITIAL_BACKFILL"},
 		{name: "negative retention", mutate: func(c *Config) { c.Retention = "-1m" }, want: "TSFLOW_RETENTION"},
+		{name: "negative poll delay", mutate: func(c *Config) { c.PollDelay = "-1m" }, want: "TSFLOW_POLL_DELAY"},
+		{name: "invalid poll delay", mutate: func(c *Config) { c.PollDelay = "later" }, want: "TSFLOW_POLL_DELAY"},
 		{name: "invalid S3 lookback", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreLookback = "nope" }, want: "TSFLOW_S3_LOOKBACK"},
 		{name: "zero S3 object cap", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreMaxObjects = 0 }, want: "TSFLOW_S3_MAX_OBJECTS_PER_POLL"},
 		{name: "invalid S3 endpoint", mutate: func(c *Config) {
@@ -188,5 +190,18 @@ func TestValidateURLAndPort(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestPollDelayDefaultsAndAllowsZero(t *testing.T) {
+	t.Setenv("TSFLOW_POLL_DELAY", "")
+	if got := Load().PollDelay; got != "2m" {
+		t.Fatalf("default TSFLOW_POLL_DELAY = %q, want 2m", got)
+	}
+	cfg := validConfig()
+	cfg.TailscaleAPIKey = "test-key"
+	cfg.PollDelay = "0"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("TSFLOW_POLL_DELAY=0 rejected: %v", err)
 	}
 }

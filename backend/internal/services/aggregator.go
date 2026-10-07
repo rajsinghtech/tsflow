@@ -163,8 +163,8 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		}
 		// Physical flows are the WireGuard transport for virtual, subnet, and
 		// exit traffic. Their "port" is a DERP region, not a service port.
-		if log.TrafficType != "physical" && log.DstPort > 0 {
-			portKey := protoPortKey{proto: log.Protocol, port: log.DstPort}
+		if port := servicePort(log); log.TrafficType != "physical" && port > 0 {
+			portKey := protoPortKey{proto: log.Protocol, port: port}
 			ppData.ports[portKey] += log.TxBytes
 			if isReverse {
 				ppData.rxPorts[portKey] += log.TxBytes
@@ -208,8 +208,8 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		}
 		tsAccum.totalFlows++
 		tsAccum.uniquePairs[trafficPairKey{srcNodeID: nodeA, dstNodeID: nodeB}] = struct{}{}
-		if log.TrafficType != "physical" && log.DstPort > 0 {
-			tsAccum.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
+		if port := servicePort(log); log.TrafficType != "physical" && port > 0 {
+			tsAccum.ports[protoPortKey{proto: log.Protocol, port: port}] += log.TxBytes
 		}
 
 		if log.TrafficType != "physical" {
@@ -430,4 +430,20 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 	})
 
 	return nodePairs, totalBandwidth, nodeBandwidth, trafficStats
+}
+
+// ephemeralPortMin is the start of the Linux ephemeral range. Windows and
+// macOS start higher (49152), so this covers all three.
+const ephemeralPortMin = 32768
+
+// servicePort picks the port that names the service for one flow record.
+// Every node logs its own side of a connection with itself as src, so the
+// server's record of a reply has the client's ephemeral port as dst. Keying
+// on dst alone filed most response bytes under random high ports. When dst
+// is ephemeral and src is not, the src port is the service.
+func servicePort(log database.FlowLog) int {
+	if log.DstPort >= ephemeralPortMin && log.SrcPort > 0 && log.SrcPort < ephemeralPortMin {
+		return log.SrcPort
+	}
+	return log.DstPort
 }

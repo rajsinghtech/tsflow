@@ -172,7 +172,7 @@ type TailnetPollerStatus struct {
 	PollInterval  string    `json:"pollInterval"`
 	FlowBackend   string    `json:"flowBackend"`
 	LastError     string    `json:"lastError,omitempty"`
-	LastErrorTime time.Time `json:"lastErrorTime,omitempty"`
+	LastErrorTime time.Time `json:"lastErrorTime,omitzero"`
 }
 
 // TailnetSummary is one configured tailnet without credentials.
