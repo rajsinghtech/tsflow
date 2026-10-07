@@ -380,6 +380,12 @@ An hour that sits fully inside the window is read from the hourly rollup (`node_
 
 Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
 
+### Device timeline
+
+`GET /api/analytics/device-timeline` returns one device's bytes over time, split into `virtual`, `subnet`, and `exit`, plus one page of its peers. Pass `node` (the stored device id). `limit` and `offset` page the peers, not the time buckets. Windows of two hours or less use one-minute buckets. Longer windows use hourly buckets, and complete hours are read from `node_pair_hours`.
+
+`physical` is omitted unless `trafficTypes` includes it. Each bucket includes `seconds`, the part of the bucket inside the query window. A DERP peer is labeled `DERP relay`. Selecting a device on the traffic graph opens the same timeline.
+
 ### MCP server
 
 `TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.

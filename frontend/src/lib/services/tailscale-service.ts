@@ -225,6 +225,46 @@ export const tailscaleService = {
 		return api.get(`/analytics/new-pairs?${params.toString()}`, { signal: options?.signal });
 	},
 
+	async getDeviceTimeline(
+		nodeId: string,
+		start: Date,
+		end: Date,
+		options?: { limit?: number; offset?: number; trafficTypes?: string[]; signal?: AbortSignal }
+	): Promise<{
+		nodeId: string;
+		hostname: string;
+		bucketSeconds: number;
+		buckets: Array<{
+			time: string;
+			seconds?: number;
+			virtual: { txBytes: number; rxBytes: number };
+			subnet: { txBytes: number; rxBytes: number };
+			exit: { txBytes: number; rxBytes: number };
+			physical?: { txBytes: number; rxBytes: number };
+		}>;
+		peers: Array<{
+			peerId: string;
+			hostname: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		metadata: { count: number; hasMore: boolean; limit: number; offset: number; bucketSeconds: number };
+	}> {
+		const params = new URLSearchParams({
+			node: nodeId,
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 8),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
+		}
+		return api.get(`/analytics/device-timeline?${params.toString()}`, { signal: options?.signal });
+	},
+
 	async getNodeStats(nodeId: string, start: Date, end: Date): Promise<NodeDetailStats> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();

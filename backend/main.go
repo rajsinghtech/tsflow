@@ -206,6 +206,7 @@ func main() {
 			analytics.GET("/talkers", statsCache, handlerService.GetRankedTalkers)
 			analytics.GET("/pairs", statsCache, handlerService.GetRankedPairs)
 			analytics.GET("/new-pairs", statsCache, handlerService.GetNewPairs)
+			analytics.GET("/device-timeline", statsCache, handlerService.GetDeviceTimeline)
 		}
 
 		// Policy endpoints

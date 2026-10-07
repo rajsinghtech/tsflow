@@ -296,6 +296,10 @@ type Store interface {
 	// hours come from the hourly rollup. The bool is true when another row
 	// exists after this page. An empty traffic type list leaves out physical.
 	ListNewPairs(ctx context.Context, tailnetID string, start, end time.Time, query NewPairQuery) ([]NewPair, bool, error)
+	// GetDeviceTimeline is one device's bytes over time, split by traffic
+	// type, plus one page of peers. Complete hours come from the rollup.
+	// An empty traffic type list leaves out physical.
+	GetDeviceTimeline(ctx context.Context, tailnetID, nodeID string, start, end time.Time, query TimelineQuery) (*DeviceTimeline, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 	// ListDevicePeers ranks peers of the given stored node ids. An empty
 	// trafficTypes list leaves out physical rows. Callers include aliases.
