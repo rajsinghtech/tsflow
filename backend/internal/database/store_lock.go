@@ -46,6 +46,17 @@ func (s *SQLiteStore) commitWrite(tx *sql.Tx, tailnetID string) error {
 	return tx.Commit()
 }
 
+// commitWriteTouching commits, then drops the hours the transaction changed
+// from the closed-hour cache. The drop must follow the commit: a reader that
+// started before it cannot store the old rows.
+func (s *SQLiteStore) commitWriteTouching(tx *sql.Tx, tailnetID string, touches hourTouches) error {
+	if err := s.commitWrite(tx, tailnetID); err != nil {
+		return err
+	}
+	s.hourCache.invalidate(tailnetID, touches)
+	return nil
+}
+
 // beginRead starts a deferred read transaction on the read pool. WAL keeps
 // the snapshot stable across every statement in the transaction and does not
 // block the writer connection.

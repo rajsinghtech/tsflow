@@ -100,10 +100,7 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	if s.closedReadHook != nil {
 		s.closedReadHook()
 	}
-	if err := s.readClosedSpans(ctx, tailnetID, closedSpans(closedHours, closedMinutes), grouped); err != nil {
-		return nil, err
-	}
-	return sortedPairAggregates(grouped)
+	return s.aggregateWithClosedSpans(ctx, tailnetID, closedSpans(closedHours, closedMinutes), grouped)
 }
 
 func collectPairGroups(ctx context.Context, q queryRower, tailnetID string, plan hourPlan, grouped map[pairGroupKey]*pairGroup) error {
@@ -175,6 +172,12 @@ func sortedPairAggregates(grouped map[pairGroupKey]*pairGroup) ([]NodePairAggreg
 		}
 		aggregates = append(aggregates, agg)
 	}
+	sortPairAggregates(aggregates)
+	return aggregates, nil
+}
+
+// sortPairAggregates orders by total bytes, then by key.
+func sortPairAggregates(aggregates []NodePairAggregate) {
 	sort.Slice(aggregates, func(i, j int) bool {
 		left := aggregates[i].TxBytes + aggregates[i].RxBytes
 		right := aggregates[j].TxBytes + aggregates[j].RxBytes
@@ -189,7 +192,6 @@ func sortedPairAggregates(grouped map[pairGroupKey]*pairGroup) ([]NodePairAggreg
 		}
 		return aggregates[i].TrafficType < aggregates[j].TrafficType
 	})
-	return aggregates, nil
 }
 
 type pairGroupKey struct {

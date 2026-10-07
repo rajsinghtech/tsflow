@@ -71,7 +71,10 @@ type Config struct {
 	InitialBackfill                     string
 	// PollDelay is how far behind now API polls end (TSFLOW_POLL_DELAY).
 	PollDelay string
-	Retention string
+	// GraphCacheMB caps the in-memory cache of closed hours used by the
+	// graph read, in MiB (TSFLOW_GRAPH_CACHE_MB). 0 disables it.
+	GraphCacheMB string
+	Retention    string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
@@ -126,6 +129,7 @@ func Load() *Config {
 		PollInterval:               getEnvWithDefault("TSFLOW_POLL_INTERVAL", "5m"),
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
 		PollDelay:                  getEnvWithDefault("TSFLOW_POLL_DELAY", "2m"),
+		GraphCacheMB:               getEnvWithDefault("TSFLOW_GRAPH_CACHE_MB", "256"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
@@ -176,6 +180,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := validateDuration("TSFLOW_INITIAL_BACKFILL", c.InitialBackfill, false); err != nil {
+		return err
+	}
+	if _, err := c.GraphCacheBytes(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.PollDelay) != "" {
@@ -380,6 +387,23 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// maxGraphCacheMB bounds TSFLOW_GRAPH_CACHE_MB at 64 GiB.
+const maxGraphCacheMB = 64 << 10
+
+// GraphCacheBytes returns the closed-hour cache budget in bytes. Empty means
+// the 256 MiB default; 0 disables the cache.
+func (c *Config) GraphCacheBytes() (int64, error) {
+	raw := strings.TrimSpace(c.GraphCacheMB)
+	if raw == "" {
+		return 256 << 20, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 || n > maxGraphCacheMB {
+		return 0, fmt.Errorf("TSFLOW_GRAPH_CACHE_MB must be a whole number of MiB from 0 to %d", maxGraphCacheMB)
+	}
+	return n << 20, nil
 }
 
 func parsePositiveInt(s string) int {

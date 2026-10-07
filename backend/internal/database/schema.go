@@ -63,6 +63,10 @@ type SQLiteStore struct {
 	// before closed spans are read. Tests commit writes there.
 	closedReadHook func()
 
+	// hourCache holds merged rows of closed hours for the graph read. Nil
+	// disables it. Set by SetClosedHourCacheBytes before the store is used.
+	hourCache *closedHourCache
+
 	// closedHourSem bounds parallel closed-hour reads across requests.
 	closedHourOnce sync.Once
 	closedHourSem  chan struct{}
