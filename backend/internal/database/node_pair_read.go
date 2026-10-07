@@ -74,7 +74,7 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	}
 	defer tx.Rollback()
 
-	plan, err := s.hourPlan(ctx, tx, tailnetID, startUnix, endUnix, 0)
+	plan, err := s.snapshotHourPlan(ctx, tx, tailnetID, startUnix, endUnix)
 	if err != nil {
 		return nil, err
 	}
