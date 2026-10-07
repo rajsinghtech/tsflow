@@ -217,6 +217,9 @@ func main() {
 		WhoIs:    requestWhoIs,
 		Handlers: handlerService,
 		Version:  Version,
+		// A separate budget from /api so MCP agents and the UI don't starve
+		// each other.
+		RateLimit: middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()),
 	})
 
 	// Register embedded frontend (must be after API routes)
