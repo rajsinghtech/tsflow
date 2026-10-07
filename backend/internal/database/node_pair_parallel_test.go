@@ -3,9 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
-	"time"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestSplitClosedHours(t *testing.T) {
