@@ -592,7 +592,7 @@ func (c *DeviceCache) Devices() []Device {
 			Tags:               append([]string(nil), entry.Tags...),
 		})
 	}
-	return devices
+	return withEmptyLists(devices)
 }
 
 // EquivalentIDs returns the canonical id and every alias for the same node.
