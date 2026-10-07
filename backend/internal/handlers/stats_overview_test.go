@@ -246,6 +246,7 @@ func legacyOverview(t *testing.T, store *database.SQLiteStore, tailnetID string,
 	}
 	body.Buckets = buckets
 	body.Metadata.BucketCount = len(buckets)
+	var maxUniquePairs int64
 	for _, b := range buckets {
 		body.Summary.TCPBytes += b.TCPBytes
 		body.Summary.UDPBytes += b.UDPBytes
@@ -255,9 +256,17 @@ func legacyOverview(t *testing.T, store *database.SQLiteStore, tailnetID string,
 		body.Summary.SubnetBytes += b.SubnetBytes
 		body.Summary.PhysicalBytes += b.PhysicalBytes
 		body.Summary.TotalFlows += b.TotalFlows
-		if b.UniquePairs > body.Summary.UniquePairs {
-			body.Summary.UniquePairs = b.UniquePairs
+		if b.UniquePairs > maxUniquePairs {
+			maxUniquePairs = b.UniquePairs
 		}
+	}
+	distinct, err := store.CountDistinctPairs(ctx, tailnetID, start, end, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Summary.UniquePairs = distinct
+	if body.Summary.UniquePairs == 0 {
+		body.Summary.UniquePairs = maxUniquePairs
 	}
 	return body
 }

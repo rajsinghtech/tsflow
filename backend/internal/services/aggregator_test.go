@@ -186,3 +186,54 @@ func TestAggregateTrafficStatsDistinguishDelimiterContainingPairs(t *testing.T) 
 		t.Fatalf("traffic stats = %+v, want separate delimiter-containing pairs", stats[0])
 	}
 }
+
+func TestAggregateKeepsPhysicalBytesOutOfProtocolTotalsBandwidthAndPorts(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	base := time.Now().UTC().Truncate(time.Minute)
+	logs := []database.FlowLog{
+		{LoggedAt: base.Add(5 * time.Second), SrcIP: "100.64.0.1", DstIP: "100.64.0.2", TrafficType: "virtual", Protocol: 6, DstPort: 443, TxBytes: 100},
+		{LoggedAt: base.Add(10 * time.Second), SrcIP: "100.64.0.1", DstIP: "127.3.3.40", TrafficType: "physical", Protocol: 0, DstPort: 27, TxBytes: 1000},
+		{LoggedAt: base.Add(15 * time.Second), SrcIP: "100.64.0.2", DstIP: "10.1.0.5", TrafficType: "subnet", Protocol: 17, DstPort: 53, TxBytes: 40},
+	}
+
+	pairs, bandwidth, nodes, stats := poller.aggregate(logs)
+	if len(stats) != 1 {
+		t.Fatalf("stats buckets = %d, want 1", len(stats))
+	}
+	got := stats[0]
+	if got.TCPBytes != 100 || got.UDPBytes != 40 || got.OtherProtoBytes != 0 || got.PhysicalBytes != 1000 || got.VirtualBytes != 100 || got.SubnetBytes != 40 {
+		t.Fatalf("traffic stats = %+v, want protocol totals without physical and physicalBytes kept", got)
+	}
+	var ports []database.PortStat
+	if err := json.Unmarshal([]byte(got.TopPorts), &ports); err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 2 || ports[0].Port == 27 || ports[1].Port == 27 {
+		t.Fatalf("top ports = %+v, want service ports only", ports)
+	}
+	if len(bandwidth) != 1 || bandwidth[0].TxBytes != 140 {
+		t.Fatalf("bandwidth = %+v, want 140 non-physical bytes", bandwidth)
+	}
+	for _, node := range nodes {
+		if node.NodeID == "127.3.3.40" {
+			t.Fatalf("physical DERP endpoint counted in node bandwidth: %+v", node)
+		}
+		if node.NodeID == "100.64.0.1" && node.TxBytes != 100 {
+			t.Fatalf("node bandwidth = %+v, want virtual TX only", node)
+		}
+	}
+
+	var physical *database.NodePairAggregate
+	for i := range pairs {
+		if pairs[i].TrafficType == "physical" {
+			physical = &pairs[i]
+			break
+		}
+	}
+	if physical == nil || physical.TxBytes+physical.RxBytes != 1000 {
+		t.Fatalf("physical pair = %+v, want the transport bytes preserved", physical)
+	}
+	if physical.Ports != "[]" {
+		t.Fatalf("physical ports = %s, want none", physical.Ports)
+	}
+}

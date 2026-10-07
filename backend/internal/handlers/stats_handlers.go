@@ -110,6 +110,26 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 	}
 
+	// Per-bucket uniquePairs is the busiest minute or hour, which undercounts
+	// a window. Count distinct endpoints across the whole range instead, using
+	// hourly rollups where they already cover the middle of the window.
+	countCtx, countCancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
+	defer countCancel()
+	distinctPairs, err := h.store.CountDistinctPairs(countCtx, tn.id, startTime, endTime, trafficTypes)
+	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
+		log.Printf("ERROR GetStatsOverview unique pairs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to count unique pairs",
+		})
+		return
+	}
+	if distinctPairs == 0 {
+		distinctPairs = maxUniquePairs
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"summary": gin.H{
 			"tcpBytes":        tcpBytes,
@@ -120,7 +140,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"subnetBytes":     subnetBytes,
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,
-			"uniquePairs":     maxUniquePairs,
+			"uniquePairs":     distinctPairs,
 		},
 		"buckets": buckets,
 		"metadata": gin.H{

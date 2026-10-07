@@ -42,6 +42,10 @@ type BandwidthBucket struct {
 	Time    time.Time `json:"time"`
 	TxBytes int64     `json:"txBytes"`
 	RxBytes int64     `json:"rxBytes"`
+	// Seconds is the portion of this bucket covered by the query window.
+	// Edge buckets are often shorter than the nominal bucket size. Zero means
+	// the caller has not annotated coverage yet.
+	Seconds int64 `json:"seconds,omitempty"`
 }
 
 // NodeBandwidth represents bandwidth for a specific node
@@ -231,6 +235,7 @@ type Store interface {
 	GetBandwidth(ctx context.Context, tailnetID string, start, end time.Time) ([]BandwidthBucket, error)
 	GetBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
 	GetNodeBandwidth(ctx context.Context, tailnetID string, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
+	GetNodeBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, nodeID string, trafficTypes []string) ([]BandwidthBucket, error)
 
 	// Traffic stats operations
 	UpsertTrafficStats(ctx context.Context, tailnetID string, stats []TrafficStats) error
@@ -251,6 +256,10 @@ type Store interface {
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
+	// CountDistinctPairs counts src/dst pairs across the whole window.
+	// Complete hours come from the hourly rollup. An empty trafficTypes
+	// list counts every stored traffic type.
+	CountDistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error)
 
 	// Atomic poll commit
 	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error

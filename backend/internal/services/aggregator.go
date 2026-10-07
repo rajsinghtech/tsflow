@@ -161,7 +161,9 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		} else {
 			ppData.txProtocols[log.Protocol] += log.TxBytes
 		}
-		if log.DstPort > 0 {
+		// Physical flows are the WireGuard transport for virtual, subnet, and
+		// exit traffic. Their "port" is a DERP region, not a service port.
+		if log.TrafficType != "physical" && log.DstPort > 0 {
 			portKey := protoPortKey{proto: log.Protocol, port: log.DstPort}
 			ppData.ports[portKey] += log.TxBytes
 			if isReverse {
@@ -180,13 +182,19 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 			}
 			trafficStatsMap[bucket] = tsAccum
 		}
-		switch log.Protocol {
-		case 6:
-			tsAccum.tcpBytes += log.TxBytes
-		case 17:
-			tsAccum.udpBytes += log.TxBytes
-		default:
-			tsAccum.otherProtoBytes += log.TxBytes
+		// Protocol totals and the network/node bandwidth series describe the
+		// traffic users sent. Physical bytes are the transport underneath that
+		// traffic, so they stay on physicalBytes and on the physical node-pair
+		// row. Callers that ask for physical add those rows back at read time.
+		if log.TrafficType != "physical" {
+			switch log.Protocol {
+			case 6:
+				tsAccum.tcpBytes += log.TxBytes
+			case 17:
+				tsAccum.udpBytes += log.TxBytes
+			default:
+				tsAccum.otherProtoBytes += log.TxBytes
+			}
 		}
 		switch log.TrafficType {
 		case "virtual":
@@ -200,50 +208,52 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		}
 		tsAccum.totalFlows++
 		tsAccum.uniquePairs[trafficPairKey{srcNodeID: nodeA, dstNodeID: nodeB}] = struct{}{}
-		if log.DstPort > 0 {
+		if log.TrafficType != "physical" && log.DstPort > 0 {
 			tsAccum.ports[protoPortKey{proto: log.Protocol, port: log.DstPort}] += log.TxBytes
 		}
 
-		// Total bandwidth: TX-only (avoids double counting)
-		// Each byte is transmitted once, so sum of all TX = total traffic
-		if bw, ok := bandwidthMap[bucket]; ok {
-			bw.TxBytes += log.TxBytes
-		} else {
-			bandwidthMap[bucket] = &database.BandwidthBucket{
-				Time:    time.Unix(bucket, 0).UTC(),
-				TxBytes: log.TxBytes,
-				RxBytes: 0, // Not used - would duplicate TX
-			}
-		}
-
-		// Per-node bandwidth: TX-only approach
-		// srcNode's TX = what it sent
-		// dstNode's RX = what it received = srcNode's TX
-		srcBwKey := nodeBwKey{bucket: bucket, nodeID: srcNodeID}
-		if bw, ok := nodeBwMap[srcBwKey]; ok {
-			bw.TxBytes += log.TxBytes
-		} else {
-			nodeBwMap[srcBwKey] = &database.NodeBandwidth{
-				Bucket:  bucket,
-				NodeID:  srcNodeID,
-				TxBytes: log.TxBytes,
-				RxBytes: 0,
-			}
-		}
-
-		// A self-flow has one endpoint, so attributing it as both TX and RX would
-		// count the same transmitted bytes twice in per-node totals.
-		if srcNodeID != dstNodeID {
-			// dstNode receives what srcNode transmitted
-			dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
-			if bw, ok := nodeBwMap[dstBwKey]; ok {
-				bw.RxBytes += log.TxBytes // dst receives what src sent
+		if log.TrafficType != "physical" {
+			// Total bandwidth: TX-only (avoids double counting).
+			// Physical transport is omitted; it carries the bytes already counted here.
+			if bw, ok := bandwidthMap[bucket]; ok {
+				bw.TxBytes += log.TxBytes
 			} else {
-				nodeBwMap[dstBwKey] = &database.NodeBandwidth{
+				bandwidthMap[bucket] = &database.BandwidthBucket{
+					Time:    time.Unix(bucket, 0).UTC(),
+					TxBytes: log.TxBytes,
+					RxBytes: 0, // Not used - would duplicate TX
+				}
+			}
+
+			// Per-node bandwidth: TX-only approach
+			// srcNode's TX = what it sent
+			// dstNode's RX = what it received = srcNode's TX
+			srcBwKey := nodeBwKey{bucket: bucket, nodeID: srcNodeID}
+			if bw, ok := nodeBwMap[srcBwKey]; ok {
+				bw.TxBytes += log.TxBytes
+			} else {
+				nodeBwMap[srcBwKey] = &database.NodeBandwidth{
 					Bucket:  bucket,
-					NodeID:  dstNodeID,
-					TxBytes: 0,
-					RxBytes: log.TxBytes, // dst receives what src sent
+					NodeID:  srcNodeID,
+					TxBytes: log.TxBytes,
+					RxBytes: 0,
+				}
+			}
+
+			// A self-flow has one endpoint, so attributing it as both TX and RX would
+			// count the same transmitted bytes twice in per-node totals.
+			if srcNodeID != dstNodeID {
+				// dstNode receives what srcNode transmitted
+				dstBwKey := nodeBwKey{bucket: bucket, nodeID: dstNodeID}
+				if bw, ok := nodeBwMap[dstBwKey]; ok {
+					bw.RxBytes += log.TxBytes // dst receives what src sent
+				} else {
+					nodeBwMap[dstBwKey] = &database.NodeBandwidth{
+						Bucket:  bucket,
+						NodeID:  dstNodeID,
+						TxBytes: 0,
+						RxBytes: log.TxBytes, // dst receives what src sent
+					}
 				}
 			}
 		}
