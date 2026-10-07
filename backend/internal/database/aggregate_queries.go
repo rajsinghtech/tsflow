@@ -1090,6 +1090,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
 			WHERE np.tailnet_id = ? AND %s%s
+			  AND j.key IS NOT NULL -- a bare number has no protocol
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
 			       CAST(j.value AS INTEGER) AS proto,
@@ -1327,6 +1328,7 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 			FROM (%s) AS np, json_each(
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
+			WHERE j.key IS NOT NULL -- a bare number has no protocol
 			%s
 		)
 		SELECT b, proto, SUM(bytes)
