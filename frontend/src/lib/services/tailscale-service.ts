@@ -281,6 +281,51 @@ export const tailscaleService = {
 		return api.get(`/analytics/pairs?${params.toString()}`, { signal: options?.signal });
 	},
 
+	async getNewPairs(
+		start: Date,
+		end: Date,
+		options?: {
+			lookback?: string;
+			limit?: number;
+			offset?: number;
+			trafficTypes?: string[];
+			signal?: AbortSignal;
+		}
+	): Promise<{
+		pairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			dstNodeId: string;
+			dstHostname: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+			firstSeen: string;
+		}>;
+		metadata: {
+			start: string;
+			end: string;
+			lookback: string;
+			limit: number;
+			offset: number;
+			count: number;
+			hasMore: boolean;
+		};
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 20),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.lookback) params.set('lookback', options.lookback);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
+		}
+		return api.get(`/analytics/new-pairs?${params.toString()}`, { signal: options?.signal });
+	},
+
 	async getDeviceTimeline(
 		nodeId: string,
 		start: Date,
