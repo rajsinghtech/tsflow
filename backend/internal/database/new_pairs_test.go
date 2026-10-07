@@ -106,3 +106,20 @@ func TestNewPairsLookbackAndRollup(t *testing.T) {
 		t.Fatalf("empty window = %#v more=%v", none, more)
 	}
 }
+
+func TestNewPairsLeaveOutSelfPairs(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	const base int64 = 1_699_999_200
+	insertRankPair(t, store, DefaultTailnetID, base+60, "a", "a", "virtual", 500, 0, 1)
+	insertRankPair(t, store, DefaultTailnetID, base+120, "a", "b", "virtual", 10, 0, 1)
+	insertRankPair(t, store, DefaultTailnetID, base+180, "b", "b", "subnet", 0, 0, 1)
+
+	pairs, more, err := store.ListNewPairs(ctx, DefaultTailnetID, time.Unix(base, 0).UTC(), time.Unix(base+3600, 0).UTC(), NewPairQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more || len(pairs) != 1 || pairs[0].SrcNodeID != "a" || pairs[0].DstNodeID != "b" {
+		t.Fatalf("new pairs = %#v more=%v, want only a->b", pairs, more)
+	}
+}
