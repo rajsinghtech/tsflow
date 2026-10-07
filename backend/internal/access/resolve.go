@@ -384,30 +384,31 @@ func remoteAddr(r *http.Request) (netip.Addr, bool) {
 }
 
 // forwardedPeer returns the client address appended by the nearest proxy.
+// Only that last entry is trusted. Every earlier entry, and every earlier
+// header line, can be supplied by the client. Proxies that append their own
+// X-Forwarded-For line instead of joining onto the client's are covered by
+// reading all lines. An unparsable last entry fails closed: skipping it
+// would fall back to a client-supplied address.
 func forwardedPeer(r *http.Request) (string, error) {
-	for _, part := range reverseSplit(r.Header.Get(headerForwarded)) {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if host, _, err := net.SplitHostPort(part); err == nil {
-			part = host
-		}
-		addr, err := netip.ParseAddr(part)
-		if err != nil {
-			continue
-		}
-		return addr.String(), nil
+	values := r.Header.Values(headerForwarded)
+	if len(values) == 0 {
+		return "", fmt.Errorf("missing %s peer", headerForwarded)
 	}
-	return "", fmt.Errorf("missing %s peer", headerForwarded)
-}
-
-func reverseSplit(value string) []string {
-	parts := strings.Split(value, ",")
-	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
-		parts[i], parts[j] = parts[j], parts[i]
+	joined := strings.Join(values, ",")
+	last := strings.TrimSpace(joined[strings.LastIndexByte(joined, ',')+1:])
+	if last == "" {
+		return "", fmt.Errorf("empty %s peer", headerForwarded)
 	}
-	return parts
+	if host, _, err := net.SplitHostPort(last); err == nil {
+		last = host
+	} else if strings.HasPrefix(last, "[") && strings.HasSuffix(last, "]") {
+		last = last[1 : len(last)-1]
+	}
+	addr, err := netip.ParseAddr(last)
+	if err != nil {
+		return "", fmt.Errorf("invalid %s peer: %w", headerForwarded, err)
+	}
+	return addr.String(), nil
 }
 
 func publicError(err error) string {
