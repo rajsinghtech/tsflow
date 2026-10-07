@@ -28,4 +28,6 @@ Opening a group is one more ELK run over the whole grouped graph, with that grou
 
 Svelte Flow still draws the cards and the bezier edges, same as a small graph. A group card uses the same frame as a device card. Only cards whose laid-out box meets the viewport are mounted. That cull does not assign positions.
 
-Graphs at or below `FULL_GRAPH_NODE_THRESHOLD` (1,200) never enter this path.
+A full graph at or below 300 nodes and 1,500 edges still uses network simplex and spline routing, so those coordinates stay put. Above either limit the layout is the same layered, top-to-bottom pass with the same spacing and crossing sweep, but ELK places nodes with Brandes-Köpf and routes with polylines. Network simplex on a hubby 1,000-node graph was about 11 seconds; the spline routes were never drawn, because Svelte Flow paints its own curves. A refresh that only adds or removes a few nodes keeps the coordinates it already has and sets the newcomers beside a neighbor.
+
+Graphs at or below `FULL_GRAPH_NODE_THRESHOLD` (1,200) never enter the grouped path. The faster placement is what keeps that full layout under a couple of seconds, which is why the cutoff stays here.

@@ -6,6 +6,17 @@ export interface ElkLayoutOptions {
 	algorithm?: 'layered' | 'stress' | 'mrtree' | 'radial' | 'force';
 }
 
+// Network-simplex placement stays under about two seconds through this size.
+// Past it, or once the edge count makes that placer expensive, the layout stays
+// layered but uses the faster Brandes-Köpf placement. Spline routes are not
+// drawn (the canvas paints its own curves), so large graphs skip them too.
+export const QUALITY_LAYOUT_MAX_NODES = 300;
+export const QUALITY_LAYOUT_MAX_EDGES = 1500;
+
+export function usesQualityLayout(nodeCount: number, edgeCount: number): boolean {
+	return nodeCount <= QUALITY_LAYOUT_MAX_NODES && edgeCount <= QUALITY_LAYOUT_MAX_EDGES;
+}
+
 const DEFAULT_NODE_WIDTH = 200;
 const DEFAULT_NODE_HEIGHT = 80;
 
@@ -44,21 +55,25 @@ export function calculateNodeDimensions(node: Node): { width: number; height: nu
 	};
 }
 
-export function layeredLayoutOptions(options: ElkLayoutOptions = {}): LayoutOptions {
+export function layeredLayoutOptions(
+	options: ElkLayoutOptions = {},
+	size?: { nodes: number; edges: number }
+): LayoutOptions {
+	const quality = size == null || usesQualityLayout(size.nodes, size.edges);
 	const layoutOptions: LayoutOptions = {
 		'elk.algorithm': options.algorithm || 'layered',
 		'elk.spacing.nodeNode': (options.nodeSpacing || 150).toString(),
 		'elk.spacing.componentComponent': '200',
 		'elk.separateConnectedComponents': 'true',
 		'elk.padding': '[top=50,left=50,bottom=50,right=50]',
-		'elk.edgeRouting': 'SPLINES'
+		'elk.edgeRouting': quality ? 'SPLINES' : 'POLYLINE'
 	};
 
 	if (options.algorithm === 'layered' || !options.algorithm) {
 		layoutOptions['elk.direction'] = 'DOWN';
 		layoutOptions['elk.layered.spacing.nodeNodeBetweenLayers'] = '200';
 		layoutOptions['elk.layered.crossingMinimization.strategy'] = 'LAYER_SWEEP';
-		layoutOptions['elk.layered.nodePlacement.strategy'] = 'NETWORK_SIMPLEX';
+		layoutOptions['elk.layered.nodePlacement.strategy'] = quality ? 'NETWORK_SIMPLEX' : 'BRANDES_KOEPF';
 	}
 
 	return layoutOptions;
@@ -69,7 +84,7 @@ export function buildElkLayoutInput(
 	edges: Edge[],
 	options: ElkLayoutOptions = {}
 ): ElkNode {
-	const layoutOptions = layeredLayoutOptions(options);
+	const layoutOptions = layeredLayoutOptions(options, { nodes: nodes.length, edges: edges.length });
 
 	return {
 		id: 'root',

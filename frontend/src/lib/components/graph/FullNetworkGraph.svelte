@@ -14,7 +14,8 @@
 	import '@xyflow/svelte/dist/style.css';
 	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import { highlightedEdgeIds, hasSelection } from '#lib/stores/ui-store';
-	import { applyElkLayout } from '#lib/utils/elk-layout';
+	import { applyElkLayout, type LayoutMemory } from '#lib/utils/elk-layout';
+	import { refitAfterLayout } from '#lib/graph/layout-reuse';
 	import { edgeStyle as getEdgeStyle, toFlowElements } from '#lib/graph/full-graph';
 	import type { NetworkNode as NetworkNodeType, NetworkLink } from '#lib/types';
 	import NetworkNode from './NetworkNode.svelte';
@@ -84,6 +85,9 @@
 	let lastTopologyKey = '';
 	let isLayouting = $state(false);
 	let layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	let layoutRunning = false;
+	let layoutAgain = false;
+	const layoutMemory: LayoutMemory = { boxes: new Map() };
 
 	// Store references to flow functions (set by child component)
 	let fitBoundsRef: ((bounds: { x: number; y: number; width: number; height: number }, options?: { duration?: number; padding?: number }) => void) | null = null;
@@ -271,44 +275,54 @@
 		}
 	});
 
+	async function layoutOnce() {
+		const built = toFlowElements(nodes, edges);
+		const laid = await applyElkLayout(built.nodes, built.edges, { algorithm: 'layered', nodeSpacing: 150 }, layoutMemory);
+		const hadPicture = get(flowNodesStore).length > 0;
+		flowNodesStore.set(laid.nodes);
+		flowEdgesStore.set(laid.edges);
+		const matchIds = [...get(searchMatchedNodeIds)];
+		if (matchIds.length > 0) {
+			lastSearchFocus = matchIds.slice().sort().join(',');
+			setTimeout(() => focusOnSelection(matchIds), 50);
+		}
+		if (refitAfterLayout({ hadPicture, reused: laid.reused, focusing: matchIds.length > 0 })) {
+			requestAnimationFrame(() => fitViewRef?.({ duration: 300, padding: 0.1 }));
+		}
+	}
+
+	// One layout at a time. A refresh that arrives while ELK is running is
+	// folded into a single follow-up, using whatever the props are by then.
 	async function layoutNodes() {
-		if (isLayouting) return;
+		if (layoutRunning) {
+			layoutAgain = true;
+			return;
+		}
+		layoutRunning = true;
 		isLayouting = true;
-
 		try {
-			const built = toFlowElements(nodes, edges);
-
-			// Apply ELK layout
-			const { nodes: layoutedNodes, edges: layoutedEdges } = await applyElkLayout(
-				built.nodes,
-				built.edges,
-				{ algorithm: 'layered', nodeSpacing: 150 }
-			);
-
-			flowNodesStore.set(layoutedNodes);
-
-			flowEdgesStore.set(layoutedEdges);
-			const matchIds = [...get(searchMatchedNodeIds)];
-			if (matchIds.length > 0) {
-				lastSearchFocus = matchIds.slice().sort().join(',');
-				setTimeout(() => focusOnSelection(matchIds), 50);
-			}
-		} catch (error) {
-			console.error('Layout failed:', error);
-			// Fallback: just set nodes with grid positions
-			const cols = Math.ceil(Math.sqrt(nodes.length));
-			const built = toFlowElements(nodes, edges);
-			flowNodesStore.set(
-				built.nodes.map((node, index) => ({
-					...node,
-					position: {
-						x: (index % cols) * 300 + 50,
-						y: Math.floor(index / cols) * 180 + 50
-					}
-				}))
-			);
-			flowEdgesStore.set(built.edges);
+			do {
+				layoutAgain = false;
+				try {
+					await layoutOnce();
+				} catch (error) {
+					console.error('Layout failed:', error);
+					const cols = Math.ceil(Math.sqrt(nodes.length));
+					const built = toFlowElements(nodes, edges);
+					flowNodesStore.set(
+						built.nodes.map((node, index) => ({
+							...node,
+							position: {
+								x: (index % cols) * 300 + 50,
+								y: Math.floor(index / cols) * 180 + 50
+							}
+						}))
+					);
+					flowEdgesStore.set(built.edges);
+				}
+			} while (layoutAgain);
 		} finally {
+			layoutRunning = false;
 			isLayouting = false;
 		}
 	}
@@ -369,7 +383,7 @@
 </script>
 
 <div class="h-full w-full" data-graph-mode="full" data-mounted={$flowNodesStore.length} data-devices={nodes.length}>
-	{#if isLayouting}
+	{#if $flowNodesStore.length === 0 && (isLayouting || nodes.length > 0)}
 		<div class="flex h-full items-center justify-center">
 			<div class="text-muted-foreground">Calculating layout...</div>
 		</div>
