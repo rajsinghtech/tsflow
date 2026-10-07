@@ -1,6 +1,9 @@
 package services
 
 import (
+	"fmt"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,7 +202,7 @@ func TestDeviceCache_MergesFlowMetadataIntoAPIDevice(t *testing.T) {
 	}
 	byLegacy := cache.GetDevice("5973675649221043")
 	byStable := cache.GetDevice("nAliceLaptop1CNTRL")
-	if byLegacy == nil || byStable == nil || byLegacy.ID != "nAliceLaptop1CNTRL" || byLegacy != byStable {
+	if byLegacy == nil || byStable == nil || byLegacy.ID != "nAliceLaptop1CNTRL" || byStable.ID != byLegacy.ID {
 		t.Fatalf("legacy and stable ids should resolve to one entry: legacy=%v stable=%v", byLegacy, byStable)
 	}
 	ids := cache.EquivalentIDs("5973675649221043")
@@ -209,10 +212,11 @@ func TestDeviceCache_MergesFlowMetadataIntoAPIDevice(t *testing.T) {
 }
 
 func TestDeviceCache_MergesFlowMetadataByTailscaleAddress(t *testing.T) {
+	// The device list reported only the numeric id, so the stable id in the
+	// flow log can only be tied to it by the shared Tailscale address.
 	cache := NewDeviceCache()
 	cache.Update([]Device{{
-		ID:        "nAliceLaptop1CNTRL",
-		LegacyID:  "5973675649221043",
+		ID:        "5973675649221043",
 		Name:      "laptop.example.ts.net",
 		Hostname:  "laptop",
 		User:      "alice@example.com",
@@ -221,7 +225,7 @@ func TestDeviceCache_MergesFlowMetadataByTailscaleAddress(t *testing.T) {
 
 	cache.UpsertFromFlowLogMetadata(map[string]any{
 		"srcNode": map[string]any{
-			"nodeId":    "nOtherSeen11CNTRL",
+			"nodeId":    "nAliceLaptop1CNTRL",
 			"name":      "laptop.example.ts.net",
 			"addresses": []any{"100.64.0.8", "fd7a:115c:a1e0::8"},
 			"user":      "alice@example.com",
@@ -231,11 +235,124 @@ func TestDeviceCache_MergesFlowMetadataByTailscaleAddress(t *testing.T) {
 	if len(cache.Devices()) != 1 {
 		t.Fatalf("address fallback should merge, got %+v", cache.Devices())
 	}
-	if got := cache.GetDevice("nOtherSeen11CNTRL"); got == nil || got.ID != "nAliceLaptop1CNTRL" {
-		t.Fatalf("flow id should alias the API device, got %+v", got)
+	if got := cache.GetDevice("5973675649221043"); got == nil || got.ID != "nAliceLaptop1CNTRL" {
+		t.Fatalf("numeric id should alias the stable id, got %+v", got)
 	}
 	if cache.ResolveIP("fd7a:115c:a1e0::8") != "nAliceLaptop1CNTRL" {
 		t.Fatalf("merged tailscale address should resolve to the stable id")
+	}
+}
+
+func TestDeviceCache_ReusedAddressDoesNotMergeDistinctNodes(t *testing.T) {
+	// A deleted ephemeral node left metadata behind, and its address was
+	// later given to a new tagged node. They are different nodes.
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	cache := NewDeviceCache()
+	cache.Update([]Device{{
+		ID:        "nNewBuild1CNTRL",
+		NodeID:    "nNewBuild1CNTRL",
+		LegacyID:  "222",
+		Name:      "build.example.ts.net",
+		Tags:      []string{"tag:ci"},
+		Addresses: []string{"100.64.0.30"},
+	}})
+	cache.UpsertNodeMetadata([]database.NodeMetadata{
+		{NodeID: "nOldEphm1CNTRL", Name: "ci-old.example.ts.net", Owner: "bob@example.com", IPs: []string{"100.64.0.30"}, Updated: now.Add(-48 * time.Hour)},
+		{NodeID: "111", Name: "ci-old.example.ts.net", Owner: "bob@example.com", IPs: []string{"100.64.0.30"}, Updated: now.Add(-48 * time.Hour)},
+	})
+
+	live := cache.GetDevice("nNewBuild1CNTRL")
+	if live == nil || live.Owner != "" {
+		t.Fatalf("live tagged device must not inherit the old node's login: %+v", live)
+	}
+	if got := cache.ResolveIP("100.64.0.30"); got != "nNewBuild1CNTRL" {
+		t.Fatalf("reused address should resolve to the live device, got %s", got)
+	}
+	if ids := cache.EquivalentIDs("nNewBuild1CNTRL"); len(ids) != 2 || ids[1] != "222" {
+		t.Fatalf("old node ids must not alias the live device: %v", ids)
+	}
+	if pruned := cache.PruneFlowOnly(24*time.Hour, now); pruned == 0 {
+		t.Fatal("stale rows for the deleted node should be prunable")
+	}
+	if len(cache.Devices()) != 1 || cache.ResolveIP("100.64.0.30") != "nNewBuild1CNTRL" {
+		t.Fatalf("after prune: %+v", cache.Devices())
+	}
+}
+
+func TestDeviceCache_LargeTailnetMergeAndPruneAreLinear(t *testing.T) {
+	// 20k API nodes, each with a numeric flow-log row, plus 20k deleted
+	// ephemeral nodes seen first by numeric id and then by stable id.
+	// Rekeying or pruning that scans every alias or address per device
+	// takes tens of seconds here.
+	const n = 20000
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-60 * 24 * time.Hour)
+	devices := make([]Device, 0, n)
+	metadata := make([]database.NodeMetadata, 0, 3*n)
+	for i := 0; i < n; i++ {
+		ip := fmt.Sprintf("100.64.%d.%d", i/256, i%256)
+		legacy := strconv.Itoa(1000000 + i)
+		devices = append(devices, Device{ID: fmt.Sprintf("nApi%07dCNTRL", i), LegacyID: legacy, Addresses: []string{ip}})
+		metadata = append(metadata, database.NodeMetadata{NodeID: legacy, IPs: []string{ip}, Updated: now})
+	}
+	for i := 0; i < n; i++ {
+		ip := fmt.Sprintf("100.100.%d.%d", i/256, i%256)
+		metadata = append(metadata,
+			database.NodeMetadata{NodeID: strconv.Itoa(9000000 + i), IPs: []string{ip}, Updated: stale},
+			database.NodeMetadata{NodeID: fmt.Sprintf("nEph%07dCNTRL", i), IPs: []string{ip}, Updated: stale},
+		)
+	}
+
+	started := time.Now()
+	cache := NewDeviceCache()
+	cache.Update(devices)
+	cache.UpsertNodeMetadata(metadata)
+	pruned := cache.PruneFlowOnly(30*24*time.Hour, now)
+	elapsed := time.Since(started)
+
+	if pruned != n || len(cache.Devices()) != n {
+		t.Fatalf("pruned=%d remaining=%d", pruned, len(cache.Devices()))
+	}
+	if ids := cache.EquivalentIDs("1000042"); len(ids) != 2 || ids[0] != "nApi0000042CNTRL" {
+		t.Fatalf("equivalent ids = %v", ids)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("merge and prune of %d nodes took %v", 2*n, elapsed)
+	}
+}
+
+func TestDeviceCache_LookupsDoNotRaceWithMerges(t *testing.T) {
+	// Run with -race. Object-store ingest merges into cached entries while
+	// handlers read them through GetDevice and GetDeviceByIP.
+	cache := NewDeviceCache()
+	cache.Update([]Device{{ID: "nTagged1CNTRL", LegacyID: "777", Addresses: []string{"100.64.0.21"}}})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			cache.UpsertFromFlowLogMetadata(map[string]any{"srcNode": map[string]any{
+				"nodeId":    "777",
+				"user":      "bob@example.com",
+				"addresses": []any{"100.64.0.21", fmt.Sprintf("fd7a:115c:a1e0::%x", i)},
+			}})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if entry := cache.GetDeviceByIP("100.64.0.21"); entry != nil {
+				_ = entry.Owner + entry.ID
+				_ = len(entry.IPs)
+			}
+			if entry := cache.GetDevice("777"); entry != nil {
+				_ = entry.Owner
+			}
+		}
+	}()
+	wg.Wait()
+	if got := cache.GetDevice("777"); got == nil || got.Owner != "bob@example.com" {
+		t.Fatalf("merged device = %+v", got)
 	}
 }
 

@@ -46,6 +46,13 @@ type DeviceCacheEntry struct {
 	flowSeen time.Time
 	// legacyID is the other id carried by a not-yet-adopted flow node.
 	legacyID string
+	// apiLegacyID is the numeric id the device list reported for this node.
+	apiLegacyID string
+	// aliases lists the ids that point at this entry in DeviceCache.aliases.
+	// An id that was later pointed elsewhere is skipped on read. The list
+	// keeps rekeying, pruning, and EquivalentIDs proportional to one device
+	// instead of the whole tailnet.
+	aliases []string
 }
 
 // deviceIsOnline reports whether a device should be shown as online.
@@ -117,6 +124,7 @@ func (c *DeviceCache) Update(devices []Device) {
 			Authorized:         d.Authorized,
 			IsTailscale:        true,
 			fromAPI:            true,
+			apiLegacyID:        strings.TrimSpace(d.LegacyID),
 		}
 		c.idToDevice[d.ID] = entry
 		c.aliasLocked(d.LegacyID, d.ID)
@@ -278,8 +286,23 @@ func (c *DeviceCache) adoptLocked(incoming *DeviceCacheEntry) {
 	c.idToDevice[incoming.ID] = incoming
 	c.aliasLocked(legacy, incoming.ID)
 	for _, ip := range incoming.IPs {
-		c.ipToDevice[ip] = incoming
+		c.mapIPLocked(ip, incoming)
 	}
+}
+
+// mapIPLocked points ip at entry unless a device from the Tailscale device
+// list already holds it. A flow-only row for a deleted node must not take
+// over an address that was reassigned to a live device.
+func (c *DeviceCache) mapIPLocked(ip string, entry *DeviceCacheEntry) {
+	if current, ok := c.ipToDevice[ip]; ok && current != nil && current != entry {
+		if current.fromAPI && !entry.fromAPI {
+			return
+		}
+		if !current.fromAPI && !entry.fromAPI && current.flowSeen.After(entry.flowSeen) {
+			return
+		}
+	}
+	c.ipToDevice[ip] = entry
 }
 
 func (c *DeviceCache) matchLocked(incoming *DeviceCacheEntry) *DeviceCacheEntry {
@@ -295,11 +318,38 @@ func (c *DeviceCache) matchLocked(incoming *DeviceCacheEntry) *DeviceCacheEntry 
 		if !isTailscaleIP(ip) {
 			continue
 		}
-		if existing, ok := c.ipToDevice[ip]; ok && existing != nil {
+		if existing, ok := c.ipToDevice[ip]; ok && existing != nil && !identitiesConflict(existing, incoming) {
 			return existing
 		}
 	}
 	return nil
+}
+
+// identitiesConflict reports whether two entries that share a Tailscale
+// address carry ids proving they are different nodes. Addresses are reused
+// after a node is deleted, so an address match alone cannot merge two
+// different stable node ids, or a numeric id other than the one the device
+// list reported for that device.
+func identitiesConflict(existing, incoming *DeviceCacheEntry) bool {
+	existingStable := existing.NodeID
+	if existingStable == "" && isStableNodeID(existing.ID) {
+		existingStable = existing.ID
+	}
+	for _, id := range []string{incoming.ID, incoming.legacyID} {
+		if id == "" {
+			continue
+		}
+		if isStableNodeID(id) {
+			if existingStable != "" && existingStable != id {
+				return true
+			}
+			continue
+		}
+		if existing.apiLegacyID != "" && existing.apiLegacyID != id {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *DeviceCache) mergeLocked(existing, incoming *DeviceCacheEntry, legacy string) {
@@ -353,7 +403,7 @@ func (c *DeviceCache) mergeLocked(existing, incoming *DeviceCacheEntry, legacy s
 	c.aliasLocked(legacy, existing.ID)
 	c.aliasLocked(incoming.legacyID, existing.ID)
 	for _, ip := range existing.IPs {
-		c.ipToDevice[ip] = existing
+		c.mapIPLocked(ip, existing)
 	}
 }
 
@@ -380,7 +430,13 @@ func (c *DeviceCache) aliasLocked(alias, canonical string) {
 	if _, exists := c.idToDevice[alias]; exists {
 		return
 	}
+	if current, ok := c.aliases[alias]; ok && current == canonical {
+		return
+	}
 	c.aliases[alias] = canonical
+	if entry := c.idToDevice[canonical]; entry != nil {
+		entry.aliases = append(entry.aliases, alias)
+	}
 }
 
 func (c *DeviceCache) rekeyLocked(entry *DeviceCacheEntry, newID string) {
@@ -394,13 +450,17 @@ func (c *DeviceCache) rekeyLocked(entry *DeviceCacheEntry, newID string) {
 	if c.aliases == nil {
 		c.aliases = make(map[string]string)
 	}
-	c.aliases[old] = newID
-	for alias, canonical := range c.aliases {
-		if canonical == old {
-			c.aliases[alias] = newID
-		}
-	}
 	delete(c.aliases, newID)
+	kept := entry.aliases[:0]
+	for _, alias := range entry.aliases {
+		if alias == newID || c.aliases[alias] != old {
+			continue
+		}
+		c.aliases[alias] = newID
+		kept = append(kept, alias)
+	}
+	entry.aliases = kept
+	c.aliasLocked(old, newID)
 }
 
 func preferredID(current, incoming string) string {
@@ -482,13 +542,14 @@ func (c *DeviceCache) PruneFlowOnly(retention time.Duration, now time.Time) int 
 
 func (c *DeviceCache) removeLocked(id string, entry *DeviceCacheEntry) {
 	delete(c.idToDevice, id)
-	for alias, canonical := range c.aliases {
-		if alias == id || canonical == id {
+	delete(c.aliases, id)
+	for _, alias := range entry.aliases {
+		if c.aliases[alias] == id {
 			delete(c.aliases, alias)
 		}
 	}
-	for ip, mapped := range c.ipToDevice {
-		if mapped == entry {
+	for _, ip := range entry.IPs {
+		if c.ipToDevice[ip] == entry {
 			delete(c.ipToDevice, ip)
 		}
 	}
@@ -536,11 +597,17 @@ func (c *DeviceCache) EquivalentIDs(id string) []string {
 	if entry == nil {
 		return []string{id}
 	}
-	extras := make([]string, 0, 1)
-	for alias, canonical := range c.aliases {
-		if canonical == entry.ID && alias != entry.ID {
-			extras = append(extras, alias)
+	extras := make([]string, 0, len(entry.aliases))
+	seen := make(map[string]struct{}, len(entry.aliases))
+	for _, alias := range entry.aliases {
+		if alias == entry.ID || c.aliases[alias] != entry.ID {
+			continue
 		}
+		if _, dup := seen[alias]; dup {
+			continue
+		}
+		seen[alias] = struct{}{}
+		extras = append(extras, alias)
 	}
 	sort.Strings(extras)
 	return append([]string{entry.ID}, extras...)
@@ -557,18 +624,31 @@ func (c *DeviceCache) ResolveIP(ip string) string {
 	return ip
 }
 
-// GetDevice returns device info by canonical id or any alias.
+// GetDevice returns a copy of the device info for a canonical id or any alias.
+// Merges update cached entries in place, so callers get a snapshot taken
+// under the lock rather than a pointer into the cache.
 func (c *DeviceCache) GetDevice(id string) *DeviceCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.deviceLocked(id)
+	return snapshotEntry(c.deviceLocked(id))
 }
 
-// GetDeviceByIP returns device info by IP address
+// GetDeviceByIP returns a copy of the device info for an IP address.
 func (c *DeviceCache) GetDeviceByIP(ip string) *DeviceCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.ipToDevice[ip]
+	return snapshotEntry(c.ipToDevice[ip])
+}
+
+func snapshotEntry(entry *DeviceCacheEntry) *DeviceCacheEntry {
+	if entry == nil {
+		return nil
+	}
+	snapshot := *entry
+	snapshot.IPs = append([]string(nil), entry.IPs...)
+	snapshot.Tags = append([]string(nil), entry.Tags...)
+	snapshot.aliases = nil
+	return &snapshot
 }
 
 // NeedsRefresh returns true if cache is stale
