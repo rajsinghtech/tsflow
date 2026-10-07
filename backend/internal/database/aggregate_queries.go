@@ -1405,6 +1405,49 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 	return results, nil
 }
 
+// CountActiveNodes counts distinct nodes that sent or received traffic in the
+// window. Self-pairs count once. This is the population the top-talkers
+// ranking is drawn from, before its limit.
+func (s *SQLiteStore) CountActiveNodes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error) {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return 0, err
+	}
+	startUnix := start.UTC().Unix()
+	endUnix := end.UTC().Unix()
+	if startUnix >= endUnix {
+		return 0, fmt.Errorf("invalid time range: start (%v) must be before end (%v)", start, end)
+	}
+
+	plan, err := s.hourPlan(ctx, s.db, tailnetID, startUnix, endUnix, 0)
+	if err != nil {
+		return 0, err
+	}
+	clause, typeArgs := trafficTypeWhereClause(trafficTypes)
+	source, args := plan.unionPairRows(tailnetID,
+		"src_node_id, dst_node_id",
+		"src_node_id, dst_node_id",
+		clause, typeArgs,
+	)
+	if source == "" {
+		return 0, nil
+	}
+
+	query := fmt.Sprintf(`
+		WITH pair_rows AS (%s)
+		SELECT COUNT(*) FROM (
+			SELECT src_node_id AS node_id FROM pair_rows
+			UNION
+			SELECT dst_node_id AS node_id FROM pair_rows
+			WHERE src_node_id != dst_node_id
+		)
+	`, source)
+	var count int64
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to count active nodes: %w", err)
+	}
+	return count, nil
+}
+
 // GetTopTalkers returns nodes ranked by total traffic volume.
 func (s *SQLiteStore) GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error) {
 	if err := checkTailnetID(tailnetID); err != nil {

@@ -110,6 +110,20 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 		}
 	}
 
+	countCtx, countCancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
+	defer countCancel()
+	totalNodes, err := h.store.CountActiveNodes(countCtx, tn.id, startTime, endTime, trafficTypes)
+	if err != nil {
+		if writeContextError(c, err) {
+			return
+		}
+		log.Printf("ERROR GetStatsOverview active nodes: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to count active nodes",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"summary": gin.H{
 			"tcpBytes":        tcpBytes,
@@ -121,6 +135,7 @@ func (h *Handlers) GetStatsOverview(c *gin.Context) {
 			"physicalBytes":   physicalBytes,
 			"totalFlows":      totalFlows,
 			"uniquePairs":     maxUniquePairs,
+			"totalNodes":      totalNodes,
 		},
 		"buckets": buckets,
 		"metadata": gin.H{

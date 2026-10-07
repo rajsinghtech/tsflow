@@ -135,6 +135,9 @@ func TestStatsOverviewMatchesLegacyMerge(t *testing.T) {
 			if body.Metadata.Source != legacy.Metadata.Source {
 				t.Fatalf("source = %q, legacy %q", body.Metadata.Source, legacy.Metadata.Source)
 			}
+			// totalNodes is a separate population count, not part of the
+			// traffic_stats merge this comparison locks.
+			legacy.Summary.TotalNodes = body.Summary.TotalNodes
 			if body.Summary != legacy.Summary {
 				t.Fatalf("summary\ngot  %+v\nwant %+v", body.Summary, legacy.Summary)
 			}
@@ -195,6 +198,7 @@ type overviewBody struct {
 		PhysicalBytes   int64 `json:"physicalBytes"`
 		TotalFlows      int64 `json:"totalFlows"`
 		UniquePairs     int64 `json:"uniquePairs"`
+		TotalNodes      int64 `json:"totalNodes"`
 	} `json:"summary"`
 	Buckets  []database.TrafficStats `json:"buckets"`
 	Metadata struct {
@@ -345,5 +349,36 @@ func seedHandlerOverview(t *testing.T, store *database.SQLiteStore, base, hourBa
 		{Bucket: hourBase, TCPBytes: 700000, VirtualBytes: 700000, TotalFlows: 1, UniquePairs: 1, TopPorts: "[]"},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStatsOverviewReportsDistinctActiveNodes(t *testing.T) {
+	store := setupHandlerTestDB(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, []database.NodePairAggregate{
+		{Bucket: base.Unix(), SrcNodeID: "a", DstNodeID: "b", TrafficType: "virtual", TxBytes: 100, RxBytes: 40, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":140}`, Ports: "[]"},
+		{Bucket: base.Unix(), SrcNodeID: "b", DstNodeID: "c", TrafficType: "virtual", TxBytes: 10, RxBytes: 1, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":11}`, Ports: "[]"},
+		{Bucket: base.Unix(), SrcNodeID: "self", DstNodeID: "self", TrafficType: "subnet", TxBytes: 5, RxBytes: 2, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":7}`, Ports: "[]"},
+		{Bucket: base.Unix(), SrcNodeID: "exit-src", DstNodeID: "exit-dst", TrafficType: "exit", TxBytes: 9, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":9}`, Ports: "[]"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodePairAggregates(ctx, "other", []database.NodePairAggregate{{
+		Bucket: base.Unix(), SrcNodeID: "foreign", DstNodeID: "foreign-2", TrafficType: "virtual",
+		TxBytes: 500, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":500}`, Ports: "[]",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := readOverview(t, store, base, base.Add(time.Minute), "")
+	// a, b, c, self, exit-src, exit-dst. b is shared by two pairs and self counts once.
+	if body.Summary.TotalNodes != 6 {
+		t.Fatalf("totalNodes = %d, want 6", body.Summary.TotalNodes)
+	}
+
+	filtered := readOverview(t, store, base, base.Add(time.Minute), "virtual")
+	if filtered.Summary.TotalNodes != 3 {
+		t.Fatalf("virtual totalNodes = %d, want 3", filtered.Summary.TotalNodes)
 	}
 }

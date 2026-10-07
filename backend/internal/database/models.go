@@ -243,6 +243,9 @@ type Store interface {
 	FillMissingTrafficStats(ctx context.Context, tailnetID string, start, end time.Time, primary []TrafficStats) ([]TrafficStats, error)
 	GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error)
 	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
+	// CountActiveNodes counts distinct nodes with traffic in the window.
+	// A self-pair counts once. Ranking limits do not apply.
+	CountActiveNodes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) (int64, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
 	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
 	// ListRankedTalkers and ListRankedPairs page device and pair totals.

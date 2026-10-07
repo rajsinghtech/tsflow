@@ -163,6 +163,8 @@ export interface TrafficStatsSummary {
 	physicalBytes: number;
 	totalFlows: number;
 	uniquePairs: number;
+	// Distinct nodes with traffic in the window. Absent on older responses.
+	totalNodes?: number;
 }
 
 export interface TopTalker {

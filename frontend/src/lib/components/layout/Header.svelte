@@ -5,9 +5,9 @@
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
-	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, topTalkers, viewerStore } from '#lib/stores';
+	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
-	import { formatBytes, formatDuration } from '#lib/utils';
+	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
 
 	// Tick every 10s to keep the relative time fresh
@@ -84,13 +84,19 @@
 		isRefreshing = false;
 	}
 
-	// Smart stats: use network store data when available, fall back to stats store
+	// Traffic view uses the graph, which includes every node in that window.
+	// Analytics uses the overview active-node count once stats are loaded.
+	// The top-talkers list is capped and is not a device count.
 	const hasNetworkData = $derived($networkStats.totalNodes > 0);
+	const analyticsStatsReady = $derived(currentPath === '/analytics' && $statsSummary !== null);
+	const useNetworkStats = $derived(!analyticsStatsReady && hasNetworkData);
 
-	const displayNodes = $derived(hasNetworkData ? $networkStats.totalNodes : $topTalkers.length);
-	const displayFlows = $derived(hasNetworkData ? $networkStats.totalConnections : ($statsSummary?.totalFlows ?? 0));
+	const displayNodes = $derived(
+		headerNodeCount($networkStats.totalNodes, $statsSummary?.totalNodes, $statsSummary !== null, useNetworkStats)
+	);
+	const displayFlows = $derived(useNetworkStats ? $networkStats.totalConnections : ($statsSummary?.totalFlows ?? 0));
 	const displayBytes = $derived.by(() => {
-		if (hasNetworkData) return $networkStats.totalBytes;
+		if (useNetworkStats) return $networkStats.totalBytes;
 		if (!$statsSummary) return 0;
 		const protoTotal = $statsSummary.tcpBytes + $statsSummary.udpBytes + $statsSummary.otherProtoBytes;
 		return protoTotal > 0
@@ -98,10 +104,7 @@
 			: $statsSummary.virtualBytes + $statsSummary.exitBytes + $statsSummary.subnetBytes + $statsSummary.physicalBytes;
 	});
 
-	const avgTrafficPerNode = $derived.by(() => {
-		if (displayNodes === 0) return 0;
-		return displayBytes / displayNodes;
-	});
+	const avgTrafficPerNode = $derived(averageBytesPerNode(displayBytes, displayNodes));
 
 	const peakNode = $derived.by(() => {
 		if ($filteredNodes.length === 0) return null;
@@ -237,7 +240,7 @@
 		<div class="flex items-center gap-2">
 			<Link class="h-4 w-4 text-muted-foreground" />
 			<div class="text-sm">
-				<span class="font-semibold">{hasNetworkData ? displayFlows : displayFlows.toLocaleString()}</span>
+				<span class="font-semibold">{useNetworkStats ? displayFlows : displayFlows.toLocaleString()}</span>
 				<span class="text-muted-foreground"> flows</span>
 			</div>
 		</div>
