@@ -26,6 +26,14 @@ export function bootstrapRangeFromLocation() {
 	applied = rangeSignature(window.location.search);
 }
 
+// Reads the address bar, not page.url: SvelteKit keeps page.url at the last
+// real navigation for the shallow entries pushed here, so after Back it would
+// look like the range is missing and the newer window would be written back.
+export function syncRangeFromLocation() {
+	if (typeof window === 'undefined') return;
+	syncRangeFromUrl(window.location.search);
+}
+
 export function syncRangeFromUrl(search: string) {
 	const signature = rangeSignature(search);
 	if (signature === applied) return;

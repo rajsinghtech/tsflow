@@ -1,5 +1,7 @@
 import { ALL_LIVE_MS, MIN_WINDOW_MS, formatWindow } from './time-window';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export type TimeZoneMode = 'local' | 'utc';
 
 export type RangeIntent =
@@ -96,11 +98,18 @@ export function parseRangeInput(raw: string, now: Date, zone: TimeZoneMode = 'lo
 		const start = parseInstant(pair[0], now, zone, true);
 		const end = parseInstant(pair[1], now, zone, true);
 		if (!start || !end) return { ok: false, message: "Couldn't read that range." };
+		const clocks = isClock(pair[0]) && isClock(pair[1]);
+		let startMs = start.getTime();
 		let endMs = end.getTime();
-		if (endMs <= start.getTime() && isClock(pair[0]) && isClock(pair[1])) endMs += 24 * 60 * 60 * 1000;
-		if (endMs <= start.getTime()) return { ok: false, message: 'End must be after start.' };
-		if (endMs - start.getTime() < MIN_WINDOW_MS) return { ok: false, message: 'Use at least 5 minutes.' };
-		return { ok: true, intent: { kind: 'absolute', start, end: new Date(endMs) } };
+		if (endMs <= startMs && clocks) endMs += DAY_MS;
+		if (endMs <= startMs) return { ok: false, message: 'End must be after start.' };
+		if (endMs - startMs < MIN_WINDOW_MS) return { ok: false, message: 'Use at least 5 minutes.' };
+		// Like "since 9am", a clock range that has not started yet means yesterday.
+		if (clocks && startMs > now.getTime()) {
+			startMs -= DAY_MS;
+			endMs -= DAY_MS;
+		}
+		return { ok: true, intent: { kind: 'absolute', start: new Date(startMs), end: new Date(endMs) } };
 	}
 
 	const single = parseInstant(text, now, zone, false);

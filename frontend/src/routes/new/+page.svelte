@@ -38,6 +38,7 @@
 	let error = $state<string | null>(null);
 	let loadToken = 0;
 	let lastWindowKey = '';
+	let lastLoadKey = '';
 
 	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
 	const coverageNotice = $derived(lookbackNotice(coverage, seenDate));
@@ -108,8 +109,18 @@
 		}
 	}
 
+	// Wait for the stored range: until then a live window is measured from the
+	// wall clock rather than the latest stored data.
+	let rangeReady = $state(false);
+
 	onMount(() => {
-		void dataSourceStore.fetchDataRange();
+		let cancelled = false;
+		void dataSourceStore.fetchDataRange().finally(() => {
+			if (!cancelled) rangeReady = true;
+		});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	$effect(() => {
@@ -117,7 +128,8 @@
 		const types = $filterStore.trafficTypes;
 		const pageOffset = offset;
 		const selectedLookback = lookback;
-		void $pageRefresh;
+		const refreshCount = $pageRefresh;
+		if (!rangeReady) return;
 		if (!range?.start || !range?.end || range.end <= range.start) return;
 		// A new window starts again from the first page.
 		const windowKey = `${range.start.getTime()}-${range.end.getTime()}`;
@@ -127,6 +139,11 @@
 			offset = 0;
 			return;
 		}
+		// The range poll replaces the window with equal dates while live; only a
+		// real change or an explicit refresh reloads.
+		const loadKey = [windowKey, types.join(','), pageOffset, selectedLookback, refreshCount].join('|');
+		if (loadKey === lastLoadKey) return;
+		lastLoadKey = loadKey;
 		void load(range.start, range.end, types, pageOffset, selectedLookback);
 	});
 </script>

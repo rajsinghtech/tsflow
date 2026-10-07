@@ -30,14 +30,23 @@
 	const overviewBins = $derived(binTraffic(points, coverage.start, coverage.end, 120));
 	const ready = $derived(coverage.end > coverage.start && !!source.selectedStart && !!source.selectedEnd);
 
+	// Keyed on the coverage values, not the store object: the store is replaced
+	// on every range poll and window change, and the overview only depends on
+	// the coverage.
+	const coverageKey = $derived(
+		source.dataRange?.earliest && source.dataRange.latest
+			? `${source.dataRange.earliest}|${source.dataRange.latest}`
+			: ''
+	);
+
 	$effect(() => {
-		const range = source.dataRange;
-		if (!range?.earliest || !range.latest) {
+		if (!coverageKey) {
 			points = [];
 			return;
 		}
-		const start = new Date(range.earliest).getTime();
-		const end = new Date(range.latest).getTime();
+		const [earliest, latest] = coverageKey.split('|');
+		const start = new Date(earliest).getTime();
+		const end = new Date(latest).getTime();
 		if (!(end > start)) return;
 		const controller = new AbortController();
 		sparkNote = '';

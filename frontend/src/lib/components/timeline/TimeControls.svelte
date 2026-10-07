@@ -12,7 +12,7 @@
 		pinCurrentRange,
 		resumeSlidingLive,
 		shiftWindow,
-		syncRangeFromUrl,
+		syncRangeFromLocation,
 		zoomWindow
 	} from '#lib/stores/time-range-history';
 	import { nextPollAt, pollerIsBehind, refreshIntervalMs } from '#lib/utils/poll-interval';
@@ -95,8 +95,11 @@
 		return () => clearInterval(timer);
 	});
 
+	// Real navigations change page.url; Back and Forward between range entries
+	// arrive as popstate.
 	$effect(() => {
-		syncRangeFromUrl(page.url.search);
+		void page.url;
+		syncRangeFromLocation();
 	});
 
 	function toggleZone(next: TimeZoneMode) {
@@ -184,7 +187,7 @@
 	}
 </script>
 
-<svelte:window onkeydown={onKey} onclick={onWindowClick} />
+<svelte:window onkeydown={onKey} onclick={onWindowClick} onpopstate={syncRangeFromLocation} />
 
 <div class="border-t border-border">
 	<div class="flex items-center gap-1 px-2 py-1">

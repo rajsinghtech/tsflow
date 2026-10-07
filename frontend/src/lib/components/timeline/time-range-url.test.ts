@@ -126,6 +126,14 @@ describe('range parser', () => {
 		expect(parsed.intent.end.toISOString()).toBe('2026-10-07T15:30:00.000Z');
 	});
 
+	it('rolls a clock range that has not started yet back a day', () => {
+		const earlyMorning = new Date('2026-10-07T02:00:00.000Z');
+		const parsed = parseRangeInput('14:00-15:30', earlyMorning, 'utc');
+		if (!parsed.ok || parsed.intent.kind !== 'absolute') throw new Error('expected absolute');
+		expect(parsed.intent.start.toISOString()).toBe('2026-10-06T14:00:00.000Z');
+		expect(parsed.intent.end.toISOString()).toBe('2026-10-06T15:30:00.000Z');
+	});
+
 	it('parses ISO and unix instants', () => {
 		const iso = parseRangeInput('2026-10-06T18:00:00.000Z to 2026-10-06T20:00:00.000Z', now, 'utc');
 		if (!iso.ok || iso.intent.kind !== 'absolute') throw new Error('expected absolute');
