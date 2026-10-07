@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink } from 'lucide-svelte';
+	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink, Waypoints } from 'lucide-svelte';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
@@ -73,6 +73,7 @@
 	const primaryNav = [
 		{ href: '/', label: 'Traffic', icon: Network },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
+		{ href: '/new', label: 'New', icon: Waypoints },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
 

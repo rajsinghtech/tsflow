@@ -368,6 +368,12 @@ A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, 
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
 
+### New connections
+
+`GET /api/analytics/new-pairs` lists directed pairs that appear in the selected window and do not appear in the lookback immediately before it. `lookback` defaults to `7d`. It also accepts `24h`, `30d`, or any duration from `1h` through `90d`. `limit`, `offset`, `start`, `end`, `tailnet`, and `trafficTypes` match the ranked pair route. Rows are ordered by first seen, newest first, then by volume. There is no alert. The page is `/new`.
+
+Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
+
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`

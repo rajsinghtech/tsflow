@@ -261,6 +261,10 @@ type Store interface {
 	// another row exists after this page.
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
+	// ListNewPairs lists src/dst pairs first seen in the window. Complete
+	// hours come from the hourly rollup. The bool is true when another row
+	// exists after this page. An empty traffic type list leaves out physical.
+	ListNewPairs(ctx context.Context, tailnetID string, start, end time.Time, query NewPairQuery) ([]NewPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
 	// DistinctPairs lists the distinct stored src/dst pairs across the whole
 	// window. Complete hours come from the hourly rollup. An empty
