@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { averageBytesPerNode, headerNodeCount, resolveActiveNodeCount } from './active-nodes';
+import { averageBytesPerNode, headerNodeCount, headerStat, HEADER_STAT_PLACEHOLDER, resolveActiveNodeCount } from './active-nodes';
 
 describe('active node count', () => {
 	it('uses the window total instead of a capped top-talkers list', () => {
@@ -32,5 +32,14 @@ describe('active node count', () => {
 	it('returns zero average when there is no traffic or no nodes', () => {
 		expect(averageBytesPerNode(0, 343)).toBe(0);
 		expect(averageBytesPerNode(100, 0)).toBe(0);
+	});
+});
+
+describe('header stats before data loads', () => {
+	it('shows a placeholder instead of zero until a source has loaded', () => {
+		expect(headerStat(false, 0)).toBe(HEADER_STAT_PLACEHOLDER);
+		expect(headerStat(false, 0, (v) => `${v} B`)).toBe(HEADER_STAT_PLACEHOLDER);
+		expect(headerStat(true, 0)).toBe('0');
+		expect(headerStat(true, 1536, (v) => `${v / 1024} KB`)).toBe('1.5 KB');
 	});
 });
