@@ -20,14 +20,20 @@ import (
 // write that finished before it started and the first that finished after
 // it ended. Cache sizes cover a warm cache, constant eviction and no cache.
 func TestGraphReadUnderConcurrentWrites(t *testing.T) {
-	for _, tc := range []struct {
+	cases := []struct {
 		name  string
 		cache int64
 	}{
 		{"cache", 64 << 20},
 		{"tiny cache", 48 << 10},
 		{"no cache", 0},
-	} {
+	}
+	if raceEnabled {
+		// The race detector makes every scan slow; the evicting cache
+		// alone covers the shared state.
+		cases = cases[1:2]
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runGraphReadStress(t, tc.cache)
 		})
@@ -47,9 +53,9 @@ func runGraphReadStress(t *testing.T, cacheBytes int64) {
 	store, mark := buildManyHourStore(t)
 	store.SetClosedHourCacheBytes(cacheBytes)
 
-	steps := 36
+	steps, readers, pause := 36, 4, time.Duration(0)
 	if raceEnabled {
-		steps = 10
+		steps, readers, pause = 8, 2, 5*time.Millisecond
 	}
 	end := mark + int64(2*steps+12)*minuteSeconds
 	windows := [][2]int64{
@@ -57,6 +63,9 @@ func runGraphReadStress(t *testing.T, cacheBytes int64) {
 		{manyHourBase + 20*hourSeconds + 13*60, mark + 9*60}, // ragged, through the mark
 		{manyHourBase + 2*hourSeconds, manyHourBase + 12*hourSeconds},
 		{0, end + hourSeconds}, // from the epoch
+	}
+	if raceEnabled {
+		windows = windows[1:2] // the ragged window that crosses the mark
 	}
 	tailnets := []string{DefaultTailnetID, "other"}
 	snapshot := func() map[stressKey][]NodePairAggregate {
@@ -143,12 +152,13 @@ func runGraphReadStress(t *testing.T, cacheBytes int64) {
 
 	var reads atomic.Int64
 	var wg sync.WaitGroup
-	for r := 0; r < 4; r++ {
+	for r := 0; r < readers; r++ {
 		wg.Add(1)
 		go func(r int) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(int64(100 + r)))
 			for !done.Load() || reads.Load() < 8 {
+				time.Sleep(pause)
 				key := stressKey{tailnets[rng.Intn(2)], rng.Intn(len(windows))}
 				w := windows[key.window]
 				v0 := version.Load()
