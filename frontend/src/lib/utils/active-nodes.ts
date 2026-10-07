@@ -27,6 +27,14 @@ export function averageBytesPerNode(totalBytes: number, nodeCount: number): numb
 	return totalBytes / nodeCount;
 }
 
+// The header's traffic summary comes from the graph (Traffic) or the overview
+// stats (Analytics). Other pages load neither, so a summary there would read
+// as an idle tailnet. Show it on those two pages, or when graph data is
+// already loaded.
+export function headerShowsStats(path: string, hasNetworkData: boolean): boolean {
+	return path === '/' || path === '/analytics' || hasNetworkData;
+}
+
 // Header totals are unknown until the graph or overview stats load for this
 // window (for example, opening the Policy page directly). Show a placeholder
 // instead of a zero that reads as an empty tailnet.

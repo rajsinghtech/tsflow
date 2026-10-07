@@ -364,13 +364,31 @@ TSFlow stores per-minute flow aggregates in SQLite with a rolling retention wind
 
 ### Ranked talkers and pairs
 
-`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. This is the API behind a later table view. The existing graph and `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay as they are.
+`GET /api/analytics/talkers` and `GET /api/analytics/pairs` return JSON rankings for a time window. The Analytics page's Top Talkers and Top Pairs tables use them, for the page's window and traffic-type filter, with previous and next pages, a bytes or flows sort, and a search box. Clicking a device name opens it on the traffic graph over the same window. The `/api/stats/top-talkers` and `/api/stats/top-pairs` routes stay for API callers.
 
-`start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use.
+`start` and `end` are RFC3339. `limit` defaults to 20 and stops at 200. `offset` defaults to 0. `sort` is `bytes` (total volume, the default) or `flows`. On a single-tailnet install the `tailnet` parameter can be omitted. With several tailnets, pass the same id the other data routes use. Optional `q` narrows both rankings before paging, with the same rules as the traffic graph search: `tag:x`, `ip:x`, `user@x` for the owner login (including the creator login recorded for a tagged device), or a case-insensitive substring of a device name, owner email, address, or tag. A pair matches when either end does.
 
-A talker is one device. The row has `nodeId`, `hostname`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `hostname` is the stored device hostname, or the stored device name when the hostname is blank. A pair row has `srcNodeId`, `srcHostname`, `dstNodeId`, `dstHostname`, the same byte fields, and `flowCount`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
+A talker is one device. The row has `nodeId`, `hostname`, `owner`, `txBytes`, `rxBytes`, `totalBytes`, and `flowCount`. `nodeId` is the canonical device id, and rows stored under another id for the same device (a legacy numeric id or an address) are merged into it on the page. `hostname` and `owner` come from the device list, falling back to the stored flow-log name; `127.3.3.40` is labeled `DERP relay`. A pair row has `srcNodeId`, `srcHostname`, `srcOwner`, `dstNodeId`, `dstHostname`, `dstOwner`, the same byte fields, and `flowCount`. Physical (WireGuard transport) traffic is left out unless `trafficTypes` includes `physical`. Rows are ordered by the sort field descending, then by id. `metadata.hasMore` is true when a later page exists.
 
 An hour that sits fully inside the window is read from the hourly rollup (`node_pair_hours`). The partial hour at each end is read from minute rows in `node_pairs`. When no hour is rolled up yet, the read uses minute rows. An empty window returns an empty list. Optional `trafficTypes` uses the same values as the other stats routes (`virtual`, `subnet`, `exit`, `physical`).
+
+### New connections
+
+`GET /api/analytics/new-pairs` lists directed pairs that appear in the selected window and do not appear in the lookback immediately before it. `lookback` defaults to `7d`. It also accepts `24h`, `30d`, or any duration from `1h` through `90d`. `limit`, `offset`, `start`, `end`, `tailnet`, and `trafficTypes` match the ranked pair route. Rows are ordered by first seen, newest first, then by volume. There is no alert. The page is `/new`.
+
+`metadata.lookbackStart` is where the lookback begins. `metadata.dataStart` is the earliest stored minute and is left out when nothing is stored. `metadata.lookbackComplete` is false when stored data starts after `lookbackStart`. A pair last seen before the data starts then shows up as new, and the page says so.
+
+Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
+
+### Device timeline
+
+`GET /api/analytics/device-timeline` returns one device's bytes over time, split into `virtual`, `subnet`, and `exit`, plus one page of its peers. Pass `node` (the stored device id). `limit` and `offset` page the peers, not the time buckets. Windows of two hours or less use one-minute buckets. Longer windows use hourly buckets, and complete hours are read from `node_pair_hours`.
+
+`physical` is omitted unless `trafficTypes` includes it. Each bucket includes `seconds`, the part of the bucket inside the query window. A DERP peer is labeled `DERP relay`. Selecting a device on the traffic graph opens the same timeline.
+
+### Me
+
+`GET /api/analytics/me` is the signed-in viewer's devices, traffic, per-device timelines, top peers, and new connections. The login is the request identity from WhoIs or the trusted proxy headers. No request parameter sets it. `me=1` on the talker, pair, new-pair, and device-timeline routes uses that same login and compares it in full, including a tagged device's creator login. On the talker and pair routes, `q` then narrows the viewer's own devices. Devices are listed busiest first. Top peers leave out the viewer's own devices and peers with no bytes. New connections leave out a device talking to itself, but keep one between two of the viewer's devices. The response `metadata` carries the same `lookbackStart`, `dataStart`, and `lookbackComplete` fields as `/api/analytics/new-pairs` for `newPairs`. Without a login the route is unauthorized, and the Me tab is not shown. When a login is known, `/` opens Me unless the address has query parameters or the viewer already chose another tab. That choice is stored in `tsflow-last-tab`.
 
 ### MCP server
 

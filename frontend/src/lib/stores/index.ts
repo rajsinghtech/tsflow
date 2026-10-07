@@ -1,5 +1,5 @@
 export { filterStore, debouncedFilterStore } from './filter-store';
-export { viewerStore, loadViewerIdentity, type ViewerIdentity } from './viewer-store';
+export { viewerStore, viewerReady, loadViewerIdentity, type ViewerIdentity } from './viewer-store';
 export { uiStore } from './ui-store';
 export { themeStore, type ThemeMode } from './theme-store';
 export {
@@ -41,9 +41,20 @@ export {
 	stopStatsRefresh,
 	statsSummary,
 	statsBuckets,
-	topTalkers,
-	topPairs,
 	topPorts,
 	statsLoading,
 	statsError
 } from './stats-store';
+export {
+	rankSort,
+	rankSearch,
+	setRankSearch,
+	rankedTalkers,
+	rankedPairs,
+	loadRankings,
+	loadRankedTalkers,
+	loadRankedPairs,
+	setRankSort,
+	startRankingsRefresh,
+	stopRankingsRefresh
+} from './rankings-store';

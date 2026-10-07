@@ -219,8 +219,7 @@ func TestExitInternetEndpointIsLabeled(t *testing.T) {
 	if got := h.resolveNodeName(nil, services.ExitInternetEndpoint); got != exitInternetName {
 		t.Fatalf("resolveNodeName(%q) = %q, want %q", services.ExitInternetEndpoint, got, exitInternetName)
 	}
-	talkers := []database.RankedTalker{{NodeID: services.ExitInternetEndpoint}}
-	labelRankedTalkers(talkers)
+	talkers := h.resolveRankedTalkers(nil, []database.RankedTalker{{NodeID: services.ExitInternetEndpoint}}, "bytes")
 	if talkers[0].Hostname != exitInternetName {
 		t.Fatalf("ranked talker hostname = %q", talkers[0].Hostname)
 	}

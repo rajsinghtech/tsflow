@@ -26,9 +26,18 @@ func Middleware(cfg config.Access, who WhoIsClient) gin.HandlerFunc {
 			return
 		}
 		debugf(cfg, "login=%q name=%q node=%q groups=%q tailnets=%q", ident.Login, ident.Name, ident.Node, strings.Join(ident.Groups, ","), strings.Join(ident.Allow.TailnetIDs(), ","))
-		c.Set(identityKey, ident)
+		SetIdentity(c, ident)
 		c.Next()
 	}
+}
+
+// SetIdentity stores the viewer on the request. Middleware does this after a
+// successful resolve. Tests use it to attach a login without a WhoIs client.
+func SetIdentity(c *gin.Context, ident Identity) {
+	if c == nil {
+		return
+	}
+	c.Set(identityKey, ident)
 }
 
 // FromGin returns the viewer stored by Middleware.

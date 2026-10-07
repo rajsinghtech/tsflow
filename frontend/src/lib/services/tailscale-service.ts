@@ -1,5 +1,7 @@
+import type { RankedPair, RankedTalker, RankMetadata, RankQueryParams } from '#lib/analytics/rank-query';
+import { rankQueryPath } from '#lib/analytics/rank-query';
 import { api } from './api-service';
-import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, TopTalker, TopPair, NodeDetailStats } from '#lib/types';
+import type { Device, NetworkLogsResponse, PortStat, TrafficStatsBucket, TrafficStatsSummary, NodeDetailStats } from '#lib/types';
 
 export interface DevicesResponse {
 	devices: Device[];
@@ -175,35 +177,173 @@ export const tailscaleService = {
 		return api.get(url, { signal });
 	},
 
-	async getTopTalkers(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		talkers: TopTalker[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
-	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-talkers?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+	async getNewPairs(
+		start: Date,
+		end: Date,
+		options?: {
+			lookback?: string;
+			limit?: number;
+			offset?: number;
+			trafficTypes?: string[];
+			signal?: AbortSignal;
 		}
-		return api.get(url, { signal });
+	): Promise<{
+		pairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			dstNodeId: string;
+			dstHostname: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+			firstSeen: string;
+		}>;
+		metadata: {
+			start: string;
+			end: string;
+			lookback: string;
+			limit: number;
+			offset: number;
+			count: number;
+			hasMore: boolean;
+			lookbackStart?: string;
+			dataStart?: string;
+			lookbackComplete?: boolean;
+		};
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 20),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.lookback) params.set('lookback', options.lookback);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
+		}
+		return api.get(`/analytics/new-pairs?${params.toString()}`, { signal: options?.signal });
 	},
 
-	async getTopPairs(start: Date, end: Date, limit = 10, signal?: AbortSignal, trafficTypes?: string[]): Promise<{
-		pairs: TopPair[];
-		metadata: { start: string; end: string; limit: number; count: number; trafficTypes?: string[] };
+	async getDeviceTimeline(
+		nodeId: string,
+		start: Date,
+		end: Date,
+		options?: { limit?: number; offset?: number; trafficTypes?: string[]; me?: boolean; signal?: AbortSignal }
+	): Promise<{
+		nodeId: string;
+		hostname: string;
+		bucketSeconds: number;
+		buckets: Array<{
+			time: string;
+			seconds?: number;
+			virtual: { txBytes: number; rxBytes: number };
+			subnet: { txBytes: number; rxBytes: number };
+			exit: { txBytes: number; rxBytes: number };
+			physical?: { txBytes: number; rxBytes: number };
+		}>;
+		peers: Array<{
+			peerId: string;
+			hostname: string;
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		metadata: { count: number; hasMore: boolean; limit: number; offset: number; bucketSeconds: number };
 	}> {
-		const startISO = start.toISOString();
-		const endISO = end.toISOString();
-		let url = `/stats/top-pairs?start=${startISO}&end=${endISO}&limit=${limit}`;
-		if (trafficTypes && trafficTypes.length > 0) {
-			url += `&trafficTypes=${trafficTypes.map(encodeURIComponent).join(',')}`;
+		const params = new URLSearchParams({
+			node: nodeId,
+			start: start.toISOString(),
+			end: end.toISOString(),
+			limit: String(options?.limit ?? 8),
+			offset: String(options?.offset ?? 0)
+		});
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
 		}
-		return api.get(url, { signal });
+		if (options?.me) params.set('me', '1');
+		return api.get(`/analytics/device-timeline?${params.toString()}`, { signal: options?.signal });
+	},
+
+	async getViewerSummary(
+		start: Date,
+		end: Date,
+		options?: { lookback?: string; trafficTypes?: string[]; signal?: AbortSignal }
+	): Promise<{
+		login: string;
+		devices: Array<{
+			nodeId: string;
+			hostname: string;
+			owner: string;
+			online: boolean;
+			tags?: string[];
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		traffic: { txBytes: number; rxBytes: number; totalBytes: number; flowCount: number };
+		timelines: Array<{
+			nodeId: string;
+			hostname: string;
+			buckets: Array<{
+				time: string;
+				seconds?: number;
+				virtual: { txBytes: number; rxBytes: number };
+				subnet: { txBytes: number; rxBytes: number };
+				exit: { txBytes: number; rxBytes: number };
+				physical?: { txBytes: number; rxBytes: number };
+			}>;
+			peers: Array<{ peerId: string; hostname: string; totalBytes: number; flowCount: number }>;
+		}>;
+		peers: Array<{ peerId: string; hostname: string; totalBytes: number; flowCount: number }>;
+		newPairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			dstNodeId: string;
+			dstHostname: string;
+			totalBytes: number;
+			flowCount: number;
+			firstSeen: string;
+		}>;
+		metadata?: {
+			start: string;
+			end: string;
+			lookback: string;
+			lookbackStart?: string;
+			dataStart?: string | null;
+			lookbackComplete?: boolean;
+		};
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString()
+		});
+		if (options?.lookback) params.set('lookback', options.lookback);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
+		}
+		return api.get(`/analytics/me?${params.toString()}`, { signal: options?.signal });
 	},
 
 	async getNodeStats(nodeId: string, start: Date, end: Date): Promise<NodeDetailStats> {
 		const startISO = start.toISOString();
 		const endISO = end.toISOString();
 		return api.get(`/stats/node/${encodeURIComponent(nodeId)}?start=${startISO}&end=${endISO}`);
+	},
+
+	async getRankedTalkers(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ talkers: RankedTalker[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('talkers', query), { signal });
+	},
+
+	async getRankedPairs(
+		query: RankQueryParams,
+		signal?: AbortSignal
+	): Promise<{ pairs: RankedPair[] | null; metadata: RankMetadata }> {
+		return api.get(rankQueryPath('pairs', query), { signal });
 	}
 };
