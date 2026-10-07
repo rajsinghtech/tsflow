@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,20 +21,38 @@ type tailnetScope struct {
 	poller  *services.Poller
 }
 
-// bindTailnet resolves the optional tailnet query parameter.
-// A false result means the response has already been written.
-// With access control off, the resolution matches the open server.
-func (h *Handlers) bindTailnet(c *gin.Context) (tailnetScope, bool) {
-	ident, restricted := access.FromGin(c)
-	raw := strings.TrimSpace(c.Query("tailnet"))
-	if restricted && raw != "" && !ident.Allow.Permits(raw) {
-		writeTailnetForbidden(c, raw)
-		return tailnetScope{}, false
+// TailnetBinding is the tailnet selected for one request.
+type TailnetBinding struct {
+	ID      string
+	Service *services.TailscaleService
+	Poller  *services.Poller
+}
+
+// TailnetError is a tailnet selection failure with the same status and
+// message the REST routes write.
+type TailnetError struct {
+	Status   int
+	Message  string
+	Tailnets []string
+}
+
+func (e *TailnetError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// BindTailnet resolves the optional tailnet id the same way the data routes do.
+// restricted is false when access control did not attach a viewer.
+func (h *Handlers) BindTailnet(restricted bool, allow access.Allow, raw string) (TailnetBinding, error) {
+	raw = strings.TrimSpace(raw)
+	if restricted && raw != "" && !allow.Permits(raw) {
+		return TailnetBinding{}, tailnetForbidden(raw)
 	}
 	if h == nil || h.registry == nil {
 		if raw != "" && raw != database.DefaultTailnetID {
-			writeUnknownTailnet(c, raw)
-			return tailnetScope{}, false
+			return TailnetBinding{}, unknownTailnet(raw)
 		}
 		service := (*services.TailscaleService)(nil)
 		var poller *services.Poller
@@ -41,61 +60,96 @@ func (h *Handlers) bindTailnet(c *gin.Context) (tailnetScope, bool) {
 			service = h.tailscaleService
 			poller = h.poller
 		}
-		scope := tailnetScope{id: database.DefaultTailnetID, service: service, poller: poller}
-		if restricted && !ident.Allow.Permits(scope.id) {
-			writeTailnetForbidden(c, scope.id)
-			return tailnetScope{}, false
+		binding := TailnetBinding{ID: database.DefaultTailnetID, Service: service, Poller: poller}
+		if restricted && !allow.Permits(binding.ID) {
+			return TailnetBinding{}, tailnetForbidden(binding.ID)
 		}
-		return scope, true
+		return binding, nil
 	}
 
 	entries := h.registry.List()
 	if len(entries) == 1 {
 		only := entries[0]
 		if raw == "" || raw == only.ID {
-			if restricted && !ident.Allow.Permits(only.ID) {
-				writeTailnetForbidden(c, only.ID)
-				return tailnetScope{}, false
+			if restricted && !allow.Permits(only.ID) {
+				return TailnetBinding{}, tailnetForbidden(only.ID)
 			}
-			return scopeFrom(only), true
+			return bindingFrom(only), nil
 		}
-		writeUnknownTailnet(c, raw)
-		return tailnetScope{}, false
+		return TailnetBinding{}, unknownTailnet(raw)
 	}
 
 	if raw == "" {
-		if entry, ok := h.registry.Default(); ok && (!restricted || ident.Allow.Permits(entry.ID)) {
-			return scopeFrom(entry), true
+		if entry, ok := h.registry.Default(); ok && (!restricted || allow.Permits(entry.ID)) {
+			return bindingFrom(entry), nil
 		}
 		ids := tailnetIDs(entries)
 		if restricted {
-			ids = ident.Allow.Filter(ids)
+			ids = allow.Filter(ids)
 			if len(ids) == 0 {
-				writeTailnetForbidden(c, "")
-				return tailnetScope{}, false
+				return TailnetBinding{}, tailnetForbidden("")
 			}
 		}
-		writeTailnetRequired(c, ids)
-		return tailnetScope{}, false
+		return TailnetBinding{}, &TailnetError{
+			Status:   http.StatusBadRequest,
+			Message:  fmt.Sprintf("tailnet query parameter is required. Valid ids: %s", strings.Join(ids, ", ")),
+			Tailnets: ids,
+		}
 	}
 
 	entry, ok := h.registry.Get(raw)
 	if !ok || entry == nil {
-		writeUnknownTailnet(c, raw)
+		return TailnetBinding{}, unknownTailnet(raw)
+	}
+	if restricted && !allow.Permits(entry.ID) {
+		return TailnetBinding{}, tailnetForbidden(entry.ID)
+	}
+	return bindingFrom(entry), nil
+}
+
+func tailnetForbidden(id string) error {
+	if id == "" {
+		return &TailnetError{Status: http.StatusForbidden, Message: "no permitted tailnets"}
+	}
+	return &TailnetError{Status: http.StatusForbidden, Message: fmt.Sprintf("tailnet %q is not permitted", id)}
+}
+
+func unknownTailnet(id string) error {
+	return &TailnetError{Status: http.StatusNotFound, Message: fmt.Sprintf("unknown tailnet %q", id)}
+}
+
+// bindTailnet resolves the optional tailnet query parameter.
+// A false result means the response has already been written.
+// With access control off, the resolution matches the open server.
+func (h *Handlers) bindTailnet(c *gin.Context) (tailnetScope, bool) {
+	ident, restricted := access.FromGin(c)
+	binding, err := h.BindTailnet(restricted, ident.Allow, c.Query("tailnet"))
+	if err != nil {
+		var te *TailnetError
+		if !errors.As(err, &te) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve tailnet"})
+			return tailnetScope{}, false
+		}
+		body := gin.H{"error": te.Message}
+		if te.Tailnets != nil {
+			body["tailnets"] = te.Tailnets
+		}
+		c.JSON(te.Status, body)
 		return tailnetScope{}, false
 	}
-	if restricted && !ident.Allow.Permits(entry.ID) {
-		writeTailnetForbidden(c, entry.ID)
-		return tailnetScope{}, false
-	}
-	return scopeFrom(entry), true
+	return tailnetScope{id: binding.ID, service: binding.Service, poller: binding.Poller}, true
 }
 
 func scopeFrom(entry *services.TailnetRuntime) tailnetScope {
+	binding := bindingFrom(entry)
+	return tailnetScope{id: binding.ID, service: binding.Service, poller: binding.Poller}
+}
+
+func bindingFrom(entry *services.TailnetRuntime) TailnetBinding {
 	if entry == nil {
-		return tailnetScope{}
+		return TailnetBinding{}
 	}
-	return tailnetScope{id: entry.ID, service: entry.Service, poller: entry.Poller}
+	return TailnetBinding{ID: entry.ID, Service: entry.Service, Poller: entry.Poller}
 }
 
 func tailnetIDs(entries []*services.TailnetRuntime) []string {
@@ -109,30 +163,7 @@ func tailnetIDs(entries []*services.TailnetRuntime) []string {
 	return ids
 }
 
-func writeUnknownTailnet(c *gin.Context, id string) {
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": fmt.Sprintf("unknown tailnet %q", id),
-	})
-}
-
-func writeTailnetForbidden(c *gin.Context, id string) {
-	if id == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "no permitted tailnets"})
-		return
-	}
-	c.JSON(http.StatusForbidden, gin.H{
-		"error": fmt.Sprintf("tailnet %q is not permitted", id),
-	})
-}
-
-func writeTailnetRequired(c *gin.Context, ids []string) {
-	c.JSON(http.StatusBadRequest, gin.H{
-		"error":    fmt.Sprintf("tailnet query parameter is required. Valid ids: %s", strings.Join(ids, ", ")),
-		"tailnets": ids,
-	})
-}
-
-type tailnetPollerStatus struct {
+type TailnetPollerStatus struct {
 	Running       bool      `json:"running"`
 	LastPollTime  time.Time `json:"lastPollTime"`
 	LastPollCount int       `json:"lastPollCount"`
@@ -144,65 +175,69 @@ type tailnetPollerStatus struct {
 	LastErrorTime time.Time `json:"lastErrorTime,omitempty"`
 }
 
-type tailnetSummary struct {
+// TailnetSummary is one configured tailnet without credentials.
+type TailnetSummary struct {
 	ID          string              `json:"id"`
 	DisplayName string              `json:"displayName"`
-	Poller      tailnetPollerStatus `json:"poller"`
+	Poller      TailnetPollerStatus `json:"poller"`
 }
 
 // ListTailnets returns id, display name, and poller status for each configured
 // tailnet. Credentials are not included.
 func (h *Handlers) ListTailnets(c *gin.Context) {
-	if h == nil || h.registry == nil {
-		var poller *services.Poller
-		if h != nil {
-			poller = h.poller
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"tailnets": visibleTailnets(c, []tailnetSummary{{
-				ID:          database.DefaultTailnetID,
-				DisplayName: "",
-				Poller:      pollerStatus(poller),
-			}}),
-		})
-		return
-	}
-
-	entries := h.registry.List()
-	out := make([]tailnetSummary, 0, len(entries))
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		out = append(out, tailnetSummary{
-			ID:          entry.ID,
-			DisplayName: entry.Name,
-			Poller:      pollerStatus(entry.Poller),
-		})
-	}
-	c.JSON(http.StatusOK, gin.H{"tailnets": visibleTailnets(c, out)})
+	ident, restricted := access.FromGin(c)
+	c.JSON(http.StatusOK, gin.H{"tailnets": h.VisibleTailnets(restricted, ident.Allow)})
 }
 
-func visibleTailnets(c *gin.Context, items []tailnetSummary) []tailnetSummary {
-	ident, restricted := access.FromGin(c)
+// VisibleTailnets lists configured tailnets, dropping ids the viewer cannot use.
+// restricted is false when access control is off.
+func (h *Handlers) VisibleTailnets(restricted bool, allow access.Allow) []TailnetSummary {
+	items := h.allTailnets()
 	if !restricted {
 		return items
 	}
-	out := make([]tailnetSummary, 0, len(items))
+	out := make([]TailnetSummary, 0, len(items))
 	for _, item := range items {
-		if ident.Allow.Permits(item.ID) {
+		if allow.Permits(item.ID) {
 			out = append(out, item)
 		}
 	}
 	return out
 }
 
-func pollerStatus(p *services.Poller) tailnetPollerStatus {
+func (h *Handlers) allTailnets() []TailnetSummary {
+	if h == nil || h.registry == nil {
+		var poller *services.Poller
+		if h != nil {
+			poller = h.poller
+		}
+		return []TailnetSummary{{
+			ID:          database.DefaultTailnetID,
+			DisplayName: "",
+			Poller:      pollerStatus(poller),
+		}}
+	}
+	entries := h.registry.List()
+	out := make([]TailnetSummary, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		out = append(out, TailnetSummary{
+			ID:          entry.ID,
+			DisplayName: entry.Name,
+			Poller:      pollerStatus(entry.Poller),
+		})
+	}
+	return out
+}
+
+func pollerStatus(p *services.Poller) TailnetPollerStatus {
 	if p == nil {
-		return tailnetPollerStatus{}
+		return TailnetPollerStatus{}
 	}
 	stats := p.Stats()
-	status := tailnetPollerStatus{
+	status := TailnetPollerStatus{
 		Running:       boolStat(stats["running"]),
 		LastPollTime:  timeStat(stats["lastPollTime"]),
 		LastPollCount: intStat(stats["lastPollCount"]),

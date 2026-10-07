@@ -70,6 +70,9 @@ type Config struct {
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
 	TailnetsFile string
+	// MCPEnabled serves a read-only Model Context Protocol endpoint at /mcp.
+	// It stays off unless TSFLOW_MCP_ENABLED is set.
+	MCPEnabled bool
 	// Access is opt-in tailnet identity. The zero value leaves requests open.
 	Access Access
 }
@@ -118,6 +121,7 @@ func Load() *Config {
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
+		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
 	}
 	cfg.FlowObjectStoreWebIdentityTokenFile = strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE"))
 	cfg.Access = cfg.loadAccess()

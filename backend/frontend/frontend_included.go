@@ -78,7 +78,7 @@ func RegisterFrontend(router *gin.Engine) error {
 
 		// Redirect trailing slashes (except root)
 		if path != "" && strings.HasSuffix(path, "/") {
-			c.Redirect(http.StatusMovedPermanently, strings.TrimRight(c.Request.URL.String(), "/"))
+			c.Redirect(http.StatusMovedPermanently, trailingSlashRedirect(c.Request.URL))
 			return
 		}
 

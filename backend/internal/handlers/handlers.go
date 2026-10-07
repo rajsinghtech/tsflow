@@ -55,6 +55,7 @@ const (
 	MaxNetworkLogLimit = 5000
 	derpRelayIP        = "127.3.3.40"
 	derpRelayName      = "DERP relay"
+	exitInternetName   = "Internet (exit node)"
 	// MinQueryRange prevents degenerate zero-duration queries
 	MinQueryRange = time.Second
 	// DefaultQueryTimeout is the default timeout for database queries
@@ -181,9 +182,25 @@ func derpRelayLabel(nodeIDOrIP string) (string, bool) {
 	return "", false
 }
 
+// PseudoEndpointName labels endpoints that are not devices: the DERP
+// pseudo-address and the public side of anonymized exit traffic.
+func PseudoEndpointName(nodeIDOrIP string) (string, bool) {
+	return pseudoEndpointLabel(nodeIDOrIP)
+}
+
+func pseudoEndpointLabel(nodeIDOrIP string) (string, bool) {
+	if name, ok := derpRelayLabel(nodeIDOrIP); ok {
+		return name, true
+	}
+	if nodeIDOrIP == services.ExitInternetEndpoint {
+		return exitInternetName, true
+	}
+	return "", false
+}
+
 func labelRankedTalkers(talkers []database.RankedTalker) {
 	for i := range talkers {
-		if name, ok := derpRelayLabel(talkers[i].NodeID); ok {
+		if name, ok := pseudoEndpointLabel(talkers[i].NodeID); ok {
 			talkers[i].Hostname = name
 		}
 	}
@@ -191,10 +208,10 @@ func labelRankedTalkers(talkers []database.RankedTalker) {
 
 func labelRankedPairs(pairs []database.RankedPair) {
 	for i := range pairs {
-		if name, ok := derpRelayLabel(pairs[i].SrcNodeID); ok {
+		if name, ok := pseudoEndpointLabel(pairs[i].SrcNodeID); ok {
 			pairs[i].SrcHostname = name
 		}
-		if name, ok := derpRelayLabel(pairs[i].DstNodeID); ok {
+		if name, ok := pseudoEndpointLabel(pairs[i].DstNodeID); ok {
 			pairs[i].DstHostname = name
 		}
 	}
@@ -202,7 +219,7 @@ func labelRankedPairs(pairs []database.RankedPair) {
 
 // resolveNodeName returns a human-readable name for a node ID or IP using the device cache.
 func (h *Handlers) resolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
-	if name, ok := derpRelayLabel(nodeIDOrIP); ok {
+	if name, ok := pseudoEndpointLabel(nodeIDOrIP); ok {
 		return name
 	}
 	if poller == nil {
@@ -268,4 +285,27 @@ func (h *Handlers) resolveNodeOwner(poller *services.Poller, nodeIDOrIP string) 
 		return ""
 	}
 	return entry.Owner
+}
+
+// ResolveNodeName returns the display name used by the stats routes.
+func (h *Handlers) ResolveNodeName(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeName(poller, nodeIDOrIP)
+}
+
+// ResolveNodeID returns the canonical device id for a stored id or address.
+func (h *Handlers) ResolveNodeID(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeID(poller, nodeIDOrIP)
+}
+
+// ResolveNodeOwner returns the device owner login, or empty when unknown.
+func (h *Handlers) ResolveNodeOwner(poller *services.Poller, nodeIDOrIP string) string {
+	return h.resolveNodeOwner(poller, nodeIDOrIP)
+}
+
+// Store returns the flow store. It is nil when the process has no database.
+func (h *Handlers) Store() database.Store {
+	if h == nil {
+		return nil
+	}
+	return h.store
 }
