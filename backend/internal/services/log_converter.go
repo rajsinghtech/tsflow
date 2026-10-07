@@ -49,15 +49,25 @@ func (p *Poller) convertLogs(logsResp any) []database.FlowLog {
 	return flowLogs
 }
 
+// flowLogTime picks the time a flow row is stored under. Start (when the
+// traffic happened) aligns buckets better than logged (when the server got
+// the log, a few seconds later), but start comes from the node's clock. A
+// start after logged is impossible unless that clock runs ahead, so logged
+// wins then; otherwise those rows would land in the future.
+func flowLogTime(start, logged time.Time) time.Time {
+	if start.IsZero() {
+		return logged
+	}
+	if !logged.IsZero() && start.After(logged) {
+		return logged
+	}
+	return start
+}
+
 func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.FlowLog {
 	var flowLogs []database.FlowLog
 
-	// Use Start (when traffic actually occurred) instead of Logged (when server captured it)
-	// to avoid 5-10 second timing skew in bucket assignment
-	logTime := tsLog.Start
-	if logTime.IsZero() {
-		logTime = tsLog.Logged // fallback if Start not populated
-	}
+	logTime := flowLogTime(tsLog.Start, tsLog.Logged)
 	if logTime.IsZero() {
 		log.Printf("Warning: skipping flow log with no start or logged timestamp for node %s", tsLog.NodeID)
 		return flowLogs
@@ -113,16 +123,13 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 		log.Printf("Warning: skipping log entry with invalid nodeId type: %T", logMap["nodeId"])
 		return flowLogs
 	}
-	// Prefer "start" over "logged" for bucket alignment (consistent with convertTailscaleLog)
-	logTimeStr := getString(logMap, "start")
-	if logTimeStr == "" {
-		logTimeStr = getString(logMap, "logged")
-	}
-	logged, err := time.Parse(time.RFC3339, logTimeStr)
-	if err != nil {
+	start, startErr := time.Parse(time.RFC3339, getString(logMap, "start"))
+	serverTime, loggedErr := time.Parse(time.RFC3339, getString(logMap, "logged"))
+	if startErr != nil && loggedErr != nil {
 		log.Printf("Warning: skipping log entry with invalid timestamp for node %s", nodeID)
 		return flowLogs
 	}
+	logged := flowLogTime(start, serverTime)
 
 	// Process each traffic type
 	for _, trafficType := range []string{"virtualTraffic", "subnetTraffic", "exitTraffic", "physicalTraffic"} {
