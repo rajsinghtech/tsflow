@@ -8,7 +8,7 @@
 	import { page } from '$app/state';
 	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
-	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerShowsStats } from '#lib/utils';
+	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
 
 	// Tick every 10s to keep the relative time fresh
@@ -111,6 +111,10 @@
 	});
 
 	const avgTrafficPerNode = $derived(averageBytesPerNode(displayBytes, displayNodes));
+
+	// Nothing has loaded yet for this window, e.g. the Policy page opened
+	// directly. The totals are unknown, not zero.
+	const statsLoaded = $derived($lastUpdated !== null || $statsSummary !== null);
 
 	const peakNode = $derived.by(() => {
 		if ($filteredNodes.length === 0) return null;
@@ -243,7 +247,7 @@
 				<div class="flex items-center gap-2">
 					<Network class="h-4 w-4 text-muted-foreground" />
 					<div class="text-sm">
-						<span class="font-semibold">{displayNodes}</span>
+						<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
 						<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
 					</div>
 				</div>
@@ -251,7 +255,7 @@
 				<div class="flex items-center gap-2">
 					<Link class="h-4 w-4 text-muted-foreground" />
 					<div class="text-sm">
-						<span class="font-semibold">{useNetworkStats ? displayFlows : displayFlows.toLocaleString()}</span>
+						<span class="font-semibold">{headerStat(statsLoaded, displayFlows, (v) => (useNetworkStats ? String(v) : v.toLocaleString()))}</span>
 						<span class="text-muted-foreground"> flows</span>
 					</div>
 				</div>
@@ -260,12 +264,12 @@
 
 				<div class="hidden text-sm @sm:block">
 					<span class="text-muted-foreground">Traffic:</span>
-					<span class="ml-1 font-semibold text-primary">{formatBytes(displayBytes)}</span>
+					<span class="ml-1 font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
 				</div>
 
 				<div class="hidden text-sm @xl:block">
 					<span class="text-muted-foreground">Avg/Node:</span>
-					<span class="ml-1 font-semibold">{formatBytes(avgTrafficPerNode)}</span>
+					<span class="ml-1 font-semibold">{headerStat(statsLoaded, avgTrafficPerNode, formatBytes)}</span>
 				</div>
 
 				{#if peakNode}
@@ -289,18 +293,18 @@
 	{#if showStats}
 		<!-- Compact stats for mobile (<md) -->
 		<div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap md:hidden">
-			<span class="text-[10px] font-semibold tabular-nums">{displayNodes}<span class="font-normal text-muted-foreground">n</span></span>
-			<span class="text-[10px] font-semibold tabular-nums text-primary">{formatBytes(displayBytes)}</span>
+			<span class="text-[10px] font-semibold tabular-nums">{headerStat(statsLoaded, displayNodes)}<span class="font-normal text-muted-foreground">n</span></span>
+			<span class="text-[10px] font-semibold tabular-nums text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
 		</div>
 
 		<!-- Compact stats for tablet (md only) -->
 		<div class="hidden items-center gap-3 md:flex lg:hidden">
 			<div class="text-xs">
-				<span class="font-semibold">{displayNodes}</span>
+				<span class="font-semibold">{headerStat(statsLoaded, displayNodes)}</span>
 				<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
 			</div>
 			<div class="text-xs">
-				<span class="font-semibold text-primary">{formatBytes(displayBytes)}</span>
+				<span class="font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
 			</div>
 			{#if lastUpdatedLabel}
 				<div class="text-[10px] text-muted-foreground/60">{lastUpdatedLabel}</div>
