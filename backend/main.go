@@ -218,6 +218,9 @@ func main() {
 		WhoIs:    requestWhoIs,
 		Handlers: handlerService,
 		Version:  Version,
+		// A separate budget from /api so MCP agents and the UI don't starve
+		// each other.
+		RateLimit: middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()),
 	})
 
 	// Register embedded frontend (must be after API routes)
@@ -342,7 +345,7 @@ func main() {
 			healthRouter := gin.New()
 			healthRouter.Use(gin.Recovery())
 			healthRouter.GET("/health", handlerService.HealthCheck)
-			healthSrv = &http.Server{Addr: "0.0.0.0:" + cfg.TsnetHealthPort, Handler: healthRouter, ReadHeaderTimeout: 10 * time.Second}
+			healthSrv = newHTTPServer("0.0.0.0:"+cfg.TsnetHealthPort, healthRouter)
 			go func() {
 				if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("FATAL health listener failed: %v", err)
@@ -365,8 +368,8 @@ func main() {
 			lazyWhoIs.Set(localClient)
 		}
 
-		tlsSrv := &http.Server{Handler: router}
-		httpSrv := &http.Server{Handler: router}
+		tlsSrv := newHTTPServer("", router)
+		httpSrv := newHTTPServer("", router)
 		go func() {
 			if err := tlsSrv.Serve(tsnetSrv.TLSListener()); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("FATAL tsnet TLS serve failed: %v", err)
@@ -390,10 +393,10 @@ func main() {
 		}
 		tsnetSrv.Close()
 	} else {
-		httpSrv := &http.Server{Addr: "0.0.0.0:" + port, Handler: router}
+		httpSrv := newHTTPServer("0.0.0.0:"+port, router)
 		go func() {
 			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("FATAL Failed to start server: %v", err)
+				log.Fatalf("FATAL Failed to start server: %v", err)
 			}
 		}()
 
