@@ -213,3 +213,14 @@ func handlerJSON(t *testing.T, h *Handlers, method func(*gin.Context), target st
 	}
 	return w.Body.String()
 }
+
+func TestExitInternetEndpointIsLabeled(t *testing.T) {
+	h := &Handlers{}
+	if got := h.resolveNodeName(nil, services.ExitInternetEndpoint); got != exitInternetName {
+		t.Fatalf("resolveNodeName(%q) = %q, want %q", services.ExitInternetEndpoint, got, exitInternetName)
+	}
+	talkers := h.resolveRankedTalkers(nil, []database.RankedTalker{{NodeID: services.ExitInternetEndpoint}}, "bytes")
+	if talkers[0].Hostname != exitInternetName {
+		t.Fatalf("ranked talker hostname = %q", talkers[0].Hostname)
+	}
+}
