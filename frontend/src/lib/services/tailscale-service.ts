@@ -206,6 +206,9 @@ export const tailscaleService = {
 			offset: number;
 			count: number;
 			hasMore: boolean;
+			lookbackStart?: string;
+			dataStart?: string;
+			lookbackComplete?: boolean;
 		};
 	}> {
 		const params = new URLSearchParams({

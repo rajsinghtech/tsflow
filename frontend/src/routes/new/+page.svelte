@@ -5,7 +5,7 @@
 	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 	import { dataSourceStore, filterStore, queryTimeWindow } from '#lib/stores';
 	import { tailscaleService } from '#lib/services';
-	import { DEFAULT_NEW_PAIR_LOOKBACK, NEW_PAIR_LOOKBACKS } from '#lib/analytics/new-pairs';
+	import { DEFAULT_NEW_PAIR_LOOKBACK, NEW_PAIR_LOOKBACKS, lookbackNotice, type NewPairCoverage } from '#lib/analytics/new-pairs';
 	import { formatBytes } from '#lib/utils';
 	import type { TrafficType } from '#lib/types';
 
@@ -31,6 +31,7 @@
 
 	let pairs = $state<NewPairRow[]>([]);
 	let hasMore = $state(false);
+	let coverage = $state<NewPairCoverage | undefined>(undefined);
 	let offset = $state(0);
 	let lookback = $state(DEFAULT_NEW_PAIR_LOOKBACK);
 	let loading = $state(true);
@@ -39,6 +40,11 @@
 	let loadToken = 0;
 
 	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
+	const coverageNotice = $derived(lookbackNotice(coverage, seenDate));
+
+	function seenDate(value: Date): string {
+		return value.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+	}
 
 	function endpointLabel(id: string, hostname: string): string {
 		return hostname || id;
@@ -72,6 +78,7 @@
 		if (types.length === 0) {
 			pairs = [];
 			hasMore = false;
+			coverage = undefined;
 			loading = false;
 			error = null;
 			return;
@@ -89,10 +96,12 @@
 			if (token !== loadToken) return;
 			pairs = response.pairs || [];
 			hasMore = response.metadata?.hasMore ?? false;
+			coverage = response.metadata;
 		} catch (err) {
 			if (token !== loadToken) return;
 			pairs = [];
 			hasMore = false;
+			coverage = undefined;
 			error = err instanceof Error ? err.message : 'Failed to load new connections';
 		} finally {
 			if (token === loadToken) loading = false;
@@ -190,6 +199,12 @@
 					}}
 				/>
 			</div>
+		{/if}
+
+		{#if coverageNotice && !error}
+			<p class="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300" role="status">
+				{coverageNotice}
+			</p>
 		{/if}
 
 		<div class="rounded-lg border border-border bg-card p-3 sm:p-4">

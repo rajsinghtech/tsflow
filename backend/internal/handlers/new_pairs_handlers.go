@@ -23,6 +23,13 @@ type newPairMetadata struct {
 	Count        int       `json:"count"`
 	HasMore      bool      `json:"hasMore"`
 	TrafficTypes []string  `json:"trafficTypes,omitempty"`
+	// LookbackStart is start minus the lookback. DataStart is the oldest
+	// stored minute. LookbackComplete is false when stored data begins after
+	// LookbackStart: a pair seen only before DataStart cannot be ruled out,
+	// so some listed pairs may not be new.
+	LookbackStart    time.Time  `json:"lookbackStart"`
+	DataStart        *time.Time `json:"dataStart,omitempty"`
+	LookbackComplete bool       `json:"lookbackComplete"`
 }
 
 // GetNewPairs lists src/dst pairs first seen in the selected window.
@@ -61,18 +68,29 @@ func (h *Handlers) GetNewPairs(c *gin.Context) {
 		pairs = []database.NewPair{}
 	}
 	labelNewPairs(pairs)
+	lookbackStart := startTime.Add(-query.Lookback)
+	var dataStart *time.Time
+	if dataRange, rangeErr := h.store.GetDataRange(ctx, tn.id); rangeErr != nil {
+		log.Printf("WARN GetNewPairs data range: %v", rangeErr)
+	} else if dataRange != nil && dataRange.Count > 0 {
+		earliest := dataRange.Earliest
+		dataStart = &earliest
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"pairs": pairs,
 		"metadata": newPairMetadata{
-			Start:        startTime,
-			End:          endTime,
-			Tailnet:      tn.id,
-			Lookback:     lookbackLabel,
-			Limit:        query.Limit,
-			Offset:       query.Offset,
-			Count:        len(pairs),
-			HasMore:      hasMore,
-			TrafficTypes: query.TrafficTypes,
+			Start:            startTime,
+			End:              endTime,
+			Tailnet:          tn.id,
+			Lookback:         lookbackLabel,
+			Limit:            query.Limit,
+			Offset:           query.Offset,
+			Count:            len(pairs),
+			HasMore:          hasMore,
+			TrafficTypes:     query.TrafficTypes,
+			LookbackStart:    lookbackStart,
+			DataStart:        dataStart,
+			LookbackComplete: dataStart != nil && !dataStart.After(lookbackStart),
 		},
 	})
 }
