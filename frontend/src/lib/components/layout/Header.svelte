@@ -154,7 +154,7 @@
 
 <header class="relative z-30 flex h-12 items-center justify-between gap-1 border-b border-border bg-card px-1 sm:h-14 sm:gap-2 sm:px-4">
 	<!-- Left section: Logo + primary navigation -->
-	<div class="flex min-w-0 items-center gap-1 sm:gap-3">
+	<div class="flex min-w-0 items-center gap-1 sm:gap-3 lg:shrink-0">
 		<div class="relative about-flyout-container shrink-0">
 			<button
 				onclick={() => (showAbout = !showAbout)}
@@ -235,49 +235,53 @@
 
 	<!-- Center section: Network Stats (desktop only) -->
 	{#if showSummary}
-	<div class="hidden items-center gap-6 lg:flex">
-		<div class="flex items-center gap-2">
-			<Network class="h-4 w-4 text-muted-foreground" />
-			<div class="text-sm">
-				<span class="font-semibold">{displayNodes}</span>
-				<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
+	<!-- Takes the free space between navigation and actions. Items drop out
+	     by priority as that space narrows instead of overlapping the nav. -->
+	<div class="@container hidden min-w-0 flex-1 lg:block">
+		<div class="flex items-center justify-center gap-4 overflow-hidden whitespace-nowrap @2xl:gap-6">
+			<div class="flex items-center gap-2">
+				<Network class="h-4 w-4 text-muted-foreground" />
+				<div class="text-sm">
+					<span class="font-semibold">{displayNodes}</span>
+					<span class="text-muted-foreground"> {hasNetworkData ? 'nodes' : 'devices'}</span>
+				</div>
 			</div>
-		</div>
 
-		<div class="flex items-center gap-2">
-			<Link class="h-4 w-4 text-muted-foreground" />
-			<div class="text-sm">
-				<span class="font-semibold">{useNetworkStats ? displayFlows : displayFlows.toLocaleString()}</span>
-				<span class="text-muted-foreground"> flows</span>
+			<div class="flex items-center gap-2">
+				<Link class="h-4 w-4 text-muted-foreground" />
+				<div class="text-sm">
+					<span class="font-semibold">{useNetworkStats ? displayFlows : displayFlows.toLocaleString()}</span>
+					<span class="text-muted-foreground"> flows</span>
+				</div>
 			</div>
-		</div>
 
-		<div class="h-6 w-px bg-border"></div>
+			<div class="hidden h-6 w-px bg-border @sm:block"></div>
 
-		<div class="text-sm">
-			<span class="text-muted-foreground">Traffic:</span>
-			<span class="ml-1 font-semibold text-primary">{formatBytes(displayBytes)}</span>
-		</div>
-
-		<div class="text-sm">
-			<span class="text-muted-foreground">Avg/Node:</span>
-			<span class="ml-1 font-semibold">{formatBytes(avgTrafficPerNode)}</span>
-		</div>
-
-		{#if peakNode}
-			<div class="text-sm" title="{peakNode.displayName} ({peakNode.ip}) - {formatBytes(peakNode.totalBytes)}">
-				<span class="text-muted-foreground">Peak:</span>
-				<span class="ml-1 font-semibold">{peakNode.displayName}</span>
-				<span class="ml-1 text-xs text-muted-foreground">({formatBytes(peakNode.totalBytes)})</span>
+			<div class="hidden text-sm @sm:block">
+				<span class="text-muted-foreground">Traffic:</span>
+				<span class="ml-1 font-semibold text-primary">{formatBytes(displayBytes)}</span>
 			</div>
-		{/if}
 
-		{#if lastUpdatedLabel}
-			<div class="h-6 w-px bg-border"></div>
-			<div class="text-xs text-muted-foreground/70" title={$lastUpdated?.toLocaleString()}>
-				Updated {lastUpdatedLabel}
+			<div class="hidden text-sm @xl:block">
+				<span class="text-muted-foreground">Avg/Node:</span>
+				<span class="ml-1 font-semibold">{formatBytes(avgTrafficPerNode)}</span>
 			</div>
-		{/if}
+
+			{#if peakNode}
+				<div class="hidden min-w-0 items-baseline text-sm @4xl:flex" title="{peakNode.displayName} ({peakNode.ip}) - {formatBytes(peakNode.totalBytes)}">
+					<span class="text-muted-foreground">Peak:</span>
+					<span class="ml-1 max-w-48 truncate font-semibold">{peakNode.displayName}</span>
+					<span class="ml-1 text-xs text-muted-foreground">({formatBytes(peakNode.totalBytes)})</span>
+				</div>
+			{/if}
+
+			{#if lastUpdatedLabel}
+				<div class="hidden h-6 w-px bg-border @5xl:block"></div>
+				<div class="hidden text-xs text-muted-foreground/70 @5xl:block" title={$lastUpdated?.toLocaleString()}>
+					Updated {lastUpdatedLabel}
+				</div>
+			{/if}
+		</div>
 	</div>
 	{/if}
 
