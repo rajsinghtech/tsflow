@@ -224,6 +224,8 @@ Omit `tailnets`, or include `"*"`, to allow every configured tailnet id. Those i
 
 Identity is logged per request only when `TSFLOW_LOG_LEVEL=debug`.
 
+A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For`, so it is not the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
+
 There are two front doors.
 
 **tsnet.** `TSFLOW_SERVE=true` with `TSFLOW_ACCESS_CAPABILITY` set. tsflow is already a node on the tailnet. Each request calls LocalAPI WhoIs on the connection's remote address and reads that peer's capability map. You can leave `TSFLOW_ACCESS_MODE` unset. Set it to `tsnet` if you want to be explicit. `TSFLOW_SERVE` must be true for that mode. Do not enable Funnel for this, because Funnel traffic has no tailnet identity and those requests are denied.
