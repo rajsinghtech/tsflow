@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,5 +72,9 @@ func (c *gcsBlobClient) List(ctx context.Context, prefix string) ([]blobObject, 
 }
 
 func (c *gcsBlobClient) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	return c.client.Bucket(c.bucket).Object(key).NewReader(ctx)
+	reader, err := c.client.Bucket(c.bucket).Object(key).NewReader(ctx)
+	if errors.Is(err, storage.ErrObjectNotExist) {
+		return nil, fmt.Errorf("%w: %w", errObjectGone, err)
+	}
+	return reader, err
 }

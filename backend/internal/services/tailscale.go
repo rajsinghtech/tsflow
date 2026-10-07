@@ -315,7 +315,7 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 			})
 		}
 
-		return &DevicesResponse{Devices: ourDevices}, nil
+		return &DevicesResponse{Devices: withEmptyLists(ourDevices)}, nil
 	}
 
 	// Fallback to old implementation
@@ -346,8 +346,27 @@ func (ts *TailscaleService) GetDevicesWithContext(parent context.Context) (*Devi
 		seenAt, _ := time.Parse(time.RFC3339, device.LastSeen)
 		device.Online = deviceIsOnline(device.ConnectedToControl, seenAt, time.Now())
 	}
+	response.Devices = withEmptyLists(response.Devices)
 
 	return &response, nil
+}
+
+// withEmptyLists replaces nil list fields, and a nil device list, with empty
+// lists. The UI types them as arrays, and a JSON null for one device with no
+// addresses stopped the traffic graph from loading.
+func withEmptyLists(devices []Device) []Device {
+	if devices == nil {
+		devices = []Device{}
+	}
+	for i := range devices {
+		d := &devices[i]
+		for _, list := range []*[]string{&d.Addresses, &d.EnabledRoutes, &d.AdvertisedRoutes, &d.Tags} {
+			if *list == nil {
+				*list = []string{}
+			}
+		}
+	}
+	return devices
 }
 
 func (ts *TailscaleService) GetUsers() ([]byte, error) {

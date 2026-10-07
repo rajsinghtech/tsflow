@@ -79,6 +79,16 @@ type TopTalker struct {
 	TotalBytes int64  `json:"totalBytes"`
 }
 
+// DevicePeer is one peer of a device, with byte totals in the device's
+// transmit and receive directions.
+type DevicePeer struct {
+	PeerID     string `json:"peerId"`
+	TxBytes    int64  `json:"txBytes"`
+	RxBytes    int64  `json:"rxBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+	FlowCount  int64  `json:"flowCount"`
+}
+
 // TopPair represents a node-to-node pair ranked by total traffic volume
 type TopPair struct {
 	SrcNodeID  string `json:"srcNodeId"`
@@ -283,6 +293,13 @@ type Store interface {
 	ListRankedTalkers(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedTalker, bool, error)
 	ListRankedPairs(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) ([]RankedPair, bool, error)
 	GetNodeStats(ctx context.Context, tailnetID string, nodeID string, start, end time.Time) (*NodeDetailStats, error)
+	// ListDevicePeers ranks peers of the given stored node ids. An empty
+	// trafficTypes list leaves out physical rows. Callers include aliases.
+	ListDevicePeers(ctx context.Context, tailnetID string, nodeIDs []string, start, end time.Time, trafficTypes []string, limit int) ([]DevicePeer, error)
+	// FlowsBetween returns aggregated rows for stored pairs whose endpoints
+	// fall in the two id sets, in either direction. An empty trafficTypes
+	// list leaves out physical rows.
+	FlowsBetween(ctx context.Context, tailnetID string, srcIDs, dstIDs []string, start, end time.Time, trafficTypes []string) ([]NodePairAggregate, error)
 	// DistinctPairs lists the distinct stored src/dst pairs across the whole
 	// window. Complete hours come from the hourly rollup. An empty
 	// trafficTypes list leaves out physical rows. Ids are as stored, so
