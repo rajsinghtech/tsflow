@@ -342,6 +342,7 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_SKIP_DB_BACKUP` | Skip the pre-migration database copy. Set `1` only when disk space is tight. | unset |
 | `TSFLOW_POLL_INTERVAL` | How often to import new flow logs | `5m` |
 | `TSFLOW_INITIAL_BACKFILL` | How far back to fetch logs on startup | `6h` |
+| `TSFLOW_POLL_DELAY` | API backend only. Each poll fetches logs up to now minus this delay, because the logs API can publish a message a little after its logged time and a window is never re-read. Set `0` to poll up to now. S3 and GCS polling use `TSFLOW_S3_LOOKBACK` instead. | `2m` |
 | `TSFLOW_RETENTION` | How long to keep flow data. Set `0` to disable cleanup. | `720h` for API mode, disabled for S3 mode |
 | `TSFLOW_FLOW_BACKEND` | Flow backend: `api`, `s3`, or `gcs` | `api` |
 | `TSFLOW_S3_AUTH` | `static`, `aws_default`, or `gcs_adc` | `static` |

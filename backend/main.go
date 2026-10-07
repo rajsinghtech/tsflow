@@ -250,6 +250,9 @@ func main() {
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
+	if pollerConfig.FlowBackend == config.FlowBackendAPI {
+		log.Printf("Poll Delay: %s", pollerConfig.PollDelay)
+	}
 	log.Printf("Retention: %s", pollerConfig.Retention)
 	log.Printf("Flow Backend: %s", pollerConfig.FlowBackend)
 	if pollerConfig.FlowBackend == "s3" || pollerConfig.FlowBackend == "gcs" {
