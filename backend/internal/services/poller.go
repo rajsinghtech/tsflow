@@ -524,8 +524,16 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 	// Convert to flow logs
 	flowLogs := p.convertLogs(logsResp)
 	if len(flowLogs) == 0 {
-		// Update poll state even with no logs
-		return p.store.UpdatePollState(ctx, p.tailnetIDOrDefault(), end)
+		// Update poll state even with no logs. The poll still succeeded, so
+		// the status records it, as an object-store poll with no objects does.
+		if err := p.store.UpdatePollState(ctx, p.tailnetIDOrDefault(), end); err != nil {
+			return err
+		}
+		p.mu.Lock()
+		p.lastPollTime = time.Now()
+		p.lastPollCount = 0
+		p.mu.Unlock()
+		return nil
 	}
 
 	// Pre-aggregate at poll time: node pairs, bandwidth, and traffic stats
