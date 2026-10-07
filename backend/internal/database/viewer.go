@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"sort"
 	"time"
 )
 
@@ -21,7 +22,8 @@ type ViewerDevice struct {
 	Online     bool     `json:"online"`
 }
 
-// ListViewerDevices returns every device whose merged login equals login.
+// ListViewerDevices returns every device whose merged login equals login,
+// busiest first.
 // A tagged device is included when its creator login was copied onto it.
 // Traffic totals use the same physical-exclusion rules as the other rankings.
 func (s *SQLiteStore) ListViewerDevices(ctx context.Context, tailnetID, login string, start, end time.Time, trafficTypes []string) ([]ViewerDevice, error) {
@@ -76,6 +78,17 @@ func (s *SQLiteStore) ListViewerDevices(ctx context.Context, tailnetID, login st
 		}
 		out = append(out, item)
 	}
+	// Busiest first. The summary builds timelines and peers for the first
+	// devices only, so id order would skip a busy device with a late id.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TotalBytes != out[j].TotalBytes {
+			return out[i].TotalBytes > out[j].TotalBytes
+		}
+		if out[i].Hostname != out[j].Hostname {
+			return out[i].Hostname < out[j].Hostname
+		}
+		return out[i].NodeID < out[j].NodeID
+	})
 	return out, nil
 }
 

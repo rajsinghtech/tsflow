@@ -289,7 +289,7 @@ type Store interface {
 	// type, plus one page of peers. Complete hours come from the rollup.
 	// An empty traffic type list leaves out physical.
 	GetDeviceTimeline(ctx context.Context, tailnetID, nodeID string, start, end time.Time, query TimelineQuery) (*DeviceTimeline, error)
-	// ListViewerDevices is every device whose merged login equals login,
+	// ListViewerDevices is every device whose merged login equals login, busiest first,
 	// including a tagged device's creator login. Traffic follows the same
 	// physical-exclusion rules as the rankings.
 	ListViewerDevices(ctx context.Context, tailnetID, login string, start, end time.Time, trafficTypes []string) ([]ViewerDevice, error)

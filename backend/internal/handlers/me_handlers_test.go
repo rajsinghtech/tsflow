@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -130,5 +132,55 @@ func TestViewerScopeNarrowsBySearch(t *testing.T) {
 	code, body = serve(ada, http.MethodGet, "/api/analytics/talkers"+window+"&me=1&q="+url.QueryEscape("bob-prod"))
 	if code != http.StatusOK || strings.Contains(string(body), "nBob00001CNTRL") || strings.Contains(string(body), "nBuild001CNTRL") {
 		t.Fatalf("me talkers with another owner's device: %d %s", code, body)
+	}
+}
+
+func TestViewerSummaryOrdersDevicesByTraffic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := setupHandlerTestDB(t)
+	h := &Handlers{store: store}
+	start := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	window := rankWindow(start, end)
+	base := start.Unix()
+	ctx := context.Background()
+	// Thirteen quiet devices sort ahead of the busy one by id. The summary
+	// builds timelines and peers for twelve devices, so it must pick by bytes.
+	var metadata []database.NodeMetadata
+	var rows []database.NodePairAggregate
+	for i := 0; i < 13; i++ {
+		id := fmt.Sprintf("nAda%05dCNTRL", i)
+		metadata = append(metadata, database.NodeMetadata{NodeID: id, Hostname: fmt.Sprintf("quiet-%02d", i), Owner: "ada@example.com"})
+		rows = append(rows, database.NodePairAggregate{Bucket: base + 60, SrcNodeID: id, DstNodeID: fmt.Sprintf("peer-%02d", i), TrafficType: "virtual", TxBytes: int64(10 + i), FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":10}`, Ports: "[]"})
+	}
+	metadata = append(metadata, database.NodeMetadata{NodeID: "nAdaZZZZZCNTRL", Hostname: "busy", Owner: "ada@example.com"})
+	rows = append(rows, database.NodePairAggregate{Bucket: base + 120, SrcNodeID: "nAdaZZZZZCNTRL", DstNodeID: "big-peer", TrafficType: "virtual", TxBytes: 5000, RxBytes: 100, FlowCount: 3, Protocols: "[6]", ProtocolBytes: `{"6":5100}`, Ports: "[]"})
+	if err := store.UpsertNodeMetadata(ctx, database.DefaultTailnetID, metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertNodePairAggregates(ctx, database.DefaultTailnetID, rows); err != nil {
+		t.Fatal(err)
+	}
+	code, body := serve(dataRouter(h, asViewer("ada@example.com")), http.MethodGet, "/api/analytics/me"+window)
+	if code != http.StatusOK {
+		t.Fatalf("viewer summary: %d %s", code, body)
+	}
+	var summary struct {
+		Devices []struct {
+			NodeID     string `json:"nodeId"`
+			TotalBytes int64  `json:"totalBytes"`
+		} `json:"devices"`
+		Peers []struct {
+			PeerID string `json:"peerId"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(body, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Devices) != 14 || summary.Devices[0].NodeID != "nAdaZZZZZCNTRL" || summary.Devices[0].TotalBytes != 5100 || summary.Devices[1].NodeID != "nAda00012CNTRL" {
+		t.Fatalf("device order: %s", body)
+	}
+	if len(summary.Peers) == 0 || summary.Peers[0].PeerID != "big-peer" {
+		t.Fatalf("top peers miss the busiest device: %s", body)
 	}
 }
