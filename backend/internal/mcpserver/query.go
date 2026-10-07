@@ -500,6 +500,11 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 		if !srcOK || !dstOK {
 			continue
 		}
+		// A device talking to itself, under one id or two of its ids, is
+		// not a new connection.
+		if srcID == dstID {
+			continue
+		}
 		if _, old := seen[[2]string{srcID, dstID}]; old {
 			continue
 		}

@@ -366,7 +366,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "new_connections",
-		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups.",
+		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups.",
 		Annotations: readOnly("New connections"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newConnectionsIn) (*mcp.CallToolResult, newConnectionsOut, error) {
 		out, err := s.newConnections(ctx, v, in)
