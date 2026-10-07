@@ -143,6 +143,9 @@ type RankQuery struct {
 	Tag          string
 	User         string
 	Q            string
+	// ExactUser requires the full login. The me scope sets this from the
+	// viewer identity. A client-supplied user filter stays a substring.
+	ExactUser bool
 }
 
 // PortStat represents traffic volume for a specific port/protocol
@@ -276,6 +279,12 @@ type Store interface {
 	// type, plus one page of peers. Complete hours come from the rollup.
 	// An empty traffic type list leaves out physical.
 	GetDeviceTimeline(ctx context.Context, tailnetID, nodeID string, start, end time.Time, query TimelineQuery) (*DeviceTimeline, error)
+	// ListViewerDevices is every device whose merged login equals login,
+	// including a tagged device's creator login. Traffic follows the same
+	// physical-exclusion rules as the rankings.
+	ListViewerDevices(ctx context.Context, tailnetID, login string, start, end time.Time, trafficTypes []string) ([]ViewerDevice, error)
+	// ViewerOwns reports whether nodeID belongs to login in this tailnet.
+	ViewerOwns(ctx context.Context, tailnetID, login, nodeID string) (bool, error)
 	// ListNewPairs lists src/dst pairs first seen in the window. Complete
 	// hours come from the hourly rollup. The bool is true when another row
 	// exists after this page. An empty traffic type list leaves out physical.

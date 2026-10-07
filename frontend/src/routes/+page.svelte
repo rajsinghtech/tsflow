@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { Loader2, AlertCircle, RefreshCw, X, Keyboard } from 'lucide-svelte';
 	import NetworkGraph from '#lib/components/graph/NetworkGraph.svelte';
 	import FilterPanel from '#lib/components/filters/FilterPanel.svelte';
@@ -12,8 +14,23 @@
 	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
 	import { uiStore } from '#lib/stores/ui-store';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
+	import { viewerReady, viewerStore } from '#lib/stores/viewer-store';
+	import { landingTarget, readLastTab, rememberTab } from '#lib/analytics/landing';
 
 	let isBootstrapping = $state(true);
+
+	$effect(() => {
+		if (!$viewerReady) return;
+		const target = landingTarget({
+			login: $viewerStore?.login,
+			pathname: page.url.pathname,
+			search: page.url.search,
+			stored: readLastTab()
+		});
+		if (!target || target === page.url.pathname) return;
+		rememberTab(target);
+		void goto(target);
+	});
 
 	onMount(() => {
 		let cancelled = false;

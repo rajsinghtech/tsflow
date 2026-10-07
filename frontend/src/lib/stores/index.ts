@@ -1,5 +1,5 @@
 export { filterStore, debouncedFilterStore } from './filter-store';
-export { viewerStore, loadViewerIdentity, type ViewerIdentity } from './viewer-store';
+export { viewerStore, viewerReady, loadViewerIdentity, type ViewerIdentity } from './viewer-store';
 export { uiStore } from './ui-store';
 export { themeStore, type ThemeMode } from './theme-store';
 export {

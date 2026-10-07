@@ -330,7 +330,7 @@ export const tailscaleService = {
 		nodeId: string,
 		start: Date,
 		end: Date,
-		options?: { limit?: number; offset?: number; trafficTypes?: string[]; signal?: AbortSignal }
+		options?: { limit?: number; offset?: number; trafficTypes?: string[]; me?: boolean; signal?: AbortSignal }
 	): Promise<{
 		nodeId: string;
 		hostname: string;
@@ -363,7 +363,61 @@ export const tailscaleService = {
 		if (options?.trafficTypes && options.trafficTypes.length > 0) {
 			params.set('trafficTypes', options.trafficTypes.join(','));
 		}
+		if (options?.me) params.set('me', '1');
 		return api.get(`/analytics/device-timeline?${params.toString()}`, { signal: options?.signal });
+	},
+
+	async getViewerSummary(
+		start: Date,
+		end: Date,
+		options?: { lookback?: string; trafficTypes?: string[]; signal?: AbortSignal }
+	): Promise<{
+		login: string;
+		devices: Array<{
+			nodeId: string;
+			hostname: string;
+			owner: string;
+			online: boolean;
+			tags?: string[];
+			txBytes: number;
+			rxBytes: number;
+			totalBytes: number;
+			flowCount: number;
+		}>;
+		traffic: { txBytes: number; rxBytes: number; totalBytes: number; flowCount: number };
+		timelines: Array<{
+			nodeId: string;
+			hostname: string;
+			buckets: Array<{
+				time: string;
+				seconds?: number;
+				virtual: { txBytes: number; rxBytes: number };
+				subnet: { txBytes: number; rxBytes: number };
+				exit: { txBytes: number; rxBytes: number };
+				physical?: { txBytes: number; rxBytes: number };
+			}>;
+			peers: Array<{ peerId: string; hostname: string; totalBytes: number; flowCount: number }>;
+		}>;
+		peers: Array<{ peerId: string; hostname: string; totalBytes: number; flowCount: number }>;
+		newPairs: Array<{
+			srcNodeId: string;
+			srcHostname: string;
+			dstNodeId: string;
+			dstHostname: string;
+			totalBytes: number;
+			flowCount: number;
+			firstSeen: string;
+		}>;
+	}> {
+		const params = new URLSearchParams({
+			start: start.toISOString(),
+			end: end.toISOString()
+		});
+		if (options?.lookback) params.set('lookback', options.lookback);
+		if (options?.trafficTypes && options.trafficTypes.length > 0) {
+			params.set('trafficTypes', options.trafficTypes.join(','));
+		}
+		return api.get(`/analytics/me?${params.toString()}`, { signal: options?.signal });
 	},
 
 	async getNodeStats(nodeId: string, start: Date, end: Date): Promise<NodeDetailStats> {

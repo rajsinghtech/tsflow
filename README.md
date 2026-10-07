@@ -382,6 +382,10 @@ An hour that sits fully inside the window is read from the hourly rollup (`node_
 
 Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
 
+### Me
+
+`GET /api/analytics/me` is the signed-in viewer's devices, traffic, per-device timelines, top peers, and new connections. The login is the request identity from WhoIs or the trusted proxy headers. A client `user` parameter is ignored. `me=1` on the talker, pair, new-pair, and device-timeline routes uses that same login and compares it in full, including a tagged device's creator login. Without a login the route is unauthorized, and the Me tab is not shown. When a login is known, `/` opens Me unless the address has query parameters or the viewer already chose another tab. That choice is stored in `tsflow-last-tab`.
+
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`

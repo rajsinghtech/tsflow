@@ -98,7 +98,7 @@ func (s *SQLiteStore) ListRankedPairs(ctx context.Context, tailnetID string, sta
 
 // Identity normalizes the optional tag, user, and text filters on a ranked read.
 func (q RankQuery) Identity() (IdentityQuery, error) {
-	return IdentityQuery{Tag: q.Tag, User: q.User, Q: q.Q}.normalized()
+	return IdentityQuery{Tag: q.Tag, User: q.User, Q: q.Q, ExactUser: q.ExactUser}.normalized()
 }
 
 func (s *SQLiteStore) prepareRank(ctx context.Context, tailnetID string, start, end time.Time, query RankQuery) (string, []any, int, int, string, error) {

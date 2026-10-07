@@ -9,7 +9,7 @@
 	import { selectedDeviceId, timelineColumns, type TimelineColumn } from '#lib/analytics/device-timeline';
 	import { formatBytes } from '#lib/utils';
 
-	let { nodeId = null }: { nodeId?: string | null } = $props();
+	let { nodeId = null, scoped = false }: { nodeId?: string | null; scoped?: boolean } = $props();
 
 	interface PeerRow {
 		peerId: string;
@@ -54,7 +54,8 @@
 			const response = await tailscaleService.getDeviceTimeline(nodeId, start, end, {
 				limit: pageSize,
 				offset: pageOffset,
-				trafficTypes: types
+				trafficTypes: types,
+				me: scoped
 			});
 			if (token !== loadToken) return;
 			hostname = response.hostname || nodeId;

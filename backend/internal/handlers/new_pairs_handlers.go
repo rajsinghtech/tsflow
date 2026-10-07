@@ -45,6 +45,14 @@ func (h *Handlers) GetNewPairs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	scope, ok := h.viewerScope(c)
+	if !ok {
+		return
+	}
+	if scope.active {
+		query.User = scope.login
+		query.ExactUser = true
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
 	defer cancel()
