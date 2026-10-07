@@ -74,7 +74,7 @@ func (p *Poller) convertTailscaleLog(tsLog tailscale.NetworkFlowLog) []database.
 	}
 
 	appendTraffic := func(traffic tailscale.TrafficStats, trafficType string, includeRx bool) {
-		srcIP, dstIP, ok := flowEndpoints(traffic.Src, traffic.Dst)
+		srcIP, dstIP, ok := trafficEndpoints(trafficType, traffic.Src, traffic.Dst)
 		if !ok {
 			return
 		}
@@ -138,7 +138,7 @@ func (p *Poller) convertMapLog(logMap map[string]any) []database.FlowLog {
 			isPhysical := typeName == "physical"
 			for _, t := range traffic {
 				if tMap, ok := t.(map[string]any); ok {
-					srcIP, dstIP, endpointOK := flowEndpoints(getString(tMap, "src"), getString(tMap, "dst"))
+					srcIP, dstIP, endpointOK := trafficEndpoints(typeName, getString(tMap, "src"), getString(tMap, "dst"))
 					if !endpointOK {
 						continue
 					}
@@ -198,6 +198,31 @@ func flowEndpoints(src, dst string) (string, string, bool) {
 	srcIP := strings.TrimSpace(extractIP(src))
 	dstIP := strings.TrimSpace(extractIP(dst))
 	return srcIP, dstIP, srcIP != "" && dstIP != ""
+}
+
+// ExitInternetEndpoint stands in for the public side of exit-node traffic.
+// Unless destination logging is on, Tailscale blanks that side: the
+// client's record has a src and no dst, and the exit node's record has a
+// dst and no src. Without a stand-in every such row was dropped, so exit
+// traffic read as zero on tailnets with the default logging settings.
+const ExitInternetEndpoint = "internet"
+
+// trafficEndpoints is flowEndpoints, plus the exit-traffic stand-in for a
+// blank public side. Rows with neither side, or a blank side on any other
+// traffic type, are still skipped.
+func trafficEndpoints(trafficType, src, dst string) (string, string, bool) {
+	srcIP, dstIP, ok := flowEndpoints(src, dst)
+	if ok || trafficType != "exit" {
+		return srcIP, dstIP, ok
+	}
+	switch {
+	case srcIP == "" && dstIP != "":
+		return ExitInternetEndpoint, dstIP, true
+	case dstIP == "" && srcIP != "":
+		return srcIP, ExitInternetEndpoint, true
+	default:
+		return "", "", false
+	}
 }
 
 // splitEndpoint separates an address from an optional port without treating

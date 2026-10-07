@@ -28,6 +28,9 @@ type Options struct {
 	WhoIs    access.WhoIsClient
 	Handlers *handlers.Handlers
 	Version  string
+	// RateLimit, when set, runs before access checks on every /mcp request,
+	// as it does for /api. Tool calls run the same store queries as /api.
+	RateLimit gin.HandlerFunc
 }
 
 // Viewer is the identity the access middleware attached to one HTTP request.
@@ -131,6 +134,9 @@ func Mount(router *gin.Engine, opts Options) {
 	chain := []gin.HandlerFunc{handle}
 	if opts.Access.Enabled {
 		chain = append([]gin.HandlerFunc{access.Middleware(opts.Access, opts.WhoIs)}, chain...)
+	}
+	if opts.RateLimit != nil {
+		chain = append([]gin.HandlerFunc{opts.RateLimit}, chain...)
 	}
 	router.POST("/mcp", chain...)
 	router.GET("/mcp", chain...)
