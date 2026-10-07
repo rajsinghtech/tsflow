@@ -177,8 +177,9 @@ type ObjectIngestResult struct {
 }
 
 // NodeMetadata stores node identities embedded in exported flow-log objects.
-// Tailscale flow logs use n...CNTRL node IDs that are distinct from the live
-// Devices API IDs, so this metadata is required to render historical data.
+// A flow log may identify a node by its stable nodeId or by the legacy numeric
+// id. The device cache merges that record into the API device when they are
+// the same node.
 type NodeMetadata struct {
 	NodeID   string    `json:"nodeId"`
 	Name     string    `json:"name"`
@@ -248,6 +249,10 @@ type Store interface {
 	FillMissingTrafficStats(ctx context.Context, tailnetID string, start, end time.Time, primary []TrafficStats) ([]TrafficStats, error)
 	GetTopTalkers(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopTalker, error)
 	GetTopTalkersByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopTalker, error)
+	// ActiveNodeIDs lists the distinct stored node ids with traffic in the
+	// window. A self-pair lists its node once. Ranking limits do not apply.
+	// Ids are as stored, so callers resolve aliases before counting devices.
+	ActiveNodeIDs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]string, error)
 	GetTopPairs(ctx context.Context, tailnetID string, start, end time.Time, limit int) ([]TopPair, error)
 	GetTopPairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string, limit int) ([]TopPair, error)
 	// ListRankedTalkers and ListRankedPairs page device and pair totals.

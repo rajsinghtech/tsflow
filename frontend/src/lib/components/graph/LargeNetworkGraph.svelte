@@ -13,10 +13,10 @@
 		type ColorMode
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { uiStore, themeStore } from '#lib/stores';
+	import { uiStore, themeStore, searchMatchedNodeIds } from '#lib/stores';
 	import type { NetworkLink, NetworkNode as NetworkNodeType } from '#lib/types';
 	import { runElkGraph, runElkLayout } from '#lib/utils/elk-layout';
-	import { boundsOf, buildRenderModel, cullToViewport } from '#lib/graph/aggregate';
+	import { boundsOf, buildRenderModel, cullToViewport, groupIdsContaining } from '#lib/graph/aggregate';
 	import {
 		GROUP_LAYOUT_OPTIONS,
 		buildCompoundGraph,
@@ -158,28 +158,55 @@
 		return `${nodeList.length}:${edgeList.length}:${sum}:${xor}`;
 	}
 
-	async function layoutGroups(nodeList: NetworkNodeType[], edgeList: NetworkLink[]) {
+	async function layoutGroups(
+		nodeList: NetworkNodeType[],
+		edgeList: NetworkLink[],
+		matched: ReadonlySet<string>
+	) {
 		const token = ++requestToken;
 		const started = performance.now();
 		layoutPending = sceneNodes.length === 0;
 		const devices = new Map(nodeList.map((node) => [node.id, node]));
-		const model = buildRenderModel(nodeList, edgeList, new Set());
-		const flow = modelToFlow(model, devices);
-		const laid = await runElkLayout(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
+		const collapsed = buildRenderModel(nodeList, edgeList, new Set());
+		const openIds = groupIdsContaining(collapsed, matched);
+		const model =
+			openIds.length > 0 ? buildRenderModel(nodeList, edgeList, new Set(openIds)) : collapsed;
+		const collapsedFlow = modelToFlow(collapsed, devices, matched);
+		const flow = model === collapsed ? collapsedFlow : modelToFlow(model, devices, matched);
+		const collapsedLaid = await runElkLayout(collapsedFlow.nodes, collapsedFlow.edges, GROUP_LAYOUT_OPTIONS);
 		if (token !== requestToken) return;
-		const boxes = laid.nodes.map((node) => nodeBox(node));
+		let laid = collapsedLaid;
+		if (flow !== collapsedFlow) {
+			laid = await runElkLayout(flow.nodes, flow.edges, GROUP_LAYOUT_OPTIONS);
+			if (token !== requestToken) return;
+		}
+		const boxes = absoluteBoxes(laid.nodes);
+		const focusIds = new Set(matched);
+		for (const node of laid.nodes) {
+			const data = node.data as { searchMatch?: boolean };
+			if (data?.searchMatch) focusIds.add(node.id);
+		}
+		const focus = boxes.filter((box) => focusIds.has(box.id));
+		const fit = focus.length > 0 ? focus : boxes;
 		if (paneWidth > 0 && paneHeight > 0) {
-			const next = getViewportForBounds(boxes.length ? boundsOf(boxes) : { x: 0, y: 0, width: 1, height: 1 }, paneWidth, paneHeight, 0.02, 1.25, 0.12);
+			const next = getViewportForBounds(
+				fit.length ? boundsOf(fit) : { x: 0, y: 0, width: 1, height: 1 },
+				paneWidth,
+				paneHeight,
+				0.02,
+				1.25,
+				0.12
+			);
 			viewX = next.x;
 			viewY = next.y;
 			viewZoom = next.zoom;
-			flowApi?.setViewport(next, { duration: 300 });
+			flowApi?.setViewport(next, { duration: focus.length > 0 ? 600 : 300 });
 		}
 		sceneNodes = laid.nodes;
 		sceneEdges = laid.edges;
-		flatNodes = laid.nodes;
-		flatEdges = laid.edges;
-		for (const node of laid.nodes) {
+		flatNodes = collapsedLaid.nodes;
+		flatEdges = collapsedLaid.edges;
+		for (const node of collapsedLaid.nodes) {
 			const data = node.data as { kind?: string };
 			if (data?.kind === 'group') {
 				groupHome.set(node.id, {
@@ -192,16 +219,20 @@
 		}
 		deviceCount = model.deviceCount;
 		groupCount = model.groupCount;
-		expanded = [];
+		expanded = openIds.map((id) => {
+			const group = collapsed.nodes.find((node) => node.id === id);
+			return { id, label: group?.label || id };
+		});
 		layoutPending = false;
 		if (firstMs === 0) firstMs = Math.round(performance.now() - started);
 	}
 
 	$effect(() => {
-		const key = topologyKey(nodes, edges);
+		const matched = $searchMatchedNodeIds;
+		const key = `${topologyKey(nodes, edges)}|${[...matched].sort().join(',')}`;
 		if (key === sourceKey) return;
 		sourceKey = key;
-		void layoutGroups(nodes, edges);
+		void layoutGroups(nodes, edges, matched);
 	});
 
 	async function expandGroup(groupId: string) {
@@ -246,12 +277,12 @@
 		}, 650);
 	}
 
-	function collapseGroup(groupId: string) {
+	function collapseGroup(_groupId: string) {
 		sceneNodes = flatNodes.map((node) => ({ ...node, position: { ...node.position } }));
 		sceneEdges = flatEdges;
 		const model = buildRenderModel(nodes, edges, new Set());
 		groupCount = model.groupCount;
-		expanded = expanded.filter((item) => item.id !== groupId);
+		expanded = [];
 		cameraFor(
 			sceneNodes.filter((node) => !node.parentId).map((node) => nodeBox(node)),
 			400

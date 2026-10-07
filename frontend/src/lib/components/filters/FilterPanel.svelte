@@ -106,7 +106,8 @@
 		<ul class="mt-1 space-y-0.5 text-xs text-muted-foreground">
 			<li>• <span class="text-primary">tag:k8s</span> - Find devices with specific tags</li>
 			<li>• <span class="text-primary">ip:100.88</span> - Find devices by IP address</li>
-			<li>• <span class="text-primary">user@github</span> - Find devices by user</li>
+			<li>• <span class="text-primary">alice@example.com</span> - Find devices by user login</li>
+			<li>• <span class="text-primary">user@alice</span> - Find devices by part of a login</li>
 			<li>• Regular text searches device names, IPs, and tags</li>
 		</ul>
 	</div>

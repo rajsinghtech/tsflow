@@ -56,6 +56,13 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 			nodeID = resolved
 		}
 	}
+	// Historical rows may use either the stable node id or the legacy numeric id.
+	queryIDs := []string{nodeID}
+	if nodeID != "" && tn.poller != nil {
+		if equiv := tn.poller.GetDeviceCache().EquivalentIDs(nodeID); len(equiv) > 1 {
+			queryIDs = equiv
+		}
+	}
 
 	var buckets []database.BandwidthBucket
 	source := "database"
@@ -66,10 +73,27 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		cacheHasData := cache.HasBandwidthDataFor(startTime, endTime)
 		if nodeID != "" {
 			cacheHasData = cache.HasNodeBandwidthDataFor(startTime, endTime, nodeID)
+			if len(queryIDs) > 1 {
+				cacheHasData = true
+				for _, id := range queryIDs {
+					if !cache.HasNodeBandwidthDataFor(startTime, endTime, id) {
+						cacheHasData = false
+						break
+					}
+				}
+			}
 		}
 		if cacheHasData {
 			if nodeID != "" {
-				buckets = cache.GetNodeBandwidth(startTime, endTime, nodeID)
+				if len(queryIDs) == 1 {
+					buckets = cache.GetNodeBandwidth(startTime, endTime, nodeID)
+				} else {
+					parts := make([][]database.BandwidthBucket, 0, len(queryIDs))
+					for _, id := range queryIDs {
+						parts = append(parts, cache.GetNodeBandwidth(startTime, endTime, id))
+					}
+					buckets = mergeBandwidthBuckets(parts...)
+				}
 			} else {
 				buckets = cache.GetBandwidth(startTime, endTime)
 			}
@@ -83,10 +107,27 @@ func (h *Handlers) GetBandwidthAggregated(c *gin.Context) {
 		defer cancel()
 
 		if nodeID != "" {
-			if len(trafficTypes) > 0 {
-				buckets, err = h.store.GetNodeBandwidthByTrafficTypes(ctx, tn.id, startTime, endTime, nodeID, trafficTypes)
+			nodeBandwidth := func(id string) ([]database.BandwidthBucket, error) {
+				if len(trafficTypes) > 0 {
+					return h.store.GetNodeBandwidthByTrafficTypes(ctx, tn.id, startTime, endTime, id, trafficTypes)
+				}
+				return h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, id)
+			}
+			if len(queryIDs) == 1 {
+				buckets, err = nodeBandwidth(nodeID)
 			} else {
-				buckets, err = h.store.GetNodeBandwidth(ctx, tn.id, startTime, endTime, nodeID)
+				parts := make([][]database.BandwidthBucket, 0, len(queryIDs))
+				for _, id := range queryIDs {
+					var part []database.BandwidthBucket
+					part, err = nodeBandwidth(id)
+					if err != nil {
+						break
+					}
+					parts = append(parts, part)
+				}
+				if err == nil {
+					buckets = mergeBandwidthBuckets(parts...)
+				}
 			}
 		} else if len(trafficTypes) > 0 {
 			// Any explicit list, including all four types, is read from node
@@ -191,6 +232,32 @@ func applyBucketCoverage(buckets []database.BandwidthBucket, start, end time.Tim
 	}
 }
 
+func mergeBandwidthBuckets(parts ...[]database.BandwidthBucket) []database.BandwidthBucket {
+	totals := make(map[int64]*database.BandwidthBucket)
+	order := make([]int64, 0)
+	for _, part := range parts {
+		for _, bucket := range part {
+			key := bucket.Time.UTC().Unix()
+			existing, ok := totals[key]
+			if !ok {
+				copyBucket := bucket
+				copyBucket.Time = bucket.Time.UTC()
+				totals[key] = &copyBucket
+				order = append(order, key)
+				continue
+			}
+			existing.TxBytes += bucket.TxBytes
+			existing.RxBytes += bucket.RxBytes
+		}
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	merged := make([]database.BandwidthBucket, 0, len(order))
+	for _, key := range order {
+		merged = append(merged, *totals[key])
+	}
+	return merged
+}
+
 func parseBandwidthTrafficTypes(raw string) ([]string, error) {
 	if raw == "" {
 		return nil, nil
@@ -265,7 +332,9 @@ func (h *Handlers) GetBandwidthByIPs(c *gin.Context) {
 		cache := tn.poller.GetDeviceCache()
 		for _, ip := range ips {
 			nodeID := cache.ResolveIP(ip)
-			nodeIDs[nodeID] = true
+			for _, id := range cache.EquivalentIDs(nodeID) {
+				nodeIDs[id] = true
+			}
 		}
 	} else {
 		// Fallback: use IPs as node IDs (for external IPs)

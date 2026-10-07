@@ -22,7 +22,7 @@
 		dataSourceStore,
 		filterStore
 	} from '#lib/stores';
-	import { formatBytes } from '#lib/utils';
+	import { formatBytes, resolveActiveNodeCount } from '#lib/utils';
 	import { getPortLabel } from '#lib/utils/protocol';
 	import type { TrafficType } from '#lib/types';
 
@@ -322,7 +322,7 @@
 				</StatCard>
 				<StatCard
 					label="Active Devices"
-					value={$topTalkers.length.toString()}
+					value={resolveActiveNodeCount($statsSummary?.totalNodes).toLocaleString()}
 					subtitle="With traffic"
 				>
 					{#snippet icon()}<Network class="h-4 w-4" />{/snippet}

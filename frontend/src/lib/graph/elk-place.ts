@@ -61,15 +61,26 @@ export function flowEdges(edges: RenderEdge[]): Edge[] {
 
 export function modelToFlow(
 	model: RenderModel,
-	devices: Map<string, NetworkNode>
+	devices: Map<string, NetworkNode>,
+	matched: ReadonlySet<string> = new Set()
 ): { nodes: Node[]; edges: Edge[] } {
 	return {
 		nodes: model.nodes.map((node) => {
 			if (node.kind === 'device' && node.deviceId) {
 				const device = devices.get(node.deviceId);
-				if (device) return deviceFlowNode(device);
+				if (device) {
+					const flow = deviceFlowNode(device);
+					if (matched.has(node.deviceId)) {
+						flow.data = { ...flow.data, searchMatch: true };
+					}
+					return flow;
+				}
 			}
-			return groupFlowNode(node);
+			const flow = groupFlowNode(node);
+			if (node.memberIds.some((id) => matched.has(id))) {
+				flow.data = { ...flow.data, searchMatch: true };
+			}
+			return flow;
 		}),
 		edges: flowEdges(model.edges)
 	};
