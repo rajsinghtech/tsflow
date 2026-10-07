@@ -170,8 +170,14 @@ func fixtureWindows(mark int64, n int) [][2]int64 {
 
 func assertFixtureWindows(t *testing.T, store *SQLiteStore, mark int64, n int) {
 	t.Helper()
+	windows := fixtureWindows(mark, n)
+	if raceEnabled {
+		// A whole-fixture window, a ragged one through the mark and one from
+		// the epoch. The plain run checks every window.
+		windows = [][2]int64{windows[0], windows[3], windows[8]}
+	}
 	for _, tailnet := range []string{DefaultTailnetID, "other"} {
-		for _, w := range fixtureWindows(mark, n) {
+		for _, w := range windows {
 			assertSamePairAPI(t, store, tailnet, time.Unix(w[0], 0).UTC(), time.Unix(w[1], 0).UTC())
 		}
 	}
