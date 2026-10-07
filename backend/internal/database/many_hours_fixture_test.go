@@ -138,8 +138,8 @@ func lateWrite(t *testing.T, store *SQLiteStore, tailnet string, bucket int64, s
 }
 
 // fixtureWindows returns windows over the fixture: whole hours, ragged
-// edges, unaligned seconds, windows that end at or past the mark, and
-// windows that miss the data.
+// edges, unaligned seconds, windows that end at or past the mark, windows
+// that start at the Unix epoch, and windows that miss the data.
 func fixtureWindows(mark int64, n int) [][2]int64 {
 	rng := rand.New(rand.NewSource(11))
 	end := manyHourBase + 30*hourSeconds
@@ -152,6 +152,8 @@ func fixtureWindows(mark int64, n int) [][2]int64 {
 		{manyHourBase + 3*hourSeconds + 59*minuteSeconds, manyHourBase + 6*hourSeconds + 1},
 		{manyHourBase - 2*hourSeconds, manyHourBase + hourSeconds},
 		{end + hourSeconds, end + 2*hourSeconds},
+		{0, end + hourSeconds}, // from the Unix epoch, like a poller readiness check
+		{0, mark + 7*minuteSeconds},
 	}
 	for len(windows) < n {
 		a := manyHourBase - hourSeconds + rng.Int63n(32*hourSeconds)

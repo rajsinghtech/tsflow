@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,14 +13,14 @@ func TestSplitClosedHours(t *testing.T) {
 	const h = hourSeconds
 	mark := 4*h + 29*60 // rolled through 4:29
 	closed, open := splitClosedHours([][2]int64{{h, 4*h + 30*60}}, mark)
-	if want := []int64{h, 2 * h, 3 * h}; !reflect.DeepEqual(closed, want) {
+	if want := [][2]int64{{h, 4 * h}}; !reflect.DeepEqual(closed, want) {
 		t.Fatalf("closed = %v, want %v", closed, want)
 	}
 	if want := [][2]int64{{4 * h, 4*h + 30*60}}; !reflect.DeepEqual(open, want) {
 		t.Fatalf("open = %v, want %v", open, want)
 	}
 	closed, open = splitClosedHours([][2]int64{{h, 3 * h}}, mark)
-	if want := []int64{h, 2 * h}; !reflect.DeepEqual(closed, want) || open != nil {
+	if want := [][2]int64{{h, 3 * h}}; !reflect.DeepEqual(closed, want) || open != nil {
 		t.Fatalf("all closed: closed=%v open=%v", closed, open)
 	}
 	closed, open = splitClosedHours([][2]int64{{h, 3 * h}}, -1)
@@ -28,8 +29,85 @@ func TestSplitClosedHours(t *testing.T) {
 	}
 	// An hour-aligned mark closes the hour it ends.
 	closed, open = splitClosedHours([][2]int64{{h, 3 * h}}, 3*h-60)
-	if want := []int64{h, 2 * h}; !reflect.DeepEqual(closed, want) || open != nil {
+	if want := [][2]int64{{h, 3 * h}}; !reflect.DeepEqual(closed, want) || open != nil {
 		t.Fatalf("aligned mark: closed=%v open=%v", closed, open)
+	}
+	// A mark inside the first hour closes nothing.
+	closed, open = splitClosedHours([][2]int64{{h, 3 * h}}, h+60)
+	if closed != nil || !reflect.DeepEqual(open, [][2]int64{{h, 3 * h}}) {
+		t.Fatalf("early mark: closed=%v open=%v", closed, open)
+	}
+}
+
+// Only hours with rollup rows become work items, so a window from the Unix
+// epoch costs one read per stored hour, not one per hour since 1970.
+func TestListRolledHoursSkipsEmptyHours(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	const h = hourSeconds
+	base := int64(1_790_000_000) / h * h
+	stored := []int64{base, base + 3*h, base + 4*h, base + 50*h}
+	for _, hour := range stored {
+		insertHourRow(t, store, DefaultTailnetID, hour)
+	}
+	insertHourRow(t, store, "other", base+h)
+
+	got, err := listRolledHours(ctx, store.db, DefaultTailnetID, [][2]int64{{0, base + 100*h}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, stored) {
+		t.Fatalf("hours = %v, want %v", got, stored)
+	}
+	got, err = listRolledHours(ctx, store.db, DefaultTailnetID, [][2]int64{{base + h, base + 4*h}, {base + 5*h, base + 51*h}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{base + 3*h, base + 50*h}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounded hours = %v, want %v", got, want)
+	}
+	got, err = listRolledHours(ctx, store.db, DefaultTailnetID, [][2]int64{{base + 5*h, base + 50*h}})
+	if err != nil || got != nil {
+		t.Fatalf("empty range = %v, %v", got, err)
+	}
+
+	plan, err := store.db.Query("EXPLAIN QUERY PLAN "+rolledHourSeekSQL, DefaultTailnetID, 0, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	for plan.Next() {
+		var id, parent, unused int
+		var d string
+		if err := plan.Scan(&id, &parent, &unused, &d); err != nil {
+			t.Fatal(err)
+		}
+		detail += d + ";"
+	}
+	plan.Close()
+	if !strings.Contains(detail, "PRIMARY KEY") || strings.Contains(detail, "SCAN") {
+		t.Fatalf("rolled hour seek plan = %q", detail)
+	}
+
+	// The whole read from the epoch sees every stored hour once.
+	if err := setHourMark(ctx, store.db, DefaultTailnetID, base+60*h); err != nil {
+		t.Fatal(err)
+	}
+	pairs, err := store.GetNodePairAggregates(ctx, DefaultTailnetID, time.Unix(0, 0), time.Unix(base+100*h, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 1 || pairs[0].TxBytes != int64(len(stored)) {
+		t.Fatalf("epoch window pairs = %+v", pairs)
+	}
+}
+
+func insertHourRow(t *testing.T, store *SQLiteStore, tailnetID string, hour int64) {
+	t.Helper()
+	if _, err := store.db.Exec(`
+		INSERT INTO node_pair_hours (tailnet_id, bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count, protocols, ports, min_bucket)
+		VALUES (?, ?, 'a', 'b', 'virtual', 1, 0, 1, 0, 1, '[6]', '[]', ?)`, tailnetID, hour, hour); err != nil {
+		t.Fatal(err)
 	}
 }
 

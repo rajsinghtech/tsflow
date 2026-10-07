@@ -84,7 +84,11 @@ func (s *SQLiteStore) GetNodePairAggregates(ctx context.Context, tailnetID strin
 	// is read from exactly one of the two tables, so a newer snapshot cannot
 	// double count. The filling hour and minutes after the mark stay on this
 	// snapshot, because a moving mark would shift rows between the tables.
-	closedHours, openHours := splitClosedHours(plan.hours, plan.mark)
+	closedHourRanges, openHours := splitClosedHours(plan.hours, plan.mark)
+	closedHours, err := listRolledHours(ctx, tx, tailnetID, closedHourRanges)
+	if err != nil {
+		return nil, err
+	}
 	closedMinutes, openMinutes := splitClosedMinutes(plan.minutes, plan.mark)
 	grouped := make(map[pairGroupKey]*pairGroup)
 	if err := collectPairGroups(ctx, tx, tailnetID, hourPlan{minutes: openMinutes, hours: openHours}, grouped); err != nil {

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"runtime"
 	"sync"
@@ -21,24 +22,58 @@ var maxClosedHourReaders = func() int {
 	return n
 }()
 
-// splitClosedHours separates hour buckets whose every minute is already in
+// splitClosedHours separates hour ranges whose every minute is already in
 // the rollup (closed) from the filling hour, which must be read on the same
 // snapshot as the mark. spans are plan.hours.
-func splitClosedHours(spans [][2]int64, mark int64) (closed []int64, open [][2]int64) {
+func splitClosedHours(spans [][2]int64, mark int64) (closed, open [][2]int64) {
 	if mark < 0 {
 		return nil, spans
 	}
 	rolledUntil := mark + minuteSeconds
 	for _, span := range spans {
-		h := span[0]
-		for ; h+hourSeconds <= span[1] && h+hourSeconds <= rolledUntil; h += hourSeconds {
-			closed = append(closed, h)
+		cut := span[0]
+		for cut+hourSeconds <= span[1] && cut+hourSeconds <= rolledUntil {
+			cut += hourSeconds
 		}
-		if h < span[1] {
-			open = append(open, [2]int64{h, span[1]})
+		if cut > span[0] {
+			closed = append(closed, [2]int64{span[0], cut})
+		}
+		if cut < span[1] {
+			open = append(open, [2]int64{cut, span[1]})
 		}
 	}
 	return closed, open
+}
+
+// rolledHourSeekSQL finds the next hour that has rollup rows. It is a seek
+// on the primary key, which starts with (tailnet_id, bucket).
+const rolledHourSeekSQL = `
+	SELECT MIN(bucket) FROM node_pair_hours
+	WHERE tailnet_id = ? AND bucket >= ? AND bucket < ?
+`
+
+// listRolledHours returns the hours in ranges that have rollup rows, one
+// seek per hour found. A window that starts long before the data, such as
+// one from the Unix epoch, becomes one work item per stored hour rather
+// than one per hour since the start.
+func listRolledHours(ctx context.Context, q queryRower, tailnetID string, ranges [][2]int64) ([]int64, error) {
+	var hours []int64
+	for _, span := range ranges {
+		lo := span[0]
+		for lo < span[1] {
+			var next sql.NullInt64
+			if err := q.QueryRowContext(ctx, rolledHourSeekSQL, tailnetID, lo, span[1]).Scan(&next); err != nil {
+				return nil, fmt.Errorf("failed to find rolled hours: %w", err)
+			}
+			if !next.Valid {
+				break
+			}
+			hour := (next.Int64 / hourSeconds) * hourSeconds
+			hours = append(hours, hour)
+			lo = hour + hourSeconds
+		}
+	}
+	return hours, nil
 }
 
 // closedMinuteChunk is how many closed minutes one parallel work item reads.
