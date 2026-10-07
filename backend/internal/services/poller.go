@@ -17,6 +17,12 @@ type PollerConfig struct {
 	PollInterval time.Duration
 	// InitialBackfill is how far back to fetch on first run
 	InitialBackfill time.Duration
+	// PollDelay holds the API backend back from the newest logs. The logs
+	// API can return a message some time after its logged timestamp, and the
+	// cursor never revisits a window, so a poll that ends at "now" drops logs
+	// that become visible later. Polls end at now minus PollDelay. Zero
+	// disables it. Object-store polling has its own lookback and ignores it.
+	PollDelay time.Duration
 	// Retention is how long to keep flow data
 	Retention time.Duration
 	// CleanupInterval is how often to run cleanup
@@ -32,11 +38,15 @@ type PollerConfig struct {
 	TailnetID string
 }
 
+// DefaultPollDelay is how far behind now API polls end by default.
+const DefaultPollDelay = 2 * time.Minute
+
 // DefaultPollerConfig returns sensible defaults
 func DefaultPollerConfig() PollerConfig {
 	return PollerConfig{
 		PollInterval:       5 * time.Minute,
 		InitialBackfill:    6 * time.Hour,
+		PollDelay:          DefaultPollDelay,
 		Retention:          30 * 24 * time.Hour,
 		CleanupInterval:    1 * time.Hour,
 		DeviceCacheRefresh: 5 * time.Minute,
@@ -96,6 +106,9 @@ func (c PollerConfig) validate() error {
 	}
 	if c.InitialBackfill <= 0 {
 		return fmt.Errorf("initial backfill must be positive")
+	}
+	if c.PollDelay < 0 {
+		return fmt.Errorf("poll delay must not be negative")
 	}
 	if c.Retention < 0 {
 		return fmt.Errorf("retention must not be negative")
@@ -379,6 +392,9 @@ func (p *Poller) poll(ctx context.Context) error {
 
 	var start time.Time
 	end := time.Now()
+	if p.objectStore == nil && p.config.PollDelay > 0 {
+		end = end.Add(-p.config.PollDelay)
+	}
 
 	if pollState.LastPollEnd.IsZero() {
 		// First poll - backfill
@@ -391,6 +407,11 @@ func (p *Poller) poll(ctx context.Context) error {
 
 	if p.objectStore != nil {
 		return p.pollObjectStore(ctx, start, end)
+	}
+	if !end.After(start) {
+		// The cursor is already inside the delay window, for example right
+		// after a restart or when the delay was raised. Wait for it to settle.
+		return nil
 	}
 
 	// If the time range is larger than maxPollChunk, split into chunks

@@ -138,7 +138,14 @@ export async function fetchAndRenderPolicy(): Promise<void> {
 		if (requestId !== policyRequestId) return;
 
 		if (!policyResp.ok) {
-			throw new Error(`HTTP ${policyResp.status}: ${policyResp.statusText}`);
+			// The backend explains the failure (often a missing API key scope).
+			let reason = policyResp.statusText;
+			try {
+				reason = (await policyResp.json())?.error || reason;
+			} catch {
+				// Not JSON; keep the status text.
+			}
+			throw new Error(`HTTP ${policyResp.status}: ${reason}`);
 		}
 		const text = await policyResp.text();
 		if (requestId !== policyRequestId) return;

@@ -146,6 +146,13 @@ func main() {
 	} else {
 		router = gin.Default()
 	}
+	trustedProxies, err := cfg.ClientIPTrustedProxies()
+	if err == nil {
+		err = middleware.ConfigureClientIP(router, trustedProxies)
+	}
+	if err != nil {
+		log.Fatalf("Invalid trusted proxies: %v", err)
+	}
 
 	router.HandleMethodNotAllowed = true
 
@@ -251,6 +258,9 @@ func main() {
 	log.Printf("Environment: %s", cfg.Environment)
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Poll Interval: %s", pollerConfig.PollInterval)
+	if pollerConfig.FlowBackend == config.FlowBackendAPI {
+		log.Printf("Poll Delay: %s", pollerConfig.PollDelay)
+	}
 	log.Printf("Retention: %s", pollerConfig.Retention)
 	log.Printf("Flow Backend: %s", pollerConfig.FlowBackend)
 	if pollerConfig.FlowBackend == "s3" || pollerConfig.FlowBackend == "gcs" {

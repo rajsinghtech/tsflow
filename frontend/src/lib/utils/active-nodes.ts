@@ -34,3 +34,12 @@ export function averageBytesPerNode(totalBytes: number, nodeCount: number): numb
 export function headerShowsStats(path: string, hasNetworkData: boolean): boolean {
 	return path === '/' || path === '/analytics' || hasNetworkData;
 }
+
+// Header totals are unknown until the graph or overview stats load for this
+// window (for example, opening the Policy page directly). Show a placeholder
+// instead of a zero that reads as an empty tailnet.
+export const HEADER_STAT_PLACEHOLDER = '—';
+
+export function headerStat<T>(loaded: boolean, value: T, format: (value: T) => string = String): string {
+	return loaded ? format(value) : HEADER_STAT_PLACEHOLDER;
+}
