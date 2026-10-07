@@ -372,6 +372,8 @@ An hour that sits fully inside the window is read from the hourly rollup (`node_
 
 `GET /api/analytics/new-pairs` lists directed pairs that appear in the selected window and do not appear in the lookback immediately before it. `lookback` defaults to `7d`. It also accepts `24h`, `30d`, or any duration from `1h` through `90d`. `limit`, `offset`, `start`, `end`, `tailnet`, and `trafficTypes` match the ranked pair route. Rows are ordered by first seen, newest first, then by volume. There is no alert. The page is `/new`.
 
+`metadata.lookbackStart` is where the lookback begins. `metadata.dataStart` is the earliest stored minute and is left out when nothing is stored. `metadata.lookbackComplete` is false when stored data starts after `lookbackStart`. A pair last seen before the data starts then shows up as new, and the page says so.
+
 Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP address is labeled `DERP relay`. Complete hours are read from `node_pair_hours`.
 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
