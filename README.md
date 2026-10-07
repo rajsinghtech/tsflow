@@ -145,6 +145,7 @@ JSON uses the same fields:
 | `PORT` | Server port | `8080` |
 | `ENVIRONMENT` | `development` or `production` | `development` |
 | `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
+| `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
 | `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 
 #### tsnet Serve Mode
@@ -228,7 +229,7 @@ Omit `tailnets`, or include `"*"`, to allow every configured tailnet id. Those i
 
 Identity is logged per request only when `TSFLOW_LOG_LEVEL=debug`.
 
-A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For`, so it is not the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
+A denied request always logs one line with the reason, the TCP peer (`peer=`, the `r.RemoteAddr` that trusted-proxy checks use), the raw `X-Forwarded-For` value, and in header mode whether the peer matched `TSFLOW_ACCESS_TRUSTED_PROXIES` (`trusted_proxy=`). The client IP in the request log comes from `X-Forwarded-For` only when the peer is a trusted proxy (`TSFLOW_TRUSTED_PROXIES`), so it can differ from the peer. Each peer and reason pair is logged at most once a minute, or on every request with `TSFLOW_LOG_LEVEL=debug`. Identity headers are not logged.
 
 There are two front doors.
 
