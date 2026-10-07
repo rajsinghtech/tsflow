@@ -42,11 +42,12 @@
 		void setRankSearch('');
 	}
 
-	// Open a ranked device on the traffic graph: select it and search for it
-	// so the graph highlights and centers it.
+	// Open a ranked device on the traffic graph over the same window: select
+	// it and search for it so the graph highlights and centers it.
 	function openInTraffic(hostname: string, nodeId: string) {
 		filterStore.setSearch(trafficSearchFor(hostname, nodeId));
 		uiStore.selectNode(nodeId);
+		dataSourceStore.handOffWindow();
 		void goto('/');
 	}
 

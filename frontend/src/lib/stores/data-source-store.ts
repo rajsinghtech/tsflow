@@ -49,6 +49,26 @@ function createDataSourceStore() {
 	let dataRangeGeneration = 0;
 	let dataRangeRequestToken = 0;
 	let pollerStatusRequest: Promise<PollerStatus | null> | null = null;
+	// Set by a page that sends the user to the traffic graph for the window it
+	// is showing (Rankings "open on the traffic graph"); consumed on entry.
+	let windowHandoff = false;
+
+	const showLatestWindow = (range?: DataRange | null, windowMs = DEFAULT_WINDOW_MS) =>
+		update((s) => {
+			const sourceRange = range ?? s.dataRange;
+			const nextWindowMs = Math.max(MIN_WINDOW_MS, windowMs);
+			if (!hasValidRange(sourceRange)) {
+				return { ...s, latestWindowMs: nextWindowMs, followLatest: true };
+			}
+			const selected = latestWindow(sourceRange, nextWindowMs);
+			return {
+				...s,
+				selectedStart: selected.start,
+				selectedEnd: selected.end,
+				latestWindowMs: nextWindowMs,
+				followLatest: true
+			};
+		});
 
 	return {
 		subscribe,
@@ -62,22 +82,22 @@ function createDataSourceStore() {
 				followLatest: false
 			})),
 
-		showLatestWindow: (range?: DataRange | null, windowMs = DEFAULT_WINDOW_MS) =>
-			update((s) => {
-				const sourceRange = range ?? s.dataRange;
-				const nextWindowMs = Math.max(MIN_WINDOW_MS, windowMs);
-				if (!hasValidRange(sourceRange)) {
-					return { ...s, latestWindowMs: nextWindowMs, followLatest: true };
-				}
-				const selected = latestWindow(sourceRange, nextWindowMs);
-				return {
-					...s,
-					selectedStart: selected.start,
-					selectedEnd: selected.end,
-					latestWindowMs: nextWindowMs,
-					followLatest: true
-				};
-			}),
+		showLatestWindow,
+
+		// Keep the current window for the next page entry instead of resetting
+		// it to the default latest window.
+		handOffWindow: () => {
+			windowHandoff = true;
+		},
+
+		// Page entry: opens the default latest window when the range has data,
+		// unless another page handed its window off (then it is kept as is).
+		enterLatestWindow: (range: DataRange | null) => {
+			const keep = windowHandoff;
+			windowHandoff = false;
+			if (keep || !hasValidRange(range)) return;
+			showLatestWindow(range);
+		},
 
 		async fetchDataRange(signal?: AbortSignal) {
 			if (signal?.aborted) return null;
@@ -140,6 +160,7 @@ function createDataSourceStore() {
 		},
 
 		reset: () => {
+			windowHandoff = false;
 			dataRangeRequest = null;
 			dataRangeGeneration++;
 			pollerStatusRequest = null;
