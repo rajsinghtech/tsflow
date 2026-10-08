@@ -3,7 +3,7 @@ module github.com/rajsinghtech/tsflow/backend
 go 1.27.1
 
 require (
-	cloud.google.com/go/auth v0.24.1-0.20261001053825-dbc26066f70a
+	cloud.google.com/go/auth v0.24.1-0.20261008155944-f150f974c45b
 	cloud.google.com/go/storage v1.69.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.7
