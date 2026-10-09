@@ -12,7 +12,8 @@
 	import DeviceTimeline from '#lib/components/charts/DeviceTimeline.svelte';
 	import EdgePolicyInfo from '#lib/components/logs/EdgePolicyInfo.svelte';
 	import Header from '#lib/components/layout/Header.svelte';
-	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, toggleAutoRefresh, filteredNodes, filteredEdges } from '#lib/stores/network-store';
+	import EmptyRange from '#lib/components/timeline/EmptyRange.svelte';
+	import { loadNetworkData, retryLoadNetworkData, retryCount, retryingIn, startAutoRefresh, stopAutoRefresh, filteredNodes, filteredEdges, networkLogs } from '#lib/stores/network-store';
 	import { uiStore } from '#lib/stores/ui-store';
 	import { dataSourceStore } from '#lib/stores/data-source-store';
 	import { viewerReady, viewerStore, whenViewerReady } from '#lib/stores/viewer-store';
@@ -38,7 +39,7 @@
 
 		async function bootstrap() {
 			isBootstrapping = true;
-			const [range] = await Promise.all([
+			await Promise.all([
 				dataSourceStore.fetchDataRange(),
 				dataSourceStore.fetchPollerStatus(),
 				whenViewerReady()
@@ -53,8 +54,6 @@
 			});
 			if (redirect && redirect !== page.url.pathname) return;
 
-			// Opens the latest window, or keeps the one Analytics handed off.
-			dataSourceStore.enterLatestWindow(range);
 			startAutoRefresh();
 
 			await loadNetworkData();
@@ -87,20 +86,20 @@
 			}
 		} else if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
 			showShortcuts = !showShortcuts;
-		} else if (e.key === 'r' && !e.metaKey && !e.ctrlKey) {
-			loadNetworkData();
 		} else if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
 			uiStore.toggleFilters();
 		} else if (e.key === 'l' && !e.metaKey && !e.ctrlKey) {
 			uiStore.toggleLogViewer();
-		} else if (e.key === 'p' && !e.metaKey && !e.ctrlKey) {
-			toggleAutoRefresh();
 		}
 	}
 
 	const shortcuts = [
 		{ key: 'R', desc: 'Refresh data' },
-		{ key: 'P', desc: 'Pause/resume auto-refresh' },
+		{ key: 'P', desc: 'Pin the window or return to live' },
+		{ key: 't ←/→', desc: 'Shift the time range' },
+		{ key: 't − / t z', desc: 'Zoom the range out' },
+		{ key: 't +', desc: 'Zoom the range in' },
+		{ key: 't c', desc: 'Copy a link to this range' },
 		{ key: 'F', desc: 'Toggle filters' },
 		{ key: 'L', desc: 'Toggle log viewer' },
 		{ key: 'Esc', desc: 'Clear selection' },
@@ -203,6 +202,9 @@
 						</button>
 					{/if}
 				</div>
+			<!-- Empty window: nothing stored for this range at all, before any filter -->
+			{:else if $networkLogs.length === 0}
+				<EmptyRange />
 			<!-- Graph -->
 			{:else}
 				<div class="flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">

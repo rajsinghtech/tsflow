@@ -8,8 +8,8 @@
 	import { Loader2 } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
 	import DeviceTimeline from '#lib/components/charts/DeviceTimeline.svelte';
-	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 	import { dataSourceStore, filterStore, queryTimeWindow, viewerStore } from '#lib/stores';
+	import { pageRefresh } from '#lib/stores/live-mode';
 	import { tailscaleService } from '#lib/services';
 	import { formatBytes } from '#lib/utils';
 
@@ -42,7 +42,11 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let opened = $state<string | null>(null);
-	let showWindow = $state(false);
+	// Wait for the stored range: until then a live window is measured from the
+	// wall clock rather than the latest stored data.
+	let rangeReady = $state(false);
+	let loadToken = 0;
+	let lastLoadKey = '';
 
 	const coverageNotice = $derived(
 		lookbackNotice(coverage, (d) => d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))
@@ -55,10 +59,12 @@
 	}
 
 	async function load(start: Date, end: Date, types: string[]) {
+		const token = ++loadToken;
 		loading = true;
 		error = null;
 		try {
 			const response = await tailscaleService.getViewerSummary(start, end, { trafficTypes: types, lookback: '7d' });
+			if (token !== loadToken) return;
 			login = response.login;
 			devices = response.devices || [];
 			totalBytes = response.traffic?.totalBytes ?? 0;
@@ -67,20 +73,25 @@
 			newPairs = response.newPairs || [];
 			coverage = response.metadata;
 		} catch (err) {
+			if (token !== loadToken) return;
 			devices = [];
 			peers = [];
 			newPairs = [];
 			coverage = undefined;
 			error = err instanceof Error ? err.message : 'Failed to load your devices';
 		} finally {
-			loading = false;
+			if (token === loadToken) loading = false;
 		}
 	}
 
 	onMount(() => {
-		void dataSourceStore.fetchDataRange().then((range) => {
-			if (range?.count) dataSourceStore.showLatestWindow(range);
+		let cancelled = false;
+		void dataSourceStore.fetchDataRange().finally(() => {
+			if (!cancelled) rangeReady = true;
 		});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	const access = $derived(meAccess($viewerReady, $viewerStore?.login));
@@ -93,7 +104,14 @@
 		if (access !== 'show') return;
 		const range = $queryTimeWindow;
 		const types = $filterStore.trafficTypes;
+		const refreshCount = $pageRefresh;
+		if (!rangeReady) return;
 		if (!range?.start || !range?.end || range.end <= range.start) return;
+		// The range poll replaces the window with equal dates while live; only a
+		// real change or an explicit refresh reloads.
+		const loadKey = [range.start.getTime(), range.end.getTime(), types.join(','), refreshCount].join('|');
+		if (loadKey === lastLoadKey) return;
+		lastLoadKey = loadKey;
 		void load(range.start, range.end, types);
 	});
 </script>
@@ -106,23 +124,7 @@
 				<h2 class="text-base font-semibold">Me</h2>
 				<p class="text-xs text-muted-foreground">{login || $viewerStore?.login || 'Your devices'}</p>
 			</div>
-			<button
-				type="button"
-				class="inline-flex min-h-8 items-center rounded-md border border-border px-2.5 text-xs hover:bg-secondary"
-				class:bg-secondary={showWindow}
-				aria-expanded={showWindow}
-				onclick={() => (showWindow = !showWindow)}
-			>
-				Window
-			</button>
 		</div>
-
-		{#if showWindow}
-			<div class="mb-4 rounded-lg border border-border bg-card p-2">
-				<!-- The summary reloads from queryTimeWindow. Do not load the traffic graph here. -->
-				<TimelineSlider onWindowChange={() => {}} />
-			</div>
-		{/if}
 
 		{#if loading && devices.length === 0}
 			<div class="flex justify-center py-16 text-muted-foreground">

@@ -1,6 +1,9 @@
 import { writable, derived, get } from 'svelte/store';
 import { tailscaleService } from '#lib/services/tailscale-service';
 import { dataSourceStore, queryTimeWindow } from './data-source-store';
+import { createLiveRefresh } from './live-refresh';
+import { lastUpdated } from './network-store';
+import { DEFAULT_REFRESH_MS } from '#lib/utils/poll-interval';
 import { filterStore } from './filter-store';
 import type { TrafficStatsSummary, TrafficStatsBucket, PortStat } from '#lib/types';
 
@@ -20,7 +23,9 @@ const defaultState: StatsState = {
 
 const statsState = writable<StatsState>(defaultState);
 
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+const statsLive = createLiveRefresh(() => {
+	void loadStats(0);
+});
 let statsController: AbortController | null = null;
 
 // Retry state
@@ -105,6 +110,7 @@ export async function loadStats(currentAttempt = 0) {
 				isLoading: false,
 				error: null
 			});
+			lastUpdated.set(new Date());
 			clearStatsRetryState();
 			return;
 		}
@@ -121,6 +127,7 @@ export async function loadStats(currentAttempt = 0) {
 			isLoading: false,
 			error: null
 		});
+		lastUpdated.set(new Date());
 		clearStatsRetryState();
 	} catch (err) {
 		if (signal.aborted) return;
@@ -144,10 +151,9 @@ export function retryLoadStats() {
 	loadStats(0);
 }
 
-export function startStatsRefresh(intervalMs = 60_000) {
-	stopStatsRefresh();
-	loadStats();
-	refreshTimer = setInterval(() => loadStats(0), intervalMs);
+export function startStatsRefresh(intervalMs = DEFAULT_REFRESH_MS) {
+	statsLive.start(intervalMs);
+	void loadStats();
 }
 
 export function clearStatsData() {
@@ -160,10 +166,7 @@ export function clearStatsData() {
 }
 
 export function stopStatsRefresh() {
-	if (refreshTimer) {
-		clearInterval(refreshTimer);
-		refreshTimer = null;
-	}
+	statsLive.stop();
 	if (statsController) {
 		statsController.abort();
 		statsController = null;

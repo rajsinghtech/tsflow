@@ -9,7 +9,6 @@
 	import { pageStep, rankNodeLabel, rankPageLabel, subnetRouteHint, trafficSearchFor } from '#lib/analytics/rank-query';
 	import type { RankSort } from '#lib/analytics/rank-query';
 	import {
-		dataSourceStore,
 		filterStore,
 		loadRankedPairs,
 		loadRankedTalkers,
@@ -38,11 +37,11 @@
 	}
 
 	// Open a ranked device on the traffic graph over the same window: select
-	// it and search for it so the graph highlights and centers it.
+	// it and search for it so the graph highlights and centers it. The window
+	// is shared state and the Traffic page writes it back into its URL.
 	function openInTraffic(hostname: string, nodeId: string) {
 		filterStore.setSearch(trafficSearchFor(hostname, nodeId));
 		uiStore.selectNode(nodeId);
-		dataSourceStore.handOffWindow();
 		void goto('/');
 	}
 

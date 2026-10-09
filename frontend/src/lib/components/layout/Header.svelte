@@ -1,22 +1,16 @@
 <script lang="ts">
-	import { RefreshCw, PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, Pause, Play, ExternalLink, Waypoints, User } from 'lucide-svelte';
+	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User } from 'lucide-svelte';
 	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
+	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
 	import { ensureTailnetQuery, hrefWithTailnet } from '#lib/services/tailnet-query';
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
-	import { uiStore, loadNetworkData, networkStats, filteredNodes, lastUpdated, isAutoRefreshing, toggleAutoRefresh, themeStore, statsSummary, viewerStore } from '#lib/stores';
+	import { uiStore, networkStats, filteredNodes, lastUpdated, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
 	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
-
-	// Tick every 10s to keep the relative time fresh
-	let tick = $state(0);
-	$effect(() => {
-		const interval = setInterval(() => tick++, 10_000);
-		return () => clearInterval(interval);
-	});
 
 	// About flyout state
 	let showAbout = $state(false);
@@ -56,18 +50,6 @@
 		}
 	}
 
-	const lastUpdatedLabel = $derived.by(() => {
-		void tick; // subscribe to tick for periodic re-computation
-		const ts = $lastUpdated;
-		if (!ts) return null;
-		const now = Date.now();
-		const diffSec = Math.floor((now - ts.getTime()) / 1000);
-		if (diffSec < 5) return 'just now';
-		if (diffSec < 60) return `${diffSec}s ago`;
-		const diffMin = Math.floor(diffSec / 60);
-		return `${diffMin}m ago`;
-	});
-
 	const currentPath = $derived(page.url.pathname);
 	const isTrafficPage = $derived(currentPath === '/');
 
@@ -80,14 +62,6 @@
 	const primaryNav = $derived(
 		showMeTab($viewerStore?.login) ? [{ href: '/me', label: 'Me', icon: User }, ...baseNav] : baseNav
 	);
-
-	let isRefreshing = $state(false);
-
-	async function handleRefresh() {
-		isRefreshing = true;
-		await loadNetworkData();
-		isRefreshing = false;
-	}
 
 	// Traffic view uses the graph, which includes every node in that window.
 	// Analytics uses the overview active-node count once stats are loaded.
@@ -156,7 +130,8 @@
 
 <svelte:window onclick={handleCloseAbout} />
 
-<header class="relative z-30 flex h-12 items-center justify-between gap-1 border-b border-border bg-card px-1 sm:h-14 sm:gap-2 sm:px-4">
+<div class="relative z-30 border-b border-border bg-card">
+<header class="flex h-12 items-center justify-between gap-1 px-1 sm:h-14 sm:gap-2 sm:px-4">
 	<!-- Left section: Logo + primary navigation -->
 	<div class="flex min-w-0 items-center gap-1 sm:gap-3 lg:shrink-0">
 		<div class="relative about-flyout-container shrink-0">
@@ -280,12 +255,6 @@
 					</div>
 				{/if}
 
-				{#if lastUpdatedLabel}
-					<div class="hidden h-6 w-px bg-border @5xl:block"></div>
-					<div class="hidden text-xs text-muted-foreground/70 @5xl:block" title={$lastUpdated?.toLocaleString()}>
-						Updated {lastUpdatedLabel}
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>
@@ -306,9 +275,6 @@
 			<div class="text-xs">
 				<span class="font-semibold text-primary">{headerStat(statsLoaded, displayBytes, formatBytes)}</span>
 			</div>
-			{#if lastUpdatedLabel}
-				<div class="text-[10px] text-muted-foreground/60">{lastUpdatedLabel}</div>
-			{/if}
 		</div>
 	{/if}
 
@@ -334,30 +300,6 @@
 		{/if}
 
 		<button
-			onclick={() => toggleAutoRefresh()}
-			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
-			title={$isAutoRefreshing ? 'Pause auto-refresh (P)' : 'Resume auto-refresh (P)'}
-			aria-label={$isAutoRefreshing ? 'Pause auto-refresh' : 'Resume auto-refresh'}
-		>
-			{#if $isAutoRefreshing}
-				<Pause class="h-4 w-4" />
-			{:else}
-				<Play class="h-4 w-4" />
-			{/if}
-		</button>
-
-		<button
-			onclick={handleRefresh}
-			class="flex min-h-8 min-w-8 items-center justify-center gap-2 rounded-md border border-border px-2 py-1.5 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-9 sm:min-w-9 sm:px-3 sm:py-2"
-			disabled={isRefreshing}
-			title="Refresh now (R)"
-			aria-label="Refresh data"
-		>
-			<RefreshCw class="h-4 w-4 {isRefreshing ? 'animate-spin' : ''}" />
-			<span class="hidden text-sm sm:inline">Refresh</span>
-		</button>
-
-		<button
 			onclick={cycleTheme}
 			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
 			title="Theme: {getThemeLabel($themeStore)} (click to cycle)"
@@ -376,3 +318,7 @@
 		</button>
 	</div>
 </header>
+{#if currentPath !== '/policy'}
+	<TimeControls />
+{/if}
+</div>

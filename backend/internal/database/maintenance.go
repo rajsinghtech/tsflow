@@ -316,31 +316,14 @@ func (s *SQLiteStore) GetNodeMetadata(ctx context.Context, tailnetID string) ([]
 	return result, rows.Err()
 }
 
-// GetDataRange returns the time range of data stored in node_pairs.
+// GetDataRange returns the time range of stored traffic.
+// A short burst of early rows, separated from later data by a long gap, does
+// not pull the start backward. The end is still the end of the newest pair.
 func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*DataRange, error) {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	var minBucket, maxBucket sql.NullInt64
-	var count int64
-	err := s.db.QueryRowContext(ctx,
-		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?",
-		tailnetID,
-	).Scan(&minBucket, &maxBucket, &count)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get data range: %w", err)
-	}
-	if count == 0 || !minBucket.Valid {
-		return &DataRange{}, nil
-	}
-	return &DataRange{
-		Earliest: time.Unix(minBucket.Int64, 0).UTC(),
-		// Buckets are minute-start timestamps and all range queries use a
-		// half-open end. Return the end of the newest bucket so a database with
-		// one bucket still describes a usable range.
-		Latest: time.Unix(maxBucket.Int64+60, 0).UTC(),
-		Count:  count,
-	}, nil
+	return readDataRange(ctx, s.db, tailnetID)
 }
 
 // Cleanup deletes rows older than retention from all four data tables, and
@@ -457,18 +440,9 @@ func (s *SQLiteStore) GetStats(ctx context.Context, tailnetID string) (map[strin
 		return nil, fmt.Errorf("failed to read database page size: %w", err)
 	}
 
-	var minB, maxB sql.NullInt64
-	var cnt int64
-	if err := tx.QueryRowContext(ctx,
-		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?", tailnetID,
-	).Scan(&minB, &maxB, &cnt); err != nil {
+	dr, err := readDataRange(ctx, tx, tailnetID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read database data range: %w", err)
-	}
-	dr := &DataRange{}
-	if cnt > 0 && minB.Valid {
-		dr.Earliest = time.Unix(minB.Int64, 0).UTC()
-		dr.Latest = time.Unix(maxB.Int64+60, 0).UTC()
-		dr.Count = cnt
 	}
 
 	return map[string]any{

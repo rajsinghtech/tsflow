@@ -3,7 +3,6 @@
 	import { filterStore, uiStore } from '#lib/stores';
 	import type { TrafficType } from '#lib/types';
 	import { deviceScopeLabel, hasDeviceScope } from '#lib/utils/device-scope';
-	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 
 	// Traffic type options including exit node traffic
 	const trafficTypes: { value: TrafficType; label: string; defaultOn: boolean }[] = [
@@ -140,8 +139,4 @@
 		</div>
 	</fieldset>
 
-	<!-- Time Window -->
-	<div class="mb-4 border-t border-border pt-4">
-		<TimelineSlider />
-	</div>
 </div>

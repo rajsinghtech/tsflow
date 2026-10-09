@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Loader2, RefreshCw, Waypoints } from 'lucide-svelte';
+	import { Loader2, Waypoints } from 'lucide-svelte';
 	import Header from '#lib/components/layout/Header.svelte';
-	import TimelineSlider from '#lib/components/timeline/TimelineSlider.svelte';
 	import { dataSourceStore, filterStore, queryTimeWindow } from '#lib/stores';
+	import { pageRefresh } from '#lib/stores/live-mode';
 	import { tailscaleService } from '#lib/services';
 	import { DEFAULT_NEW_PAIR_LOOKBACK, NEW_PAIR_LOOKBACKS, lookbackNotice, type NewPairCoverage } from '#lib/analytics/new-pairs';
 	import { formatBytes } from '#lib/utils';
@@ -36,8 +36,9 @@
 	let lookback = $state(DEFAULT_NEW_PAIR_LOOKBACK);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let showWindow = $state(false);
 	let loadToken = 0;
+	let lastWindowKey = '';
+	let lastLoadKey = '';
 
 	const selectedTrafficTypes = $derived(new Set($filterStore.trafficTypes));
 	const coverageNotice = $derived(lookbackNotice(coverage, seenDate));
@@ -108,13 +109,15 @@
 		}
 	}
 
+	// Wait for the stored range: until then a live window is measured from the
+	// wall clock rather than the latest stored data.
+	let rangeReady = $state(false);
+
 	onMount(() => {
 		let cancelled = false;
-		void (async () => {
-			const range = await dataSourceStore.fetchDataRange();
-			if (cancelled) return;
-			if (range?.count) dataSourceStore.showLatestWindow(range);
-		})();
+		void dataSourceStore.fetchDataRange().finally(() => {
+			if (!cancelled) rangeReady = true;
+		});
 		return () => {
 			cancelled = true;
 		};
@@ -125,7 +128,22 @@
 		const types = $filterStore.trafficTypes;
 		const pageOffset = offset;
 		const selectedLookback = lookback;
+		const refreshCount = $pageRefresh;
+		if (!rangeReady) return;
 		if (!range?.start || !range?.end || range.end <= range.start) return;
+		// A new window starts again from the first page.
+		const windowKey = `${range.start.getTime()}-${range.end.getTime()}`;
+		const windowChanged = lastWindowKey !== '' && windowKey !== lastWindowKey;
+		lastWindowKey = windowKey;
+		if (windowChanged && pageOffset !== 0) {
+			offset = 0;
+			return;
+		}
+		// The range poll replaces the window with equal dates while live; only a
+		// real change or an explicit refresh reloads.
+		const loadKey = [windowKey, types.join(','), pageOffset, selectedLookback, refreshCount].join('|');
+		if (loadKey === lastLoadKey) return;
+		lastLoadKey = loadKey;
 		void load(range.start, range.end, types, pageOffset, selectedLookback);
 	});
 </script>
@@ -141,27 +159,9 @@
 					Pairs first seen in this window, and not seen in the lookback before it.
 				</p>
 			</div>
-			<button
-				class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-secondary"
-				onclick={() => {
-					const range = $queryTimeWindow;
-					void load(range.start, range.end, $filterStore.trafficTypes, offset, lookback);
-				}}
-			>
-				<RefreshCw class="h-3.5 w-3.5" />
-				Refresh
-			</button>
 		</div>
 
 		<div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-2">
-			<button
-				type="button"
-				class="inline-flex min-h-8 items-center rounded-md border border-border px-2.5 text-xs hover:bg-secondary"
-				class:bg-secondary={showWindow}
-				onclick={() => (showWindow = !showWindow)}
-			>
-				Window
-			</button>
 			<label class="flex items-center gap-2 text-xs text-muted-foreground" for="new-pair-lookback">
 				Lookback
 				<select
@@ -190,16 +190,6 @@
 				{/each}
 			</div>
 		</div>
-
-		{#if showWindow}
-			<div class="mb-4 rounded-lg border border-border bg-card p-2">
-				<TimelineSlider
-					onWindowChange={() => {
-						offset = 0;
-					}}
-				/>
-			</div>
-		{/if}
 
 		{#if coverageNotice && !error}
 			<p class="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300" role="status">
