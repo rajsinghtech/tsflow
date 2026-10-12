@@ -82,8 +82,22 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - A device timeline counts every id of the device (#466)
 - Screen readers name graph cards and edges by hostname (#467)
 - Escape closes the time range picker (#468)
+- More common service ports are named (#470)
+- Every device timeline column fits in the chart (#472)
+- Dense graphs still render: the slow layout stops at a time budget (#461)
+- A crashed graph layout retries fast instead of freezing the tab (#473)
+- The Traffic header count is labeled pairs (#471)
+- Empty ranges say when the poller can't fetch flow logs (#464)
+
+### Mobile
+
+- The header and time bar fit on phones (#475)
+- Phones can hide the Traffic panels, and device details open in a sheet over the graph (#474)
+- The graph stays on screen when a device is selected (#476)
+- Analytics, New and Me fit phones, with cards for new connections and 44px touch targets (#477)
+- The policy graph gets the whole screen on phones (#469)
 
 ### Dependencies
 
 - SvelteKit, Vite and the static adapter upgraded together (#370)
-- Go module and npm updates from Renovate, including klauspost/compress 1.20.3 (#462)
+- Go module and npm updates from Renovate, including klauspost/compress 1.20.3 (#462, #483)
