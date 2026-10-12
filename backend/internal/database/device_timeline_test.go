@@ -102,3 +102,64 @@ func TestDeviceTimelineLeavesTheDeviceOutOfItsPeers(t *testing.T) {
 		t.Fatalf("virtual bytes = %d", virtual)
 	}
 }
+
+func TestDeviceTimelineCountsEveryIDOfTheDevice(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute).Unix()
+	const (
+		stable = "nBuild001CNTRL"
+		legacy = "424242"
+		peer   = "nPeer0001CNTRL"
+		other  = "nOther01CNTRL"
+	)
+	if err := store.UpsertNodeMetadata(ctx, DefaultTailnetID, []NodeMetadata{
+		{NodeID: stable, Hostname: "build", IPs: []string{"100.64.0.21"}},
+		{NodeID: legacy, Hostname: "", Owner: "ada@example.com", IPs: []string{"100.64.0.21"}},
+		{NodeID: peer, Hostname: "peer", IPs: []string{"100.64.0.30"}},
+		{NodeID: other, Hostname: "other", IPs: []string{"100.64.0.40"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	insertRankPair(t, store, DefaultTailnetID, base, stable, peer, "virtual", 100, 10, 1)
+	insertRankPair(t, store, DefaultTailnetID, base+60, legacy, peer, "virtual", 40, 5, 2)
+	insertRankPair(t, store, DefaultTailnetID, base+120, other, legacy, "virtual", 7, 3, 1)
+	// Traffic between two ids of the same device is not a peer.
+	insertRankPair(t, store, DefaultTailnetID, base+180, legacy, stable, "virtual", 1, 1, 1)
+	insertRankPair(t, store, DefaultTailnetID, base+240, other, peer, "virtual", 999, 0, 1)
+
+	start := time.Unix(base, 0).UTC()
+	end := time.Unix(base+600, 0).UTC()
+	for _, id := range []string{stable, legacy} {
+		timeline, err := store.GetDeviceTimeline(ctx, DefaultTailnetID, id, start, end, TimelineQuery{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if timeline.NodeID != id || timeline.Hostname != "build" {
+			t.Fatalf("%s: meta = %#v", id, timeline)
+		}
+		var tx, rx int64
+		for _, bucket := range timeline.Buckets {
+			tx += bucket.Virtual.TxBytes
+			rx += bucket.Virtual.RxBytes
+		}
+		// 100+40 sent to peer, 3 sent to other, 1 to itself; 10+5 from peer, 7 from other, 1 from itself.
+		if tx != 144 || rx != 23 {
+			t.Fatalf("%s: tx=%d rx=%d buckets=%#v", id, tx, rx, timeline.Buckets)
+		}
+		if len(timeline.Peers) != 2 || timeline.Peers[0].PeerID != peer || timeline.Peers[0].TotalBytes != 155 ||
+			timeline.Peers[0].FlowCount != 3 || timeline.Peers[1].PeerID != other || timeline.Peers[1].TotalBytes != 10 {
+			t.Fatalf("%s: peers = %#v", id, timeline.Peers)
+		}
+	}
+
+	// A device with one id reads exactly as before.
+	single, err := store.GetDeviceTimeline(ctx, DefaultTailnetID, other, start, end, TimelineQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if single.Hostname != "other" || len(single.Peers) != 2 || single.Peers[0].PeerID != peer || single.Peers[0].TotalBytes != 999 ||
+		single.Peers[1].PeerID != legacy || single.Peers[1].TotalBytes != 10 {
+		t.Fatalf("single-id peers = %#v", single.Peers)
+	}
+}

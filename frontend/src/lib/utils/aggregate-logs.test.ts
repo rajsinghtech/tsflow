@@ -48,6 +48,21 @@ describe('aggregated flow log bytes', () => {
 		expect(rows.every((row) => row.rxBytes === 0)).toBe(false);
 	});
 
+	it('marks the reverse row as a mirror so the log table lists a pair once', () => {
+		const rows = entries([flow({ srcNodeId: 'a', dstNodeId: 'b', totalTxBytes: 1000, totalRxBytes: 400 })]);
+		const forward = rows.find((row) => row.src === 'a' && row.dst === 'b');
+		const reverse = rows.find((row) => row.src === 'b' && row.dst === 'a');
+		expect(forward?.mirror).toBeUndefined();
+		expect(reverse?.mirror).toBe(true);
+		// What the table shows: one row with both directions.
+		expect(rows.filter((row) => !row.mirror)).toEqual([expect.objectContaining({ src: 'a', dst: 'b', txBytes: 1000, rxBytes: 400 })]);
+	});
+
+	it('keeps a receive-only row visible in the log table', () => {
+		const rows = entries([flow({ srcNodeId: 'a', dstNodeId: 'b', totalTxBytes: 0, totalRxBytes: 250 })]);
+		expect(rows.filter((row) => !row.mirror)).toHaveLength(1);
+	});
+
 	it('shows receive-only traffic as the sender transmitted bytes and zero received', () => {
 		const rows = entries([
 			flow({ srcNodeId: 'a', dstNodeId: 'b', totalTxBytes: 0, totalRxBytes: 250 })

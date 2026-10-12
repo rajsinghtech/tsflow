@@ -10,7 +10,7 @@ import {
 	QUALITY_LAYOUT_MAX_NODES,
 	usesQualityLayout
 } from './elk-input';
-import { edgeStyle, toFlowElements } from './full-graph';
+import { edgeAriaLabel, edgeStyle, toFlowElements } from './full-graph';
 import { realisticTailnet, syntheticTailnet } from './synthetic-tailnet';
 import { FULL_GRAPH_NODE_THRESHOLD, usesFullGraph } from './threshold';
 
@@ -90,6 +90,14 @@ function legacyFlowElements(nodes: NetworkNode[], edges: NetworkLink[]): { nodes
 			type: 'default',
 			style: legacyEdgeStyle(edge)
 		}))
+	};
+}
+
+// The aria names are the only thing added on top of the legacy elements.
+function withoutAria(flow: { nodes: Node[]; edges: Edge[] }): { nodes: Node[]; edges: Edge[] } {
+	return {
+		nodes: flow.nodes.map(({ ariaLabel: _ariaLabel, ...node }) => node),
+		edges: flow.edges.map(({ ariaLabel: _ariaLabel, ...edge }) => edge)
 	};
 }
 
@@ -180,7 +188,7 @@ describe('full graph layout input', () => {
 	it('builds the same nodes, edges, and ELK input as the pre-change graph', () => {
 		const flow = toFlowElements(sampleNodes, sampleEdges);
 		const legacy = legacyFlowElements(sampleNodes, sampleEdges);
-		expect(flow).toEqual(legacy);
+		expect(withoutAria(flow)).toEqual(legacy);
 		expect(buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 })).toEqual(
 			legacyElkInput(legacy.nodes, legacy.edges)
 		);
@@ -191,13 +199,24 @@ describe('full graph layout input', () => {
 		);
 	});
 
+	it('names cards and edges by hostname for screen readers', () => {
+		const flow = toFlowElements(sampleNodes, sampleEdges);
+		const names = new Map(sampleNodes.map((node) => [node.id, node.displayName]));
+		for (const node of flow.nodes) expect(node.ariaLabel).toBe(names.get(node.id));
+		const edge = flow.edges[0];
+		const link = sampleEdges[0];
+		expect(edge.ariaLabel).toBe(edgeAriaLabel(link, (id) => names.get(id)));
+		expect(edge.ariaLabel).toContain(`${names.get(link.source)} to ${names.get(link.target)}, `);
+		expect(edgeAriaLabel({ source: 'a', target: 'b', totalBytes: 2000 })).toBe('a to b, 2 KB');
+	});
+
 	it('keeps the legacy ELK input for a 500 node tailnet except the faster placer', () => {
 		const graph = syntheticTailnet(500);
 		expect(usesFullGraph(graph.nodes.length)).toBe(true);
 		expect(usesQualityLayout(graph.nodes.length, graph.edges.length)).toBe(false);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
-		expect(flow).toEqual(legacy);
+		expect(withoutAria(flow)).toEqual(legacy);
 		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
 		const previous = legacyElkInput(legacy.nodes, legacy.edges);
 		expect(current.children).toEqual(previous.children);
@@ -216,7 +235,7 @@ describe('full graph layout input', () => {
 		expect(graph.edges.length).toBeGreaterThan(QUALITY_LAYOUT_MAX_EDGES);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
-		expect(flow).toEqual(legacy);
+		expect(withoutAria(flow)).toEqual(legacy);
 		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
 		const previous = legacyElkInput(legacy.nodes, legacy.edges);
 		expect(current.children).toEqual(previous.children);
@@ -232,7 +251,7 @@ describe('full graph layout input', () => {
 		expect(usesFullGraph(graph.nodes.length)).toBe(true);
 		const flow = toFlowElements(graph.nodes, graph.edges);
 		const legacy = legacyFlowElements(graph.nodes, graph.edges);
-		expect(flow).toEqual(legacy);
+		expect(withoutAria(flow)).toEqual(legacy);
 		const current = buildElkLayoutInput(flow.nodes, flow.edges, { algorithm: 'layered', nodeSpacing: 150 });
 		const previous = legacyElkInput(legacy.nodes, legacy.edges);
 		expect(current).toEqual(previous);

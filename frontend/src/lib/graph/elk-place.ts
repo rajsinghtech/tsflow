@@ -3,7 +3,7 @@ import type { Edge, Node } from '@xyflow/svelte';
 import type { NetworkNode } from '#lib/types';
 import type { RenderEdge, RenderModel, RenderNode } from './aggregate';
 import { calculateNodeDimensions, layeredLayoutOptions } from './elk-input';
-import { edgeStyle } from './full-graph';
+import { edgeAriaLabel, edgeStyle } from './full-graph';
 
 export const GROUP_LAYOUT_OPTIONS = { algorithm: 'layered' as const, nodeSpacing: 90 };
 
@@ -20,6 +20,7 @@ export function groupFlowNode(node: RenderNode): Node {
 		id: node.id,
 		type: 'group',
 		position: { x: 0, y: 0 },
+		ariaLabel: `${node.label}, ${node.memberCount} devices`,
 		data: {
 			id: node.id,
 			label: node.label,
@@ -42,6 +43,7 @@ export function deviceFlowNode(device: NetworkNode): Node {
 		id: device.id,
 		type: 'network',
 		position: { x: 0, y: 0 },
+		ariaLabel: device.displayName,
 		data: {
 			label: device.displayName,
 			...device
@@ -49,12 +51,13 @@ export function deviceFlowNode(device: NetworkNode): Node {
 	};
 }
 
-export function flowEdges(edges: RenderEdge[]): Edge[] {
+export function flowEdges(edges: RenderEdge[], nameOf?: (id: string) => string | undefined): Edge[] {
 	return edges.map((edge) => ({
 		id: edge.id,
 		source: edge.source,
 		target: edge.target,
 		type: 'default',
+		ariaLabel: edgeAriaLabel(edge, nameOf),
 		style: edgeStyle(edge)
 	}));
 }
@@ -82,7 +85,17 @@ export function modelToFlow(
 			}
 			return flow;
 		}),
-		edges: flowEdges(model.edges)
+		edges: flowEdges(model.edges, modelNames(model, devices))
+	};
+}
+
+// Card names for edge labels: a device's hostname, or a group's label.
+function modelNames(model: RenderModel, devices: Map<string, NetworkNode>): (id: string) => string | undefined {
+	const byId = new Map(model.nodes.map((node) => [node.id, node]));
+	return (id) => {
+		const node = byId.get(id);
+		if (node?.kind === 'device' && node.deviceId) return devices.get(node.deviceId)?.displayName ?? node.label;
+		return node?.label ?? devices.get(id)?.displayName;
 	};
 }
 
@@ -244,7 +257,10 @@ export function sceneFromCompound(
 	}
 
 	const memberIds = new Set((parent?.children ?? []).map((child) => child.id!));
-	const edges = flowEdges(boundaryEdges(model.edges, memberIds, groupId));
+	const names = modelNames(model, devices);
+	const edges = flowEdges(boundaryEdges(model.edges, memberIds, groupId), (id) =>
+		id === groupId ? label.displayName : names(id)
+	);
 	nodes.sort((left, right) => Number(!!left.parentId) - Number(!!right.parentId));
 	return { nodes, edges };
 }

@@ -1,5 +1,15 @@
 import type { Node, Edge } from '@xyflow/svelte';
 import type { NetworkLink, NetworkNode, TrafficType } from '#lib/types';
+import { formatBytes } from '#lib/utils/format';
+
+// Screen readers name graph cards and edges by hostname. Without these the
+// graph library falls back to "Edge from n123CNTRL to n456CNTRL".
+export function edgeAriaLabel(
+	edge: { source: string; target: string; totalBytes: number },
+	nameOf: (id: string) => string | undefined = () => undefined
+): string {
+	return `${nameOf(edge.source) || edge.source} to ${nameOf(edge.target) || edge.target}, ${formatBytes(edge.totalBytes)}`;
+}
 
 export function edgeStyle(
 	edge: { trafficType: TrafficType; totalBytes: number },
@@ -35,11 +45,13 @@ export function toFlowElements(
 	nodes: NetworkNode[],
 	edges: NetworkLink[]
 ): { nodes: Node[]; edges: Edge[] } {
+	const names = new Map(nodes.map((node) => [node.id, node.displayName]));
 	return {
 		nodes: nodes.map((node) => ({
 			id: node.id,
 			type: 'network',
 			position: { x: 0, y: 0 },
+			ariaLabel: node.displayName,
 			data: {
 				label: node.displayName,
 				...node
@@ -50,6 +62,7 @@ export function toFlowElements(
 			source: edge.source,
 			target: edge.target,
 			type: 'default',
+			ariaLabel: edgeAriaLabel(edge, (id) => names.get(id)),
 			style: edgeStyle(edge)
 		}))
 	};
