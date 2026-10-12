@@ -91,9 +91,14 @@ func (s *SQLiteStore) GetDeviceTimeline(ctx context.Context, tailnetID, nodeID s
 	if err != nil {
 		return nil, err
 	}
+	ids, mergedHostname, err := deviceAliases(ctx, tx, tailnetID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	in, idArgs := idList(ids)
 	clause, typeArgs := countedTrafficClause(query.TrafficTypes)
-	extra := clause + " AND (src_node_id = ? OR dst_node_id = ?)"
-	extraArgs := append(append([]any{}, typeArgs...), nodeID, nodeID)
+	extra := clause + " AND (src_node_id IN " + in + " OR dst_node_id IN " + in + ")"
+	extraArgs := append(append(append([]any{}, typeArgs...), idArgs...), idArgs...)
 	source, args := plan.unionPairRows(tailnetID,
 		"bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count",
 		"bucket, src_node_id, dst_node_id, traffic_type, tx_bytes, rx_bytes, flow_count",
@@ -109,15 +114,18 @@ func (s *SQLiteStore) GetDeviceTimeline(ctx context.Context, tailnetID, nodeID s
 	if err != nil {
 		return nil, err
 	}
+	if result.Hostname == "" {
+		result.Hostname = mergedHostname
+	}
 	if source == "" {
 		return result, nil
 	}
 	includePhysical := timelineIncludesPhysical(query.TrafficTypes)
-	buckets, err := queryTimelineBuckets(ctx, tx, source, args, nodeID, bucketSeconds, includePhysical)
+	buckets, err := queryTimelineBuckets(ctx, tx, source, args, ids, bucketSeconds, includePhysical)
 	if err != nil {
 		return nil, err
 	}
-	peers, hasMore, err := queryTimelinePeers(ctx, tx, source, args, tailnetID, nodeID, limit, query.Offset)
+	peers, hasMore, err := queryTimelinePeers(ctx, tx, source, args, tailnetID, ids, limit, query.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -156,23 +164,24 @@ func lookupHostname(ctx context.Context, q queryRower, tailnetID, nodeID string)
 	return hostname, nil
 }
 
-func queryTimelineBuckets(ctx context.Context, q queryRower, source string, args []any, nodeID string, bucketSeconds int64, includePhysical bool) ([]TimelineBucket, error) {
+func queryTimelineBuckets(ctx context.Context, q queryRower, source string, args []any, ids []string, bucketSeconds int64, includePhysical bool) ([]TimelineBucket, error) {
+	in, idArgs := idList(ids)
 	statement := fmt.Sprintf(`
 		WITH pair_rows AS (%s)
 		SELECT b, traffic_type, COALESCE(SUM(tx), 0), COALESCE(SUM(rx), 0)
 		FROM (
 			SELECT (bucket / %d) * %d AS b, traffic_type, tx_bytes AS tx, rx_bytes AS rx
 			FROM pair_rows
-			WHERE src_node_id = ?
+			WHERE src_node_id IN %s
 			UNION ALL
 			SELECT (bucket / %d) * %d AS b, traffic_type, rx_bytes AS tx, tx_bytes AS rx
 			FROM pair_rows
-			WHERE dst_node_id = ? AND src_node_id != dst_node_id
+			WHERE dst_node_id IN %s AND src_node_id NOT IN %s
 		) AS directed
 		GROUP BY b, traffic_type
 		ORDER BY b ASC, traffic_type ASC
-	`, source, bucketSeconds, bucketSeconds, bucketSeconds, bucketSeconds)
-	queryArgs := append(append([]any{}, args...), nodeID, nodeID)
+	`, source, bucketSeconds, bucketSeconds, in, bucketSeconds, bucketSeconds, in, in)
+	queryArgs := append(append(append(append([]any{}, args...), idArgs...), idArgs...), idArgs...)
 	rows, err := q.QueryContext(ctx, statement, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query device timeline: %w", err)
@@ -232,9 +241,10 @@ func addTimelineBytes(bucket *TimelineBucket, trafficType string, tx, rx int64, 
 	}
 }
 
-func queryTimelinePeers(ctx context.Context, q queryRower, source string, args []any, tailnetID, nodeID string, limit, offset int) ([]TimelinePeer, bool, error) {
+func queryTimelinePeers(ctx context.Context, q queryRower, source string, args []any, tailnetID string, ids []string, limit, offset int) ([]TimelinePeer, bool, error) {
+	in, idArgs := idList(ids)
 	statement := fmt.Sprintf(`
-		WITH pair_rows AS (%s)
+		WITH pair_rows AS (%[1]s)
 		SELECT ranked.peer_id,
 		       COALESCE(NULLIF(m.hostname, ''), NULLIF(m.name, ''), ''),
 		       COALESCE(ranked.tx, 0),
@@ -250,12 +260,12 @@ func queryTimelinePeers(ctx context.Context, q queryRower, source string, args [
 			FROM (
 				SELECT dst_node_id AS peer_id, SUM(tx_bytes) AS tx, SUM(rx_bytes) AS rx, SUM(flow_count) AS flows
 				FROM pair_rows
-				WHERE src_node_id = ? AND dst_node_id != src_node_id
+				WHERE src_node_id IN %[2]s AND dst_node_id NOT IN %[2]s
 				GROUP BY dst_node_id
 				UNION ALL
 				SELECT src_node_id AS peer_id, SUM(rx_bytes) AS tx, SUM(tx_bytes) AS rx, SUM(flow_count) AS flows
 				FROM pair_rows
-				WHERE dst_node_id = ? AND src_node_id != dst_node_id
+				WHERE dst_node_id IN %[2]s AND src_node_id NOT IN %[2]s
 				GROUP BY src_node_id
 			) AS directed
 			GROUP BY peer_id
@@ -265,8 +275,12 @@ func queryTimelinePeers(ctx context.Context, q queryRower, source string, args [
 		LEFT JOIN node_metadata AS m
 		  ON m.tailnet_id = ? AND m.node_id = ranked.peer_id
 		ORDER BY ranked.total DESC, ranked.peer_id ASC
-	`, source)
-	queryArgs := append(append([]any{}, args...), nodeID, nodeID, limit+1, offset, tailnetID)
+	`, source, in)
+	queryArgs := append(append([]any{}, args...), idArgs...)
+	queryArgs = append(queryArgs, idArgs...)
+	queryArgs = append(queryArgs, idArgs...)
+	queryArgs = append(queryArgs, idArgs...)
+	queryArgs = append(queryArgs, limit+1, offset, tailnetID)
 	rows, err := q.QueryContext(ctx, statement, queryArgs...)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to query device peers: %w", err)
@@ -287,4 +301,70 @@ func queryTimelinePeers(ctx context.Context, q queryRower, source string, args [
 		return peers[:limit], true, nil
 	}
 	return peers, false, nil
+}
+
+// maxDeviceAliases bounds the ids one device can expand to. A device has its
+// stable id plus at most a numeric flow-log id, so this only guards odd data.
+const maxDeviceAliases = 16
+
+// deviceAliases returns every stored id of the device nodeID names, nodeID
+// first. A device seen as a numeric flow-log id and as a stable device-list id
+// is one device, the same merge the ranked tables and the Me tab use, so the
+// timeline counts traffic stored under either id.
+//
+// Only rows that share a Tailscale address with nodeID can merge with it, so
+// just those rows are read instead of the whole tailnet.
+func deviceAliases(ctx context.Context, q queryRower, tailnetID, nodeID string) ([]string, string, error) {
+	self, err := loadNodeMetadataWhere(ctx, q, tailnetID, "m.node_id = ?", nodeID)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(self) == 0 {
+		return []string{nodeID}, "", nil
+	}
+	var addresses []string
+	for _, ip := range cleanStrings(self[0].IPs) {
+		if isTailscaleIP(ip) {
+			addresses = append(addresses, ip)
+		}
+	}
+	rows := self
+	if len(addresses) > 0 {
+		in, args := idList(addresses)
+		rows, err = loadNodeMetadataWhere(ctx, q, tailnetID,
+			"m.node_id = ? OR EXISTS (SELECT 1 FROM json_each(m.ips) WHERE json_each.value IN "+in+")",
+			append([]any{nodeID}, args...)...)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	devices := mergeMetadata(rows)
+	for _, device := range devices {
+		if !containsString(device.ids, nodeID) {
+			continue
+		}
+		ids := []string{nodeID}
+		for _, id := range device.ids {
+			if id != nodeID && len(ids) < maxDeviceAliases {
+				ids = append(ids, id)
+			}
+		}
+		hostname := device.hostname
+		if hostname == "" {
+			hostname = device.name
+		}
+		return ids, hostname, nil
+	}
+	return []string{nodeID}, "", nil
+}
+
+// idList renders "(?, ?, ...)" for ids and the matching arguments.
+func idList(ids []string) (string, []any) {
+	args := make([]any, len(ids))
+	marks := make([]string, len(ids))
+	for i, id := range ids {
+		args[i] = id
+		marks[i] = "?"
+	}
+	return "(" + strings.Join(marks, ", ") + ")", args
 }
