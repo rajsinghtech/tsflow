@@ -445,3 +445,14 @@ func TestQueryErrorSuggestsShorterWindowOnTimeout(t *testing.T) {
 		t.Fatalf("other error = %q", err)
 	}
 }
+
+func TestWhoamiWithoutAccessControl(t *testing.T) {
+	got := whoami(Viewer{})
+	if got.AccessControl || got.Login != "" || got.Autoscope != config.AccessAutoscopeOff || got.DefaultScope != "all" || got.Tailnets != nil {
+		t.Fatalf("whoami with access off = %+v", got)
+	}
+	ada := whoami(adaViewer())
+	if !ada.AccessControl || ada.Login != "ada@example.com" || ada.DefaultScope != "mine" || len(ada.Tailnets) != 1 || ada.Tailnets[0] != "*" {
+		t.Fatalf("whoami ada = %+v", ada)
+	}
+}

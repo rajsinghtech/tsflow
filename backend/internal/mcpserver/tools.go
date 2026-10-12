@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rajsinghtech/tsflow/backend/internal/access"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
 )
 
@@ -19,6 +20,20 @@ func readOnly(title string) *mcp.ToolAnnotations {
 }
 
 type listTailnetsIn struct{}
+
+type whoamiIn struct{}
+
+type whoamiOut struct {
+	AccessControl bool                `json:"accessControl" jsonschema:"False when tsflow runs without access control. Every tailnet and device is then visible and the identity fields are empty."`
+	Login         string              `json:"login,omitempty"`
+	Name          string              `json:"name,omitempty"`
+	Node          string              `json:"node,omitempty"`
+	Groups        []string            `json:"groups,omitempty"`
+	Tailnets      []string            `json:"tailnets,omitempty" jsonschema:"Tailnet ids this viewer may query. * means every configured tailnet."`
+	Autoscope     string              `json:"autoscope"`
+	DeviceScope   *access.DeviceScope `json:"deviceScope,omitempty" jsonschema:"Owners and tags that scope=mine keeps. Absent when there is no autoscope."`
+	DefaultScope  string              `json:"defaultScope" jsonschema:"The scope tools use when scope is omitted: mine or all."`
+}
 
 type searchDevicesIn struct {
 	Tailnet string `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
@@ -307,6 +322,13 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listTailnetsIn) (*mcp.CallToolResult, listTailnetsOut, error) {
 		out, err := s.listTailnets(v, in)
 		return nil, out, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "whoami",
+		Description: "Who the tools run as: login, groups, permitted tailnets, and the autoscope that decides what scope=mine (the default when autoscope is on) keeps. Call this to learn whose devices mine means.",
+		Annotations: readOnly("Who am I"),
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ whoamiIn) (*mcp.CallToolResult, whoamiOut, error) {
+		return nil, whoami(v), nil
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_devices",
