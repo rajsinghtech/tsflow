@@ -228,6 +228,8 @@
 
 			for (const t of traffic) {
 				if (entries.length >= MAX_ENTRIES) return false;
+				// Same pair as a forward row that shows both directions.
+				if (t.mirror) continue;
 
 				const srcIP = resolveToNodeIP(t.src);
 				const dstIP = resolveToNodeIP(t.dst);

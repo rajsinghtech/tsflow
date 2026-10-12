@@ -32,6 +32,9 @@ export interface TrafficEntry {
 	// Directional aggregate metadata is present only for aggregate flows whose
 	// protocol and destination-port observations were preserved by direction.
 	directional?: DirectionalTrafficMetadata;
+	// Set on the reverse row an aggregated pair adds for the graph when the
+	// forward row already carries both directions. The log table skips it.
+	mirror?: boolean;
 }
 
 export interface DirectionalTrafficMetadata {
