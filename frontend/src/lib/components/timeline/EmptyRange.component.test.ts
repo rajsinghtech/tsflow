@@ -61,4 +61,26 @@ describe('EmptyRange', () => {
 		jump?.click();
 		expect(stores.commits).toEqual([{ kind: 'sliding', windowMs: 6 * 60 * 60 * 1000 }]);
 	});
+
+	it('says the poll is failing instead of blaming the range', async () => {
+		const source = stores.source as import('svelte/store').Writable<Record<string, unknown>>;
+		source.update((s) => ({
+			...s,
+			pollerStatus: { lastError: 'poll chunk 1/48 failed: HTTP 403: {"message": "API token invalid"}' }
+		}));
+		target = document.createElement('div');
+		document.body.appendChild(target);
+		component = mount(EmptyRange, { target, props: {} });
+		await tick();
+
+		const status = document.querySelector('[data-testid="empty-range"]');
+		expect(status?.textContent).toContain("Can't fetch flow logs");
+		expect(status?.textContent).toContain('rejected the credentials');
+		expect(status?.textContent).not.toContain('No data in this range');
+		expect(document.querySelector('[data-testid="poll-error"]')?.textContent).toContain('HTTP 403');
+
+		source.update((s) => ({ ...s, pollerStatus: null }));
+		await tick();
+		expect(status?.textContent).toContain('No data in this range');
+	});
 });
