@@ -9,6 +9,7 @@ import {
 } from '#lib/graph/elk-input';
 import { compactBands, compactLayers } from '#lib/graph/layer-compaction';
 import { rememberLayout, tryReuseLayout, type LayoutMemory } from '#lib/graph/layout-reuse';
+import { layoutWithRetry } from '#lib/graph/elk-retry';
 
 export type { LayoutMemory };
 
@@ -129,9 +130,9 @@ export async function applyElkLayout(
 	const elkGraph = buildElkLayoutInput(nodes, edges, options);
 
 	try {
-		const layoutedGraph = await elk.layout(elkGraph);
+		const { result: layoutedGraph, original } = await layoutWithRetry(elkGraph, elk);
 		let placed = nodesWithElkPositions(nodes, layoutedGraph);
-		if (!usesQualityLayout(nodes.length, edges.length)) {
+		if (!original || !usesQualityLayout(nodes.length, edges.length)) {
 			placed = compactPlacedNodes(placed, LARGE_LAYOUT_GAP);
 		}
 		const laid = { nodes: placed, edges, reused: false };
@@ -174,13 +175,11 @@ let mainThreadElk: InstanceType<typeof ELK> | null = null;
 // Same ELK input and worker as applyElkLayout, without the homelab size cap
 // and without the grid fallback. Used for grouped graphs and for one opened group.
 export async function runElkGraph(graph: ElkNode): Promise<ElkNode> {
-	try {
-		return await elk.layout(graph);
-	} catch (error) {
-		console.error('ELK worker failed, running ELK on the main thread:', error);
+	const { result } = await layoutWithRetry(graph, elk, () => {
 		if (!mainThreadElk) mainThreadElk = new ELK();
-		return await mainThreadElk.layout(graph);
-	}
+		return mainThreadElk;
+	});
+	return result;
 }
 
 export async function runElkLayout(
