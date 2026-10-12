@@ -121,6 +121,8 @@ JSON uses the same fields:
 
 ### Environment Variables
 
+[docs/environment.md](docs/environment.md) lists every variable tsflow reads, including the older names that still work. A test keeps that list in sync with the code. The tables below cover the common ones.
+
 #### Tailscale Authentication
 
 | Variable | Description | Default |
@@ -147,6 +149,7 @@ JSON uses the same fields:
 | `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
 | `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
 | `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
+| `TSFLOW_LOG_LEVEL` | `debug` logs every denied request instead of one line per peer and reason a minute. | - |
 
 #### tsnet Serve Mode
 
@@ -353,11 +356,14 @@ Startup fails when the settings disagree. Header mode without trusted CIDRs is r
 | `TSFLOW_S3_BUCKET` | S3/Garage bucket containing exported flow logs | `tailscale-logs` |
 | `TSFLOW_S3_PREFIX` | Object prefix for network flow objects | `network/` |
 | `TSFLOW_S3_ENDPOINT` | S3-compatible endpoint URL | - |
-| `TSFLOW_S3_REGION` | S3 region | `garage` |
+| `TSFLOW_S3_REGION` | S3 region. `aws_default` uses the SDK region. | `garage` |
 | `TSFLOW_S3_ACCESS_KEY_ID` | S3 access key ID | - |
 | `TSFLOW_S3_SECRET_ACCESS_KEY` | S3 secret access key | - |
+| `TSFLOW_S3_PATH_STYLE` | Path-style bucket addressing | `true`, `false` with `aws_default` |
 | `TSFLOW_S3_LOOKBACK` | Object-store listing overlap for late objects | `15m` |
 | `TSFLOW_S3_MAX_OBJECTS_PER_POLL` | Max objects imported per poll cycle | `500` |
+
+The older S3 names still work when the `TSFLOW_S3_*` name is unset: `TAILSCALE_LOGS_S3_*`, `AWS_ENDPOINT_URL`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and lower-case `endpoint` and `region`. With no backend set, an endpoint plus keys still means `s3`. Every variable also accepts a `VITE_` prefix. See [docs/environment.md](docs/environment.md#older-names-that-still-work).
 
 ### Data Storage
 
@@ -426,6 +432,21 @@ Raw flow-log endpoints are deprecated because raw events are not retained: use `
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`
 
+### Upgrading from 1.6
+
+Your 1.6 config works as is. No variable was renamed or removed, no default changed, and nothing new is required. A table test in `backend/internal/config` runs every 1.6.2 config shape against the current loader to keep it that way. With no `TSFLOW_TAILNETS_FILE`, the single-tailnet variables work as before and the data is stored as tailnet `default`. MCP, access control, several tailnets and the health port stay off until you set them.
+
+On first start tsflow migrates the database. It writes a backup first (see below), tags your existing rows as tailnet `default`, and builds the hourly rollups. Old data stays visible and S3 objects that were already imported aren't read again.
+
+Things that behave a bit differently:
+
+- Physical traffic (the underlay, including DERP) is left out of totals unless you pick it in the traffic filter or pass `trafficTypes=physical`. Totals can look lower than in 1.6.
+- `/api/network-logs` serves at most 30 minutes per request and returns `410` for longer windows. `limit` defaults to 1000 and caps at 5000. Use the stats and analytics routes for longer ranges.
+- Device `id` in API responses is the stable node id (`n...`) instead of the numeric id. Numeric ids still work in queries.
+- The rate limit (100 requests a minute) is keyed by the TCP peer. 1.6 trusted `X-Forwarded-For` from anyone. Behind a reverse proxy, set `TSFLOW_TRUSTED_PROXIES` to the proxy address so each client gets its own limit again.
+- In development mode, CORS only allows loopback origins unless `ALLOWED_CORS_ORIGINS` is set. It no longer echoes any origin.
+- API polls stop 2 minutes behind now (`TSFLOW_POLL_DELAY`), so late log messages aren't missed. The newest 2 minutes show up one poll later.
+
 ### Rolling back to the previous release
 
 This release changes the SQLite schema. Before it does, startup writes a full copy of the database beside the live file. For `/app/data/tsflow.db` the copy is `/app/data/tsflow.db.pre-tailnet`. The log names that path. The copy needs about as much free disk as the database file, on top of the temporary space the migration uses while it rewrites tables.
@@ -442,6 +463,8 @@ Rows saved after the upgrade are not in the backup. If startup cannot write the 
 ## Development
 
 ### Setup
+
+You need Go (see `backend/go.mod`) and Node 22 or newer. The frontend build fails on Node 20.
 
 ```bash
 git clone https://github.com/rajsinghtech/tsflow.git
@@ -509,6 +532,10 @@ Alternatively, replace the `${...}` placeholders in `k8s/secret.yaml` with
 your credentials and run `kubectl apply -k k8s` directly. Do not apply the
 template unchanged: Kubernetes does not expand shell-style environment
 variables in manifests.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Star History
 
