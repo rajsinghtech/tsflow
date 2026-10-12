@@ -104,6 +104,9 @@ const (
 	RankDefaultLimit = 20
 	// RankMaxLimit is the largest page a ranked read will return.
 	RankMaxLimit = 200
+	// RankScanMaxLimit is the largest page an internal caller can ask for
+	// through RankQuery.MaxLimit. Request handlers never set MaxLimit.
+	RankScanMaxLimit = 5000
 	// RankMaxOffset bounds how far a ranked page can skip.
 	RankMaxOffset = 100000
 	// RankSortBytes orders by total volume descending.
@@ -161,6 +164,11 @@ type RankQuery struct {
 	// ExactUser requires the full login. The me scope sets this from the
 	// viewer identity.
 	ExactUser bool
+	// MaxLimit raises the page cap above RankMaxLimit, up to
+	// RankScanMaxLimit, for internal callers that rank a whole window in one
+	// read (the MCP server). Zero keeps RankMaxLimit. It is never set from a
+	// request parameter.
+	MaxLimit int
 }
 
 // Filtered reports whether the query narrows the ranking to some nodes.

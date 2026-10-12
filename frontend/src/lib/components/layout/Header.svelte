@@ -9,7 +9,7 @@
 	import { page } from '$app/state';
 	import { uiStore, networkStats, filteredNodes, lastUpdated, themeStore, statsSummary, viewerStore } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
-	import { formatBytes, formatDuration, averageBytesPerNode, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
+	import { formatBytes, formatDuration, averageBytesPerNode, headerLinkLabel, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
 
 	// About flyout state
@@ -231,7 +231,7 @@
 					<Link class="h-4 w-4 text-muted-foreground" />
 					<div class="text-sm">
 						<span class="font-semibold">{headerStat(statsLoaded, displayFlows, (v) => (useNetworkStats ? String(v) : v.toLocaleString()))}</span>
-						<span class="text-muted-foreground"> flows</span>
+						<span class="text-muted-foreground"> {headerLinkLabel(useNetworkStats)}</span>
 					</div>
 				</div>
 

@@ -369,7 +369,11 @@
 >
 	<div class="absolute left-3 top-3 z-10 max-w-md rounded-md border border-border bg-card/95 px-3 py-2 text-sm shadow">
 		<div>
-			{deviceCount.toLocaleString()} devices in {groupCount.toLocaleString()} groups. Click a group to expand.
+			{#if groupCount === 0 && layoutPending}
+				Grouping {nodes.length.toLocaleString()} devices...
+			{:else}
+				{deviceCount.toLocaleString()} devices in {groupCount.toLocaleString()} groups. Click a group to expand.
+			{/if}
 		</div>
 		{#if expanded.length > 0}
 			<div class="mt-2 flex flex-wrap gap-1">
