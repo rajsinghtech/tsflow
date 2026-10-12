@@ -18,6 +18,7 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - Me tab for the signed-in viewer (#410)
 - Time range in the header and in the URL, with free-text ranges like `last 3 hours` (#415)
 - Opt-in read-only MCP server at `/mcp` (#406, #432, #435, #439)
+- MCP: relative time ranges like `now-2h` and `last 7d`, a `whoami` tool, week-long rankings that fit the query timeout at 20k devices, and setup docs for Claude Code, Claude Desktop and Cursor (#478, #479, #480, #481)
 - `TSFLOW_HEALTH_PORT` for Kubernetes probes in tsnet mode (#399)
 - `TSFLOW_TRUSTED_PROXIES` to say which proxies may set the client address (#421)
 - Main-branch images at `ghcr.io/rajsinghtech/tsflow:main` (#394)
