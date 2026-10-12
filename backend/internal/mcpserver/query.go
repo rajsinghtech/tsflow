@@ -18,7 +18,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 )
 
-var errDeviceNotFound = errors.New("device not found")
+var errDeviceNotFound = errors.New("device not found; search_devices finds devices by name, IP, tag, or owner, and scope=all looks past your own devices")
 
 func (s *Service) bind(v Viewer, raw string) (handlers.TailnetBinding, error) {
 	if s == nil || s.h == nil {
@@ -803,7 +803,7 @@ func findDevice(devices []services.Device, scope *access.DeviceScope, raw string
 		return matches[0], nil
 	}
 	if len(matches) > 1 {
-		return services.Device{}, fmt.Errorf("device %q is ambiguous", raw)
+		return services.Device{}, fmt.Errorf("device %q matches %d devices; pass a device id or IP from search_devices", raw, len(matches))
 	}
 	if knownDevice(devices, raw) {
 		return services.Device{}, errDeviceNotFound
