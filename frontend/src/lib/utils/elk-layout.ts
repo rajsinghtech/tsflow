@@ -4,11 +4,11 @@ import { FULL_GRAPH_NODE_THRESHOLD } from '#lib/graph/threshold';
 import {
 	buildElkLayoutInput,
 	calculateNodeDimensions,
-	usesQualityLayout,
 	type ElkLayoutOptions
 } from '#lib/graph/elk-input';
 import { compactBands, compactLayers } from '#lib/graph/layer-compaction';
 import { rememberLayout, tryReuseLayout, type LayoutMemory } from '#lib/graph/layout-reuse';
+import { layoutWithinBudget, usesNetworkSimplex, type BudgetedLayout } from '#lib/graph/layout-budget';
 
 export type { LayoutMemory };
 
@@ -17,27 +17,37 @@ export type { ElkLayoutOptions };
 // Track worker initialization status for debugging
 let workerInitFailed = false;
 
-// Use Web Worker for layout calculations to avoid blocking the main thread
-const elk = new ELK({
-	workerFactory: () => {
-		try {
-			const worker = new Worker(new URL('elkjs/lib/elk-worker.min.js', import.meta.url), {
-				type: 'module'
-			});
-			worker.onerror = (e) => {
-				console.error('ELK worker error:', e.message);
-				workerInitFailed = true;
-			};
-			return worker;
-		} catch (error) {
-			console.error('Failed to create ELK worker:', error);
+function createLayoutWorker(): Worker {
+	try {
+		const worker = new Worker(new URL('elkjs/lib/elk-worker.min.js', import.meta.url), {
+			type: 'module'
+		});
+		worker.onerror = (e) => {
+			console.error('ELK worker error:', e.message);
 			workerInitFailed = true;
-			throw error;
-		}
+		};
+		return worker;
+	} catch (error) {
+		console.error('Failed to create ELK worker:', error);
+		workerInitFailed = true;
+		throw error;
 	}
-});
+}
+
+// Use Web Worker for layout calculations to avoid blocking the main thread
+const elk = new ELK({ workerFactory: createLayoutWorker });
 
 const ELK_NODE_LIMIT = FULL_GRAPH_NODE_THRESHOLD;
+
+function budgetedLayout(graph: ElkNode): Promise<BudgetedLayout> {
+	if (typeof Worker === 'undefined') {
+		return elk.layout(graph).then((result) => ({ result, quality: usesNetworkSimplex(graph) }));
+	}
+	return layoutWithinBudget(graph, {
+		attempt: () => new ELK({ workerFactory: createLayoutWorker }),
+		fast: elk
+	});
+}
 
 export interface LaidOutGraph {
 	nodes: Node[];
@@ -129,9 +139,9 @@ export async function applyElkLayout(
 	const elkGraph = buildElkLayoutInput(nodes, edges, options);
 
 	try {
-		const layoutedGraph = await elk.layout(elkGraph);
+		const { result: layoutedGraph, quality } = await budgetedLayout(elkGraph);
 		let placed = nodesWithElkPositions(nodes, layoutedGraph);
-		if (!usesQualityLayout(nodes.length, edges.length)) {
+		if (!quality) {
 			placed = compactPlacedNodes(placed, LARGE_LAYOUT_GAP);
 		}
 		const laid = { nodes: placed, edges, reused: false };
@@ -175,7 +185,7 @@ let mainThreadElk: InstanceType<typeof ELK> | null = null;
 // and without the grid fallback. Used for grouped graphs and for one opened group.
 export async function runElkGraph(graph: ElkNode): Promise<ElkNode> {
 	try {
-		return await elk.layout(graph);
+		return (await budgetedLayout(graph)).result;
 	} catch (error) {
 		console.error('ELK worker failed, running ELK on the main thread:', error);
 		if (!mainThreadElk) mainThreadElk = new ELK();
