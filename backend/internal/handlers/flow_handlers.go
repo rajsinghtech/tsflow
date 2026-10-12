@@ -155,6 +155,11 @@ func (h *Handlers) GetNetworkLogs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Without a start, older releases returned the last hour. Keep that call
+	// working by defaulting to the largest window this endpoint serves.
+	if c.Query("start") == "" && et.Sub(st) > MaxNetworkLogWindow {
+		st = et.Add(-MaxNetworkLogWindow)
+	}
 	start := st.Format(time.RFC3339)
 	end := et.Format(time.RFC3339)
 	duration := et.Sub(st)
