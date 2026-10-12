@@ -71,7 +71,7 @@
 	id="time-range-popover"
 	role="dialog"
 	aria-label="Time range"
-	class="absolute top-full left-0 z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-xl"
+	class="absolute top-full left-0 z-50 mt-1 max-h-[calc(100dvh-7rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-xl"
 >
 	<form
 		onsubmit={(event) => {
@@ -87,7 +87,7 @@
 			aria-invalid={error ? 'true' : undefined}
 			aria-describedby={error ? 'time-range-error' : 'time-range-hint'}
 			placeholder="2h, last 3 hours, since 9am, 14:00-15:30"
-			class="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+			class="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm pointer-coarse:h-11 pointer-coarse:text-base"
 			autocomplete="off"
 		/>
 		<p id="time-range-hint" class="mt-1 text-[11px] text-muted-foreground">
@@ -114,7 +114,7 @@
 		{#each WINDOW_PRESETS as preset}
 			<button
 				type="button"
-				class="min-h-8 rounded-md border border-border px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="min-h-8 pointer-coarse:min-h-11 rounded-md border border-border px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 				onclick={() => onCommit({ kind: 'sliding', windowMs: preset.ms })}
 			>
 				{preset.label}
@@ -122,7 +122,7 @@
 		{/each}
 		<button
 			type="button"
-			class="min-h-8 rounded-md border border-border px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+			class="min-h-8 pointer-coarse:min-h-11 rounded-md border border-border px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 			onclick={() => onCommit({ kind: 'all' })}
 		>
 			All
@@ -136,7 +136,7 @@
 				{#each recent as item}
 					<button
 						type="button"
-						class="min-h-7 truncate rounded-md px-2 text-left text-xs hover:bg-secondary"
+						class="min-h-7 pointer-coarse:min-h-11 truncate rounded-md px-2 text-left text-xs hover:bg-secondary"
 						onclick={() => chooseRecent(item)}
 					>
 						{item.label}
@@ -152,7 +152,7 @@
 			<button
 				type="button"
 				aria-pressed={zone === 'local'}
-				class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary"
+				class="min-h-7 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-md border border-border px-2 text-xs hover:bg-secondary"
 				class:bg-secondary={zone === 'local'}
 				class:border-primary={zone === 'local'}
 				onclick={() => onZone('local')}
@@ -162,7 +162,7 @@
 			<button
 				type="button"
 				aria-pressed={zone === 'utc'}
-				class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary"
+				class="min-h-7 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-md border border-border px-2 text-xs hover:bg-secondary"
 				class:bg-secondary={zone === 'utc'}
 				class:border-primary={zone === 'utc'}
 				onclick={() => onZone('utc')}

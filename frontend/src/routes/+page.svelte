@@ -3,7 +3,7 @@
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Loader2, AlertCircle, RefreshCw, X, Keyboard } from 'lucide-svelte';
+	import { Loader2, AlertCircle, RefreshCw, X, Keyboard, ChevronUp } from 'lucide-svelte';
 	import NetworkGraph from '#lib/components/graph/NetworkGraph.svelte';
 	import FilterPanel from '#lib/components/filters/FilterPanel.svelte';
 	import LogViewer from '#lib/components/logs/LogViewer.svelte';
@@ -18,6 +18,13 @@
 	import { dataSourceStore } from '#lib/stores/data-source-store';
 	import { viewerReady, viewerStore, whenViewerReady } from '#lib/stores/viewer-store';
 	import { landingTarget, readLastTab, rememberTab } from '#lib/analytics/landing';
+	import {
+		COMPACT_QUERY,
+		detailsSheet,
+		isCompactViewport,
+		sheetDragHeight,
+		sheetDragResult
+	} from '#lib/stores/details-sheet';
 
 	let isBootstrapping = $state(true);
 
@@ -71,6 +78,102 @@
 		};
 	});
 
+	// Phones and tablets below lg: the details live in a bottom sheet over the graph.
+	let compact = $state(isCompactViewport());
+
+	$effect(() => {
+		if (typeof window.matchMedia !== 'function') return;
+		const query = window.matchMedia(COMPACT_QUERY);
+		const update = () => (compact = query.matches);
+		update();
+		query.addEventListener('change', update);
+		return () => query.removeEventListener('change', update);
+	});
+
+	// Tapping a node or a connection brings its details up.
+	let lastSelection: string | null = null;
+	$effect(() => {
+		const selection = $uiStore.selectedNodeId ?? $uiStore.selectedEdgeId;
+		if (compact && selection && selection !== lastSelection) detailsSheet.reveal();
+		lastSelection = selection;
+	});
+
+	const sheetTitle = $derived(
+		$uiStore.selectedNodeId ? 'Device details' : $uiStore.selectedEdgeId ? 'Connection details' : 'Traffic and logs'
+	);
+
+	let mainEl = $state<HTMLElement | null>(null);
+	let sheetHeight = $state<number | null>(null);
+	let sheetDrag: { startY: number; startHeight: number; pointerId: number } | null = null;
+	let dragHeight = $state<number | null>(null);
+
+	function sheetMax(): number {
+		return Math.max(0, (mainEl?.clientHeight ?? window.innerHeight) - 48);
+	}
+
+	const shownSheetHeight = $derived(
+		dragHeight ?? sheetHeight ?? Math.round((mainEl?.clientHeight ?? 600) * 0.55)
+	);
+
+	function startSheetDrag(e: PointerEvent) {
+		if ((e.target as Element).closest('button')) return;
+		sheetDrag = { startY: e.clientY, startHeight: shownSheetHeight, pointerId: e.pointerId };
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+	}
+
+	function moveSheetDrag(e: PointerEvent) {
+		if (!sheetDrag || e.pointerId !== sheetDrag.pointerId) return;
+		dragHeight = sheetDragHeight(sheetDrag.startHeight, e.clientY - sheetDrag.startY, sheetMax());
+	}
+
+	function endSheetDrag(e: PointerEvent) {
+		if (!sheetDrag || e.pointerId !== sheetDrag.pointerId) return;
+		const result = sheetDragResult(sheetDrag.startHeight, e.clientY - sheetDrag.startY, sheetMax());
+		sheetDrag = null;
+		dragHeight = null;
+		sheetHeight = result.height;
+		if (!result.open) detailsSheet.close();
+	}
+
+	// A tap or a swipe up on the closed handle opens the sheet. This doesn't
+	// wait for the click, which Chrome sometimes drops right after a swipe.
+	let pillStartY: number | null = null;
+	function pillPointerUp(e: PointerEvent) {
+		if (pillStartY !== null) {
+			const dy = pillStartY - e.clientY;
+			if (dy > 30 || Math.abs(dy) < 10) detailsSheet.open();
+		}
+		pillStartY = null;
+	}
+
+	// A tap on the empty graph closes the sheet. Pans and pinches don't.
+	let paneTap: { x: number; y: number } | null = null;
+	function graphPointerDown(e: PointerEvent) {
+		paneTap = (e.target as Element).closest('.svelte-flow__pane') ? { x: e.clientX, y: e.clientY } : null;
+	}
+	function graphPointerUp(e: PointerEvent) {
+		if (paneTap && Math.hypot(e.clientX - paneTap.x, e.clientY - paneTap.y) < 8 && $detailsSheet) {
+			detailsSheet.close();
+		}
+		paneTap = null;
+	}
+
+	// Swipe the filter drawer to the left to close it. Touch events, because
+	// the browser cancels the pointer once the drawer starts to scroll.
+	let drawerStart: { x: number; y: number } | null = null;
+	function drawerTouchStart(e: TouchEvent) {
+		const touch = e.touches[0];
+		drawerStart = e.touches.length === 1 ? { x: touch.clientX, y: touch.clientY } : null;
+	}
+	function drawerTouchEnd(e: TouchEvent) {
+		const touch = e.changedTouches[0];
+		if (drawerStart && touch) {
+			const dx = drawerStart.x - touch.clientX;
+			if (dx > 60 && dx > Math.abs(touch.clientY - drawerStart.y)) uiStore.closeMobileDrawer();
+		}
+		drawerStart = null;
+	}
+
 	// Keyboard shortcuts
 	let showShortcuts = $state(false);
 
@@ -81,6 +184,10 @@
 		if (e.key === 'Escape') {
 			if (showShortcuts) {
 				showShortcuts = false;
+			} else if (compact && $uiStore.mobileDrawerOpen) {
+				uiStore.closeMobileDrawer();
+			} else if (compact && $detailsSheet) {
+				detailsSheet.close();
 			} else {
 				uiStore.clearSelection();
 			}
@@ -131,7 +238,7 @@
 
 <svelte:window on:pointermove={handlePointerMove} on:pointerup={handlePointerUp} on:keydown={handleKeydown} />
 
-<div class="flex h-screen flex-col bg-background">
+<div class="flex h-dvh flex-col bg-background">
 	<!-- Top Bar -->
 	<Header />
 
@@ -154,22 +261,19 @@
 				onkeydown={(e) => e.key === 'Escape' && uiStore.closeMobileDrawer()}
 				aria-label="Close drawer"
 			></div>
-			<aside class="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col overflow-y-auto bg-card shadow-2xl lg:hidden">
-				<div class="flex items-center justify-between border-b border-border px-4 py-3">
-					<h2 class="text-sm font-semibold">Filters</h2>
-					<button
-						onclick={() => uiStore.closeMobileDrawer()}
-						class="rounded-md p-2 hover:bg-secondary"
-					>
-						<X class="h-5 w-5" />
-					</button>
-				</div>
+			<aside
+				class="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[90vw] flex-col overflow-y-auto bg-card shadow-2xl lg:hidden"
+				aria-label="Filters"
+				ontouchstart={drawerTouchStart}
+				ontouchend={drawerTouchEnd}
+				ontouchcancel={() => (drawerStart = null)}
+			>
 				<FilterPanel />
 			</aside>
 		{/if}
 
 		<!-- Graph Area -->
-		<main id="main-content" class="relative flex flex-1 flex-col overflow-hidden">
+		<main id="main-content" class="relative flex flex-1 flex-col overflow-hidden" bind:this={mainEl}>
 			<!-- Loading State -->
 			{#if isBootstrapping || ($uiStore.isLoading && $filteredNodes.length === 0)}
 				<div class="flex flex-1 flex-col items-center justify-center gap-4">
@@ -206,8 +310,21 @@
 			{:else if $networkLogs.length === 0}
 				<EmptyRange />
 			<!-- Graph -->
+			{:else if compact}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					class="min-h-0 flex-1"
+					onpointerdown={graphPointerDown}
+					onpointerup={graphPointerUp}
+					onpointercancel={() => (paneTap = null)}
+				>
+					<NetworkGraph
+						nodes={$filteredNodes}
+						edges={$filteredEdges}
+					/>
+				</div>
 			{:else}
-				<div class="flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">
+				<div class="min-h-[40%] flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">
 					<NetworkGraph
 						nodes={$filteredNodes}
 						edges={$filteredEdges}
@@ -215,6 +332,63 @@
 				</div>
 			{/if}
 
+			{#if compact}
+				{#if !isBootstrapping}
+					{#if $detailsSheet}
+						<section
+							class="absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-xl border-t border-border bg-card shadow-[0_-8px_24px_rgba(0,0,0,0.18)]"
+							style="height: {shownSheetHeight}px"
+							aria-label={sheetTitle}
+						>
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="relative flex h-11 shrink-0 cursor-row-resize touch-none items-center justify-between pr-1 pl-4 select-none"
+								onpointerdown={startSheetDrag}
+								onpointermove={moveSheetDrag}
+								onpointerup={endSheetDrag}
+								onpointercancel={endSheetDrag}
+							>
+								<div class="absolute top-1.5 left-1/2 h-1 w-10 -translate-x-1/2 rounded-full bg-muted-foreground/40" aria-hidden="true"></div>
+								<h2 class="truncate pt-1 text-sm font-semibold">{sheetTitle}</h2>
+								<button
+									type="button"
+									onclick={() => detailsSheet.close()}
+									onpointerup={() => detailsSheet.close()}
+									class="flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+									aria-label="Hide details"
+									title="Hide details"
+								>
+									<X class="h-5 w-5" />
+								</button>
+							</div>
+							<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+								<DeviceTimeline />
+								<BandwidthChart />
+								<PortDetails />
+								<EdgePolicyInfo />
+								<div class="border-t border-border" style="height: {Math.max(240, shownSheetHeight - 44)}px">
+									<LogViewer />
+								</div>
+							</div>
+						</section>
+					{:else}
+						<button
+							type="button"
+							class="absolute bottom-3 left-1/2 z-20 flex h-11 -translate-x-1/2 touch-none items-center gap-1.5 rounded-full border border-border bg-card px-4 text-sm font-medium shadow-lg hover:bg-secondary"
+							onclick={() => detailsSheet.open()}
+							onpointerdown={(e) => (pillStartY = e.clientY)}
+							onpointerup={pillPointerUp}
+							aria-label="Show {sheetTitle.toLowerCase()}"
+						>
+							<ChevronUp class="h-4 w-4" />
+							{sheetTitle}
+						</button>
+					{/if}
+				{/if}
+			{:else}
+			<!-- The graph keeps at least 40% of the height. When a selection's
+			     details don't fit under it, this part scrolls instead. -->
+			<div class="flex min-h-0 shrink flex-col overflow-y-auto">
 			<DeviceTimeline />
 
 			<!-- Bottom Panel: Bandwidth Chart + Port Details + Log Viewer -->
@@ -232,9 +406,11 @@
 				>
 					<div class="h-0.5 w-8 rounded-full bg-muted-foreground/50 sm:hidden"></div>
 				</div>
-				<div class="overflow-hidden border-t border-border bg-card" style="height: {logViewerHeight}px">
+				<div class="shrink-0 overflow-hidden border-t border-border bg-card" style="height: {logViewerHeight}px">
 					<LogViewer />
 				</div>
+			{/if}
+			</div>
 			{/if}
 		</main>
 	</div>

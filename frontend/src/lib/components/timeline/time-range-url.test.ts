@@ -5,6 +5,7 @@ import {
 	encodeIntent,
 	intentLabel,
 	parseRangeInput,
+	timelineStartsCollapsed,
 	type RangeIntent
 } from './time-range-url';
 
@@ -150,5 +151,21 @@ describe('range parser', () => {
 		expect(parseRangeInput('1m', now, 'utc')).toMatchObject({ ok: false, message: expect.stringMatching(/5 minutes/) });
 		expect(parseRangeInput('banana', now, 'utc')).toMatchObject({ ok: false });
 		expect(MIN_WINDOW_MS).toBe(5 * 60 * 1000);
+	});
+});
+
+describe('timelineStartsCollapsed', () => {
+	it('follows a stored choice on any screen', () => {
+		expect(timelineStartsCollapsed('1', false)).toBe(true);
+		expect(timelineStartsCollapsed('0', true)).toBe(false);
+	});
+
+	it('starts hidden on a short screen when nothing is stored', () => {
+		expect(timelineStartsCollapsed(null, true)).toBe(true);
+	});
+
+	it('starts open everywhere else, as before', () => {
+		expect(timelineStartsCollapsed(null, false)).toBe(false);
+		expect(timelineStartsCollapsed('junk', false)).toBe(false);
 	});
 });

@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { UIState } from '#lib/types';
+import { detailsSheet, isCompactViewport } from './details-sheet';
 
 const defaultUIState: UIState = {
 	showFilterPanel: true,
@@ -17,7 +18,15 @@ function createUIStore() {
 	return {
 		subscribe,
 		toggleFilterPanel: () => update((s) => ({ ...s, showFilterPanel: !s.showFilterPanel })),
-		toggleLogViewer: () => update((s) => ({ ...s, showLogViewer: !s.showLogViewer })),
+		// Below lg the logs live in the details sheet, so the same button and
+		// key open and close that instead.
+		toggleLogViewer: () => {
+			if (isCompactViewport()) {
+				detailsSheet.toggle();
+			} else {
+				update((s) => ({ ...s, showLogViewer: !s.showLogViewer }));
+			}
+		},
 		openMobileDrawer: () => update((s) => ({ ...s, mobileDrawerOpen: true })),
 		closeMobileDrawer: () => update((s) => ({ ...s, mobileDrawerOpen: false })),
 		toggleMobileDrawer: () => update((s) => ({ ...s, mobileDrawerOpen: !s.mobileDrawerOpen })),

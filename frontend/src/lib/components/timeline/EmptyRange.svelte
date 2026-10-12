@@ -4,6 +4,7 @@
 	import { commitIntent } from '#lib/stores/time-range-history';
 	import { storedCoverage, windowCoverage } from '#lib/stores/traffic-shape';
 	import { canJumpToLatest, emptyRangeReason, jumpWindowMs, storedRangeLabel } from './range-coverage';
+	import { pollFailure } from './poll-health';
 	import { loadTimeZone } from './time-range-url';
 
 	let { compact = false }: { compact?: boolean } = $props();
@@ -11,6 +12,7 @@
 	const zone = loadTimeZone();
 	const stored = $derived(storedRangeLabel($storedCoverage, zone));
 	const reason = $derived(emptyRangeReason($windowCoverage));
+	const failure = $derived(pollFailure($dataSourceStore.pollerStatus));
 	const showJump = $derived(canJumpToLatest($windowCoverage, $dataSourceStore.followLatest, $storedCoverage));
 
 	function jumpToLatest() {
@@ -29,8 +31,14 @@
 	{#if !compact}
 		<CalendarX class="h-8 w-8 text-muted-foreground" aria-hidden="true" />
 	{/if}
-	<p class="font-medium">No data in this range</p>
-	<p class="max-w-md text-sm text-muted-foreground">{reason}</p>
+	{#if failure}
+		<p class="font-medium">Can't fetch flow logs</p>
+		<p class="max-w-md text-sm text-muted-foreground">{failure.hint}</p>
+		<p class="max-w-md break-words font-mono text-xs text-destructive" data-testid="poll-error">{failure.error}</p>
+	{:else}
+		<p class="font-medium">No data in this range</p>
+		<p class="max-w-md text-sm text-muted-foreground">{reason}</p>
+	{/if}
 	{#if stored}
 		<p class="text-xs text-muted-foreground">Stored data: {stored}</p>
 	{/if}

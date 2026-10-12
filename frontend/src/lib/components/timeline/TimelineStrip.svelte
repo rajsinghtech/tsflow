@@ -8,6 +8,7 @@
 		resolveCoverage,
 		timelineViewDomain
 	} from './time-window';
+	import { pollFailure } from './poll-health';
 	import { formatStamp, type TimeZoneMode } from './time-range-url';
 
 	let { zone }: { zone: TimeZoneMode } = $props();
@@ -26,6 +27,7 @@
 	);
 	const mainBins = $derived(binTraffic(points, view.start, view.end, 96));
 	const overviewBins = $derived(binTraffic(points, coverage.start, coverage.end, 120));
+	const failing = $derived(!!pollFailure(source.pollerStatus));
 	const ready = $derived(coverage.end > coverage.start && !!source.selectedStart && !!source.selectedEnd);
 
 
@@ -64,7 +66,9 @@
 			/>
 		</div>
 	{:else}
-		<p class="py-3 text-xs text-muted-foreground">Collecting aggregate data...</p>
+		<p class="py-3 text-xs text-muted-foreground">
+			{failing ? 'No data yet. The last poll failed.' : 'Collecting aggregate data...'}
+		</p>
 	{/if}
 	{#if sparkNote}
 		<p class="text-[11px] text-muted-foreground">{sparkNote}</p>

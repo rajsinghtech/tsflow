@@ -148,7 +148,7 @@
 	});
 </script>
 
-<div class="flex h-screen flex-col bg-background">
+<div class="flex h-dvh flex-col bg-background">
 	<Header />
 
 	<main class="flex-1 overflow-y-auto p-3 sm:p-6">

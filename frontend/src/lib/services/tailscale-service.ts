@@ -66,6 +66,9 @@ export interface PollerStatus {
 	totalPolled: number;
 	pollErrors: number;
 	pollInterval: string;
+	// Set while the most recent poll failed; a good poll clears it.
+	lastError?: string;
+	lastErrorTime?: string;
 	database?: {
 		tableCounts?: {
 			flow_logs_current?: number;

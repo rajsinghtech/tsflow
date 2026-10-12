@@ -1,18 +1,10 @@
 <script lang="ts">
 	import { uiStore, filteredNodes, rawLogs, devices } from '#lib/stores';
-	import { formatBytes, extractIP, extractPort, getProtocolName } from '#lib/utils';
+	import { formatBytes, extractIP, extractPort, getProtocolName, wellKnownPortName } from '#lib/utils';
 	import type { NetworkLog } from '#lib/types';
 
-	const PORT_NAMES: Record<number, string> = {
-		20: 'FTP-DATA', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP',
-		53: 'DNS', 80: 'HTTP', 110: 'POP3', 143: 'IMAP', 443: 'HTTPS',
-		465: 'SMTPS', 587: 'SMTP', 993: 'IMAPS', 995: 'POP3S',
-		3306: 'MySQL', 5432: 'PostgreSQL', 6379: 'Redis',
-		8080: 'HTTP-Alt', 8443: 'HTTPS-Alt', 9090: 'Prometheus', 27017: 'MongoDB'
-	};
-
 	function getPortName(port: number): string {
-		return PORT_NAMES[port] || (port > 0 ? `Port ${port}` : 'Unknown');
+		return wellKnownPortName(port) || (port > 0 ? `Port ${port}` : 'Unknown');
 	}
 
 	// Build device ID to primary IP mapping (for resolving aggregated flow addresses)

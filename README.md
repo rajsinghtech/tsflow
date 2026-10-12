@@ -2,6 +2,11 @@
 
 A real-time network traffic visualization dashboard for Tailscale networks. Monitor device connectivity, analyze bandwidth usage, and explore network flows with an interactive graph interface.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/traffic-dark.png">
+  <img alt="Traffic graph of a small homelab tailnet" src="docs/images/traffic.png">
+</picture>
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
@@ -47,6 +52,25 @@ docker run -d \
   -e TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret \
   ghcr.io/rajsinghtech/tsflow:latest
 ```
+
+## Screenshots
+
+All of these use made-up demo data.
+
+**Analytics**: top talkers, ports, protocols and traffic types for the selected window.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/analytics-dark.png">
+  <img alt="Analytics page" src="docs/images/analytics.png">
+</picture>
+
+**Me**: your own devices, top peers and new connections. Shows up when tsflow knows who you are (see [Internal access control](#internal-access-control)).
+
+<img alt="Me page" src="docs/images/me.png">
+
+**Time picker**: presets, free text like `last 3 hours` or `since 9am`, local or UTC.
+
+<img alt="Time range picker" src="docs/images/time-picker.png">
 
 ## Configuration
 
@@ -399,13 +423,46 @@ Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP a
 
 ### MCP server
 
-`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
+`TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI, so Claude, Cursor and other MCP clients can ask questions about your flow data. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
 
-Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes. The REST API still does not enforce the device filter.
+#### Turn it on
 
-Tools are `list_tailnets`, `search_devices`, `get_device`, `top_talkers`, `top_pairs`, `flows_between`, `device_peers`, `device_timeline`, `new_connections`, and `stats_overview`. They read stored rollups. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Windows default to the last hour and stop at 7 days. List results default to 20 rows and stop at 100.
+Add the variable to the container you already run:
 
-Claude and Cursor can attach the endpoint as a remote MCP server. Point the client at the tailnet URL when tsflow is served with `TSFLOW_SERVE`, or at the trusted proxy when header access is on. The client does not get a new privilege path.
+```bash
+docker run -d \
+  --name tsflow \
+  -p 127.0.0.1:8080:8080 \
+  -v tsflow_data:/app/data \
+  -e TAILSCALE_OAUTH_CLIENT_ID=your-client-id \
+  -e TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret \
+  -e TSFLOW_MCP_ENABLED=true \
+  ghcr.io/rajsinghtech/tsflow:latest
+```
+
+The endpoint is then `http://localhost:8080/mcp`. With `TSFLOW_SERVE=true` it is `https://<TSFLOW_HOSTNAME>.<your-tailnet>.ts.net/mcp`. With header access on, use the trusted proxy's URL so the proxy sets the identity headers. A client should never send `Tailscale-User-Login` itself.
+
+On Kubernetes (the repository has manifests, not a Helm chart), set it on the container:
+
+```yaml
+env:
+  - name: TSFLOW_MCP_ENABLED
+    value: "true"
+```
+
+`k8s/deployment.yaml` leaves it `false`. `k8s/access-example.yaml` shows it next to the access settings. Keep the Service reachable only from the tailnet or the trusted proxy.
+
+#### Connect a client
+
+The examples use `https://tsflow.example.ts.net/mcp`. Swap in your own URL.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http tsflow https://tsflow.example.ts.net/mcp
+```
+
+Or commit it to a project's `.mcp.json`:
 
 ```json
 {
@@ -418,15 +475,65 @@ Claude and Cursor can attach the endpoint as a remote MCP server. Point the clie
 }
 ```
 
-The repository has Kubernetes manifests, not a Helm chart. Set the variable on the container:
+Cursor, in `~/.cursor/mcp.json` or a project's `.cursor/mcp.json`:
 
-```yaml
-env:
-  - name: TSFLOW_MCP_ENABLED
-    value: "true"
+```json
+{
+  "mcpServers": {
+    "tsflow": {
+      "url": "https://tsflow.example.ts.net/mcp"
+    }
+  }
+}
 ```
 
-`k8s/deployment.yaml` leaves it `false`. `k8s/access-example.yaml` shows it next to the access settings. Keep the Service reachable only from the tailnet or the trusted proxy. The health port used with `TSFLOW_SERVE` does not expose `/mcp`.
+Claude Desktop's `claude_desktop_config.json` only starts local servers, so bridge to the URL with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node 18 or newer):
+
+```json
+{
+  "mcpServers": {
+    "tsflow": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://tsflow.example.ts.net/mcp"]
+    }
+  }
+}
+```
+
+Claude's "Add custom connector" setting connects from Anthropic's cloud rather than from your machine, so it can't reach a tsflow that only listens on your tailnet or on localhost. Use the bridge above instead.
+
+#### Tools
+
+| Tool | Answers |
+| --- | --- |
+| `whoami` | Who the tools run as: login, groups, permitted tailnets, and what `scope=mine` keeps |
+| `list_tailnets` | Which tailnets you can query, with poller status |
+| `search_devices` | Find devices by name, hostname, IP, tag, or owner login |
+| `get_device` | One device by id, name, or IP, with tags and owner |
+| `top_talkers` | Busiest devices over a window, by bytes or flows |
+| `top_pairs` | Busiest device pairs over a window |
+| `flows_between` | Bytes, protocols, and ports between two devices, IPs, or CIDRs |
+| `device_peers` | Who one device talks to most |
+| `device_timeline` | One device's bytes over time, split by traffic type |
+| `new_connections` | Pairs first seen in the window and absent from the lookback before it |
+| `stats_overview` | Network-wide protocol, traffic-type, flow, and pair totals |
+
+Every tool is marked read-only and reads stored rollups. `start` and `end` take RFC3339 (`2026-01-02T15:04:05Z`) or a time relative to now (`now-2h`, `2h ago`, `last 24h`, `last week`). Windows default to the last hour and stop at 7 days. `lookback` takes durations like `24h`, `3d`, or `1w`, up to 7 days. Lists default to 20 rows, stop at 100 per page, and page with `offset` up to 1000. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Pass `tailnet` when more than one tailnet is configured.
+
+Identity autoscope is only the initial device view, the same way the UI starts. Device tools take `scope`: `mine` or `all`. When autoscope is `user` or `groups`, the default is `mine` and results match that filter. `scope=all` clears it and returns every device in the permitted tailnets. `list_tailnets` and `stats_overview` stay tailnet-wide, matching the REST routes.
+
+Things to ask once it's connected: "what were the top talkers in the last 2h?", "who has db-01 been talking to today?", "any new connections since this morning?"
+
+#### Security notes
+
+- MCP is off by default. With it off, `/mcp` doesn't exist.
+- The tools can't change anything in tsflow or Tailscale, and no tool returns credentials or API keys.
+- With access control off, anyone who can reach `/mcp` can read every tailnet's flow data, the same as the UI. Keep tsflow on your tailnet or bound to localhost, as in the example above.
+- With access control on, MCP uses the same identity, grants, and tailnet allowlists as `/api`. A viewer can't query a tailnet they aren't granted.
+- `scope=mine` is a convenience view, not a boundary. `scope=all` and the REST API show every device in the tailnets a viewer is granted. To keep people apart, give them different tailnet grants.
+- `/mcp` has its own rate limit of 100 requests a minute per client address. Over the limit it returns `429` with `Retry-After`. Behind a proxy, set `TSFLOW_TRUSTED_PROXIES` so the limit counts the real client and not the proxy.
+- Whatever a tool returns (hostnames, owner logins, tags, traffic volumes) goes to the model your client uses. Device names and tags come from your tailnet, so treat them as untrusted text.
+- The health port used with `TSFLOW_SERVE` does not expose `/mcp`.
 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
