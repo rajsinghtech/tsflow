@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { averageBytesPerNode, headerNodeCount, headerShowsStats, headerStat, HEADER_STAT_PLACEHOLDER, resolveActiveNodeCount } from './active-nodes';
+import { averageBytesPerNode, headerLinkLabel, headerNodeCount, headerShowsStats, headerStat, HEADER_STAT_PLACEHOLDER, resolveActiveNodeCount } from './active-nodes';
 
 describe('active node count', () => {
 	it('uses the window total instead of a capped top-talkers list', () => {
@@ -55,5 +55,12 @@ describe('header stats before data loads', () => {
 		expect(headerStat(false, 0, (v) => `${v} B`)).toBe(HEADER_STAT_PLACEHOLDER);
 		expect(headerStat(true, 0)).toBe('0');
 		expect(headerStat(true, 1536, (v) => `${v / 1024} KB`)).toBe('1.5 KB');
+	});
+});
+
+describe('header link label', () => {
+	it('calls the graph count pairs and the stats count flows', () => {
+		expect(headerLinkLabel(true)).toBe('pairs');
+		expect(headerLinkLabel(false)).toBe('flows');
 	});
 });

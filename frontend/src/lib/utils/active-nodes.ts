@@ -22,6 +22,12 @@ export function headerNodeCount(
 	return 0;
 }
 
+// The graph's count is device pairs (Analytics calls it Unique Pairs); the
+// stats summary's count is flows. The header labels whichever it shows.
+export function headerLinkLabel(useNetwork: boolean): 'pairs' | 'flows' {
+	return useNetwork ? 'pairs' : 'flows';
+}
+
 export function averageBytesPerNode(totalBytes: number, nodeCount: number): number {
 	if (!Number.isFinite(totalBytes) || totalBytes <= 0 || nodeCount <= 0) return 0;
 	return totalBytes / nodeCount;
