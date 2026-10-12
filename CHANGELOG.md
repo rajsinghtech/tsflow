@@ -18,6 +18,7 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - Me tab for the signed-in viewer (#410)
 - Time range in the header and in the URL, with free-text ranges like `last 3 hours` (#415)
 - Opt-in read-only MCP server at `/mcp` (#406, #432, #435, #439)
+- MCP: relative time ranges like `now-2h` and `last 7d`, a `whoami` tool, week-long rankings that fit the query timeout at 20k devices, and setup docs for Claude Code, Claude Desktop and Cursor (#478, #479, #480, #481)
 - `TSFLOW_HEALTH_PORT` for Kubernetes probes in tsnet mode (#399)
 - `TSFLOW_TRUSTED_PROXIES` to say which proxies may set the client address (#421)
 - Main-branch images at `ghcr.io/rajsinghtech/tsflow:main` (#394)
@@ -75,9 +76,14 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 
 ### UI polish
 
-- (more polish PRs land here before the tag)
+- The Me tab works with the API flow source: device list identities are stored (#458)
+- Network Logs list each pair once (#463)
+- Network Logs sort headers work from the keyboard (#465)
+- A device timeline counts every id of the device (#466)
+- Screen readers name graph cards and edges by hostname (#467)
+- Escape closes the time range picker (#468)
 
 ### Dependencies
 
 - SvelteKit, Vite and the static adapter upgraded together (#370)
-- Go module and npm updates from Renovate
+- Go module and npm updates from Renovate, including klauspost/compress 1.20.3 (#462)
