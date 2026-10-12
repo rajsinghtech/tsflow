@@ -51,8 +51,8 @@ type getDeviceIn struct {
 
 type rankedIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 	Sort         string   `json:"sort,omitempty" jsonschema:"Order by bytes (default) or flows."`
@@ -62,8 +62,8 @@ type rankedIn struct {
 
 type flowsBetweenIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	A            string   `json:"a" jsonschema:"First endpoint: device id, hostname, name, IP, or CIDR."`
 	B            string   `json:"b" jsonschema:"Second endpoint: device id, hostname, name, IP, or CIDR."`
@@ -73,8 +73,8 @@ type flowsBetweenIn struct {
 
 type deviceIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	Device       string   `json:"device" jsonschema:"Device id, hostname, name, or IP address."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
@@ -84,8 +84,8 @@ type deviceIn struct {
 
 type timelineIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to split by: virtual, subnet, exit, physical. Physical is omitted unless this list contains physical."`
 	Device       string   `json:"device" jsonschema:"Device id, hostname, name, or IP address."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
@@ -93,10 +93,10 @@ type timelineIn struct {
 
 type newConnectionsIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
-	Lookback     string   `json:"lookback,omitempty" jsonschema:"How far before start a pair must be absent to count as new. Go duration such as 24h. Defaults to 24h and cannot exceed 168h."`
+	Lookback     string   `json:"lookback,omitempty" jsonschema:"How far before start a pair must be absent to count as new. A duration such as 24h, 3d, or 1w. Defaults to 24h and cannot exceed 7d."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum rows. Defaults to 20 and is clamped to 100."`
 	Offset       int      `json:"offset,omitempty" jsonschema:"Rows to skip. Defaults to 0 and cannot exceed 1000."`
@@ -104,8 +104,8 @@ type newConnectionsIn struct {
 
 type statsOverviewIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
-	Start        string   `json:"start,omitempty" jsonschema:"Window start in RFC3339. Defaults to one hour before end."`
-	End          string   `json:"end,omitempty" jsonschema:"Window end in RFC3339. Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
+	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
+	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
 	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical bytes stay in physicalBytes. Protocol totals include physical only when this list contains physical."`
 }
 
