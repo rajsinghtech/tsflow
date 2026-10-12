@@ -170,6 +170,37 @@ func TestNetworkLogsCapsWindowAndLimit(t *testing.T) {
 	}
 }
 
+func TestNetworkLogsWithoutStartUsesLargestWindow(t *testing.T) {
+	var gotStart, gotEnd string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotStart, gotEnd = r.URL.Query().Get("start"), r.URL.Query().Get("end")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[{"id":1}]}`))
+	}))
+	defer server.Close()
+	h := NewHandlers(services.NewTailscaleService(&config.Config{
+		TailscaleAPIURL:  server.URL,
+		TailscaleTailnet: "example.com",
+		TailscaleAPIKey:  "test-key",
+	}), nil, nil, "test")
+
+	end := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	for _, target := range []string{"/api/network-logs", "/api/network-logs?end=" + end.Format(time.RFC3339)} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		h.GetNetworkLogs(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s, want 200", target, w.Code, w.Body.String())
+		}
+		st, err1 := time.Parse(time.RFC3339, gotStart)
+		et, err2 := time.Parse(time.RFC3339, gotEnd)
+		if err1 != nil || err2 != nil || et.Sub(st) != MaxNetworkLogWindow {
+			t.Fatalf("%s: upstream window %s..%s, want %s", target, gotStart, gotEnd, MaxNetworkLogWindow)
+		}
+	}
+}
+
 func TestDNSNameserversSurfacesUpstreamError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"missing scope dns:read"}`, http.StatusForbidden)

@@ -11,10 +11,10 @@ import (
 
 // CacheConfig holds cache configuration
 type CacheConfig struct {
-	MaxAge       time.Duration
-	Private      bool
-	NoStore      bool
-	MustRevalid  bool
+	MaxAge      time.Duration
+	Private     bool
+	NoStore     bool
+	MustRevalid bool
 }
 
 // DefaultCacheConfig returns config for cacheable but frequently changing data

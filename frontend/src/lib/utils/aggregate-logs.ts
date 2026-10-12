@@ -182,21 +182,21 @@ export function convertAggregatedFlowsToNetworkLogs(flows: AggregatedFlow[], ran
 			const revLog = getOrCreateLog(flow.dstNodeId);
 			const protocolBytes = normalizeProtocolBytes(flow.rxProtocolBytes, flow.protocol || 0, flow.totalRxBytes);
 			const ports = directional ? flow.rxPorts || [] : [];
-			pushTraffic(
-				revLog,
-				flow.trafficType,
-				makeAggregateTrafficEntry(
-					flow.dstNodeId,
-					flow.srcNodeId,
-					flow.totalRxBytes,
-					flow.totalRxPkts || 0,
-					flow.totalTxBytes || 0,
-					flow.totalTxPkts || 0,
-					protocolBytes,
-					ports,
-					directional
-				)
+			const reverse = makeAggregateTrafficEntry(
+				flow.dstNodeId,
+				flow.srcNodeId,
+				flow.totalRxBytes,
+				flow.totalRxPkts || 0,
+				flow.totalTxBytes || 0,
+				flow.totalTxPkts || 0,
+				protocolBytes,
+				ports,
+				directional
 			);
+			// The forward row already shows these bytes as RX, so the log
+			// table lists the pair once. The graph still uses both rows.
+			if (flow.totalTxBytes > 0) reverse.mirror = true;
+			pushTraffic(revLog, flow.trafficType, reverse);
 		}
 	}
 

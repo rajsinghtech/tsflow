@@ -88,11 +88,20 @@ func loadMergedDevices(ctx context.Context, q queryRower, tailnetID string) ([]*
 }
 
 func loadNodeMetadata(ctx context.Context, q queryRower, tailnetID string) ([]NodeMetadata, error) {
-	rows, err := q.QueryContext(ctx, `
+	return loadNodeMetadataWhere(ctx, q, tailnetID, "")
+}
+
+// loadNodeMetadataWhere reads one tailnet's node metadata, narrowed by an
+// optional extra condition on node_metadata (aliased m).
+func loadNodeMetadataWhere(ctx context.Context, q queryRower, tailnetID, extra string, extraArgs ...any) ([]NodeMetadata, error) {
+	statement := `
 		SELECT node_id, name, hostname, owner, ips, tags
-		FROM node_metadata
-		WHERE tailnet_id = ?
-	`, tailnetID)
+		FROM node_metadata AS m
+		WHERE tailnet_id = ?`
+	if extra != "" {
+		statement += " AND (" + extra + ")"
+	}
+	rows, err := q.QueryContext(ctx, statement, append([]any{tailnetID}, extraArgs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query node metadata: %w", err)
 	}

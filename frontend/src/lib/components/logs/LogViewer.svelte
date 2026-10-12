@@ -8,6 +8,7 @@
 	import { loadTimeZone } from '#lib/components/timeline/time-range-url';
 	import type { NetworkLog, TrafficType } from '#lib/types';
 
+	import { ariaSort } from './log-sort';
 	type SortField = 'logged' | 'txBytes' | 'rxBytes' | 'trafficType' | 'protocol';
 	let sortField: SortField = $state('logged');
 	let sortDir: 'asc' | 'desc' = $state('desc');
@@ -228,6 +229,8 @@
 
 			for (const t of traffic) {
 				if (entries.length >= MAX_ENTRIES) return false;
+				// Same pair as a forward row that shows both directions.
+				if (t.mirror) continue;
 
 				const srcIP = resolveToNodeIP(t.src);
 				const dstIP = resolveToNodeIP(t.dst);
@@ -387,16 +390,23 @@
 	</div>
 
 	<div class="flex-1 overflow-auto">
+		{#snippet sortButton(field: SortField, label: string)}
+			<button
+				type="button"
+				class="cursor-pointer select-none font-medium transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				onclick={() => toggleSort(field)}
+			>{label}<span aria-hidden="true">{sortIndicator(field)}</span></button>
+		{/snippet}
 		<!-- Desktop/Tablet table view -->
 		<table class="hidden w-full text-xs sm:table">
 			<thead class="sticky top-0 bg-card">
 				<tr class="border-b border-border text-left">
-					<th class="cursor-pointer select-none px-2 py-1.5 font-medium transition-colors hover:text-foreground" onclick={() => toggleSort('logged')}>Time{sortIndicator('logged')}</th>
-					<th class="cursor-pointer select-none px-2 py-1.5 font-medium transition-colors hover:text-foreground" onclick={() => toggleSort('trafficType')}>Type{sortIndicator('trafficType')}</th>
+					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('logged', sortField, sortDir)}>{@render sortButton('logged', 'Time')}</th>
+					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('trafficType', sortField, sortDir)}>{@render sortButton('trafficType', 'Type')}</th>
 					<th class="px-2 py-1.5 font-medium">Flow</th>
-					<th class="cursor-pointer select-none px-2 py-1.5 font-medium transition-colors hover:text-foreground" onclick={() => toggleSort('protocol')}>Proto{sortIndicator('protocol')}</th>
-					<th class="cursor-pointer select-none px-2 py-1.5 font-medium text-right transition-colors hover:text-foreground" onclick={() => toggleSort('txBytes')}>TX{sortIndicator('txBytes')}</th>
-					<th class="cursor-pointer select-none px-2 py-1.5 font-medium text-right transition-colors hover:text-foreground" onclick={() => toggleSort('rxBytes')}>RX{sortIndicator('rxBytes')}</th>
+					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('protocol', sortField, sortDir)}>{@render sortButton('protocol', 'Proto')}</th>
+					<th class="px-2 py-1.5 font-medium text-right" aria-sort={ariaSort('txBytes', sortField, sortDir)}>{@render sortButton('txBytes', 'TX')}</th>
+					<th class="px-2 py-1.5 font-medium text-right" aria-sort={ariaSort('rxBytes', sortField, sortDir)}>{@render sortButton('rxBytes', 'RX')}</th>
 				</tr>
 			</thead>
 			<tbody>
