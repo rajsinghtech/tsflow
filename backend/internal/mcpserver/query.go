@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rajsinghtech/tsflow/backend/internal/access"
+	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
@@ -981,4 +982,28 @@ func dedupe(ids []string) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+// whoami mirrors /api/whoami for the MCP viewer and adds the scope that
+// tools fall back to when scope is omitted.
+func whoami(v Viewer) whoamiOut {
+	_, defaultScope, _ := deviceFilter(v, "")
+	if !v.Restricted {
+		return whoamiOut{Autoscope: config.AccessAutoscopeOff, DefaultScope: defaultScope}
+	}
+	autoscope := v.Ident.Autoscope
+	if autoscope == "" {
+		autoscope = config.AccessAutoscopeOff
+	}
+	return whoamiOut{
+		AccessControl: true,
+		Login:         v.Ident.Login,
+		Name:          v.Ident.Name,
+		Node:          v.Ident.Node,
+		Groups:        v.Ident.Groups,
+		Tailnets:      v.Ident.Allow.TailnetIDs(),
+		Autoscope:     autoscope,
+		DeviceScope:   v.Ident.DeviceScope,
+		DefaultScope:  defaultScope,
+	}
 }
