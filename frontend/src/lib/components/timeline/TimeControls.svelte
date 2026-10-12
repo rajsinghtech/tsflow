@@ -210,7 +210,7 @@
 	<div class="flex items-center gap-1 px-2 py-1">
 		<button
 			type="button"
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+			class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 			aria-label="Shift backward"
 			aria-keyshortcuts="t ArrowLeft"
 			title="Shift backward (t then left arrow)"
@@ -222,7 +222,7 @@
 		<div class="relative" bind:this={pickerRoot}>
 			<button
 				type="button"
-				class="inline-flex h-8 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="inline-flex h-8 pointer-coarse:h-11 pointer-coarse:min-w-11 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 				bind:this={pickerTrigger}
 				aria-haspopup="dialog"
 				aria-expanded={open}
@@ -244,7 +244,7 @@
 
 		<button
 			type="button"
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+			class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 			aria-label="Zoom out"
 			aria-keyshortcuts="t Minus"
 			title="Zoom out (t then minus, or t then z)"
@@ -254,7 +254,7 @@
 		</button>
 		<button
 			type="button"
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-40"
+			class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-border hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-40"
 			aria-label="Shift forward"
 			aria-keyshortcuts="t ArrowRight"
 			title="Shift forward (t then right arrow)"
@@ -302,7 +302,7 @@
 		<div class="ml-auto flex items-center gap-1">
 			<button
 				type="button"
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 				aria-label="Refresh now"
 				title="Refresh now (R)"
 				onclick={() => void refresh()}
@@ -312,7 +312,7 @@
 			</button>
 			<button
 				type="button"
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 				aria-label={copied ? 'Link copied' : 'Copy link'}
 				aria-keyshortcuts="t c"
 				title="Copy link (t then c)"
@@ -322,7 +322,7 @@
 			</button>
 			<button
 				type="button"
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground"
+				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground"
 				aria-expanded={!collapsed}
 				aria-label={collapsed ? 'Show timeline' : 'Hide timeline'}
 				onclick={toggleCollapsed}
