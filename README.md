@@ -2,6 +2,11 @@
 
 A real-time network traffic visualization dashboard for Tailscale networks. Monitor device connectivity, analyze bandwidth usage, and explore network flows with an interactive graph interface.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/traffic-dark.png">
+  <img alt="Traffic graph of a small homelab tailnet" src="docs/images/traffic.png">
+</picture>
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
@@ -47,6 +52,25 @@ docker run -d \
   -e TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret \
   ghcr.io/rajsinghtech/tsflow:latest
 ```
+
+## Screenshots
+
+All of these use made-up demo data.
+
+**Analytics**: top talkers, ports, protocols and traffic types for the selected window.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/analytics-dark.png">
+  <img alt="Analytics page" src="docs/images/analytics.png">
+</picture>
+
+**Me**: your own devices, top peers and new connections. Shows up when tsflow knows who you are (see [Internal access control](#internal-access-control)).
+
+<img alt="Me page" src="docs/images/me.png">
+
+**Time picker**: presets, free text like `last 3 hours` or `since 9am`, local or UTC.
+
+<img alt="Time range picker" src="docs/images/time-picker.png">
 
 ## Configuration
 
