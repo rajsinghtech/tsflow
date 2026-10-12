@@ -166,7 +166,7 @@
 				Lookback
 				<select
 					id="new-pair-lookback"
-					class="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
+					class="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground pointer-coarse:min-h-11 pointer-coarse:text-base"
 					value={lookback}
 					onchange={(e) => setLookback(e.currentTarget.value)}
 				>
@@ -179,7 +179,7 @@
 				{#each trafficTypes as type}
 					<button
 						type="button"
-						class="inline-flex min-h-7 items-center rounded-md border px-2 text-xs"
+						class="inline-flex min-h-7 pointer-coarse:min-h-11 items-center rounded-md border px-2 text-xs"
 						class:border-primary={selectedTrafficTypes.has(type.value)}
 						class:bg-secondary={selectedTrafficTypes.has(type.value)}
 						class:border-border={!selectedTrafficTypes.has(type.value)}
@@ -213,7 +213,26 @@
 					</p>
 				</div>
 			{:else}
-				<div class="overflow-x-auto">
+				<!-- Phones: one card per pair, so nothing scrolls sideways. -->
+				<ul class="divide-y divide-border/50 sm:hidden" aria-label="New connections">
+					{#each pairs as pair}
+						<li class="py-2.5">
+							<div class="flex min-w-0 items-baseline gap-1.5 text-sm">
+								<span class="min-w-0 truncate" title={pair.srcNodeId}>{endpointLabel(pair.srcNodeId, pair.srcHostname)}</span>
+								<span class="shrink-0 text-muted-foreground" aria-label="to">→</span>
+								<span class="min-w-0 truncate" title={pair.dstNodeId}>{endpointLabel(pair.dstNodeId, pair.dstHostname)}</span>
+							</div>
+							<div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
+								<span>First seen {seenLabel(pair.firstSeen)}</span>
+								<span class="shrink-0">
+									<span class="font-medium text-foreground">{formatBytes(pair.totalBytes)}</span>
+									· {pair.flowCount.toLocaleString()} {pair.flowCount === 1 ? 'flow' : 'flows'}
+								</span>
+							</div>
+						</li>
+					{/each}
+				</ul>
+				<div class="hidden overflow-x-auto sm:block">
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
@@ -245,14 +264,14 @@
 					<span>{offset + 1}–{offset + pairs.length}</span>
 					<div class="flex gap-1">
 						<button
-							class="rounded-md border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40"
+							class="rounded-md border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40 pointer-coarse:min-h-11 pointer-coarse:px-3"
 							disabled={offset === 0}
 							onclick={() => (offset = Math.max(0, offset - pageSize))}
 						>
 							Previous
 						</button>
 						<button
-							class="rounded-md border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40"
+							class="rounded-md border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40 pointer-coarse:min-h-11 pointer-coarse:px-3"
 							disabled={!hasMore}
 							onclick={() => (offset += pageSize)}
 						>

@@ -116,7 +116,7 @@
 		<div class="relative">
 			<input
 				type="text"
-				class="w-full rounded-md border border-input bg-background py-1.5 pl-2 pr-7 text-xs"
+				class="w-full rounded-md border border-input bg-background py-1.5 pl-2 pr-7 text-xs pointer-coarse:min-h-11 pointer-coarse:text-base"
 				placeholder="user@example.com, tag:server..."
 				bind:value={selectorInput}
 				onkeydown={handleKeydown}

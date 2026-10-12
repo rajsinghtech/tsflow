@@ -157,7 +157,7 @@
 						{#each devices as device}
 							<li>
 								<button
-									class="flex w-full items-center justify-between gap-3 py-2 text-left hover:bg-secondary/40"
+									class="flex w-full items-center justify-between gap-3 py-2 text-left hover:bg-secondary/40 pointer-coarse:min-h-11"
 									onclick={() => (opened = opened === device.nodeId ? null : device.nodeId)}
 								>
 									<span class="flex min-w-0 items-center gap-2">

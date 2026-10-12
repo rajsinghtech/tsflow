@@ -200,7 +200,7 @@
 							<button
 								type="button"
 								onclick={() => toggleTrafficType(type.value)}
-								class="inline-flex min-h-7 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors"
+								class="inline-flex min-h-7 pointer-coarse:min-h-11 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors"
 								class:border-primary={selectedTrafficTypes.has(type.value)}
 								class:bg-secondary={selectedTrafficTypes.has(type.value)}
 								class:border-border={!selectedTrafficTypes.has(type.value)}
@@ -213,8 +213,8 @@
 					</div>
 
 					<div class="ml-auto flex gap-1">
-						<button onclick={selectAllTrafficTypes} class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary">All</button>
-						<button onclick={clearAllTrafficTypes} class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary">
+						<button onclick={selectAllTrafficTypes} class="min-h-7 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-md border border-border px-2 text-xs hover:bg-secondary">All</button>
+						<button onclick={clearAllTrafficTypes} class="min-h-7 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded-md border border-border px-2 text-xs hover:bg-secondary">
 							None
 						</button>
 					</div>

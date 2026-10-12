@@ -36,7 +36,7 @@
 	}
 </script>
 
-<div class="space-y-1 px-2 pb-2">
+<div class="space-y-1 overflow-x-clip px-2 pb-2">
 	{#if ready}
 		<div class="flex items-center justify-between text-[11px] text-muted-foreground">
 			<span>{formatStamp(new Date(view.start), zone)}</span>

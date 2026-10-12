@@ -101,7 +101,7 @@
 		<div class="flex gap-1">
 			<button
 				type="button"
-				class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
+				class="min-h-7 pointer-coarse:min-h-11 rounded-md border border-border px-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
 				disabled={prev === null || loading}
 				aria-label={`Previous ${kind} page`}
 				onclick={() => prev !== null && onPage(prev)}
@@ -110,7 +110,7 @@
 			</button>
 			<button
 				type="button"
-				class="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
+				class="min-h-7 pointer-coarse:min-h-11 rounded-md border border-border px-2 text-xs hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
 				disabled={next === null || loading}
 				aria-label={`Next ${kind} page`}
 				onclick={() => next !== null && onPage(next)}
@@ -130,7 +130,7 @@
 		<div class="flex rounded-md border border-border bg-muted/30 p-0.5" role="group" aria-label="Sort talkers and pairs">
 			<button
 				type="button"
-				class="min-h-7 rounded px-2 text-xs text-muted-foreground hover:text-foreground"
+				class="min-h-7 pointer-coarse:min-h-11 rounded px-2 text-xs text-muted-foreground hover:text-foreground"
 				class:bg-background={$rankSort === 'bytes'}
 				class:text-foreground={$rankSort === 'bytes'}
 				class:shadow-sm={$rankSort === 'bytes'}
@@ -141,7 +141,7 @@
 			</button>
 			<button
 				type="button"
-				class="min-h-7 rounded px-2 text-xs text-muted-foreground hover:text-foreground"
+				class="min-h-7 pointer-coarse:min-h-11 rounded px-2 text-xs text-muted-foreground hover:text-foreground"
 				class:bg-background={$rankSort === 'flows'}
 				class:text-foreground={$rankSort === 'flows'}
 				class:shadow-sm={$rankSort === 'flows'}
@@ -157,7 +157,7 @@
 			<input
 				type="text"
 				role="searchbox"
-				class="h-8 w-full rounded-md border border-border bg-background pl-7 pr-7 text-xs placeholder:text-muted-foreground"
+				class="h-8 w-full rounded-md border border-border bg-background pl-7 pr-7 text-xs placeholder:text-muted-foreground pointer-coarse:h-11 pointer-coarse:pr-11 pointer-coarse:text-base"
 				placeholder="Search name, owner email, IP, tag:x"
 				aria-label="Search talkers and pairs"
 				bind:value={searchText}
@@ -167,7 +167,7 @@
 			{#if searchText}
 				<button
 					type="button"
-					class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+					class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground pointer-coarse:right-0 pointer-coarse:flex pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:items-center pointer-coarse:justify-center"
 					aria-label="Clear search"
 					onclick={clearSearch}
 				>

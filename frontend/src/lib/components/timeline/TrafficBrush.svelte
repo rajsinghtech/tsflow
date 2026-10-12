@@ -159,7 +159,7 @@
 			aria-valuenow={Math.round(shownStart)}
 			aria-valuetext={formatStamp(shownStart)}
 			aria-orientation="horizontal"
-			class="absolute inset-y-1 z-20 w-3 -translate-x-1/2 cursor-ew-resize rounded-sm border border-background bg-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+			class="absolute inset-y-1 z-20 w-3 -translate-x-1/2 cursor-ew-resize rounded-sm border border-background bg-primary pointer-coarse:before:absolute pointer-coarse:before:inset-y-0 pointer-coarse:before:-right-4 pointer-coarse:before:-left-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 			style="left: {leftRatio * 100}%"
 			onpointerdown={(event) => begin('start', event)}
 			onkeydown={(event) => onKey('start', event)}
@@ -173,7 +173,7 @@
 			aria-valuenow={Math.round(shownEnd)}
 			aria-valuetext={formatStamp(shownEnd)}
 			aria-orientation="horizontal"
-			class="absolute inset-y-1 z-20 w-3 -translate-x-1/2 cursor-ew-resize rounded-sm border border-background bg-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+			class="absolute inset-y-1 z-20 w-3 -translate-x-1/2 cursor-ew-resize rounded-sm border border-background bg-primary pointer-coarse:before:absolute pointer-coarse:before:inset-y-0 pointer-coarse:before:-right-4 pointer-coarse:before:-left-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 			style="left: {rightRatio * 100}%"
 			onpointerdown={(event) => begin('end', event)}
 			onkeydown={(event) => onKey('end', event)}
