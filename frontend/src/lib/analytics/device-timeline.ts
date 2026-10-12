@@ -26,6 +26,15 @@ export function bytesOf(part?: TimelineBytes): number {
 	return (part.txBytes || 0) + (part.rxBytes || 0);
 }
 
+// Every column fits the chart width so the newest buckets are never scrolled
+// out of view. A two-hour window has 120 one-minute columns, so the gap
+// shrinks as columns get dense.
+export function columnGap(count: number): string {
+	if (count > 150) return 'gap-0';
+	if (count > 40) return 'gap-px';
+	return 'gap-1';
+}
+
 // timelineColumns turns API buckets into stacked chart columns.
 // Physical is zero unless the bucket includes that series.
 export function timelineColumns(buckets: TimelineBucket[]): TimelineColumn[] {
