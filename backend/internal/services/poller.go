@@ -79,6 +79,11 @@ type Poller struct {
 	lastPollError      string
 	lastPollErrorTime  time.Time
 	cacheRefreshErrors int64
+
+	// Device identities last written to node_metadata, by id, so a device
+	// refresh only writes rows that changed. See persistDeviceIdentities.
+	storedIdentities   map[string]string
+	storedIdentitiesAt time.Time
 }
 
 // NewPoller creates a new background poller
@@ -364,6 +369,9 @@ func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 	}
 	p.deviceCache.Update(devicesResp.Devices)
 	if p.store != nil {
+		if err := p.persistDeviceIdentities(ctx, devicesResp.Devices, time.Now()); err != nil && ctx.Err() == nil {
+			log.Printf("Warning: could not store device identities: %v", err)
+		}
 		nodeMetadata, err := p.store.GetNodeMetadata(ctx, p.tailnetIDOrDefault())
 		if err != nil {
 			return fmt.Errorf("node metadata cache hydration failed: %w", err)
@@ -376,6 +384,58 @@ func (p *Poller) refreshDeviceCache(ctx context.Context) error {
 		log.Printf("Pruned %d flow-only devices outside retention", pruned)
 	}
 	log.Printf("Device cache refreshed: %d devices", len(devicesResp.Devices))
+	return nil
+}
+
+// identityRewriteInterval is how often every device identity is written again
+// even when nothing changed. That keeps node_metadata.updated_at fresh, so
+// retention pruning never drops a device that is still in the device list.
+const identityRewriteInterval = 12 * time.Hour
+
+// persistDeviceIdentities writes the device list's names, owners, addresses
+// and tags to node_metadata. The Me tab, owner columns, login filters on new
+// connections and the device timeline read identities from that table. Object
+// store ingestion fills it from flow-log node metadata, but the API flow
+// source has none, so without this those views were empty in API mode.
+// Only rows that changed since the last write are written, plus everything
+// once per identityRewriteInterval.
+func (p *Poller) persistDeviceIdentities(ctx context.Context, devices []Device, now time.Time) error {
+	full := p.storedIdentities == nil || now.Sub(p.storedIdentitiesAt) >= identityRewriteInterval
+	next := make(map[string]string, len(devices))
+	var changed []database.NodeMetadata
+	for _, d := range devices {
+		id := strings.TrimSpace(d.ID)
+		if id == "" {
+			continue
+		}
+		owner := strings.TrimSpace(d.User)
+		if strings.EqualFold(owner, "tagged-devices") {
+			// Not a login. Leave any creator login from flow logs in place.
+			owner = ""
+		}
+		node := database.NodeMetadata{
+			NodeID:   id,
+			Name:     d.Name,
+			Hostname: d.Hostname,
+			Owner:    owner,
+			IPs:      append([]string(nil), d.Addresses...),
+			Tags:     append([]string(nil), d.Tags...),
+		}
+		fp := strings.Join([]string{node.Name, node.Hostname, node.Owner, strings.Join(node.IPs, ","), strings.Join(node.Tags, ",")}, "\x00")
+		next[id] = fp
+		if full || p.storedIdentities[id] != fp {
+			changed = append(changed, node)
+		}
+	}
+	if len(changed) > 0 {
+		if err := p.store.UpsertNodeMetadata(ctx, p.tailnetIDOrDefault(), changed); err != nil {
+			return err
+		}
+	}
+	p.storedIdentities = next
+	if full {
+		p.storedIdentitiesAt = now
+	}
 	return nil
 }
 
