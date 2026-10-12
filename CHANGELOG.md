@@ -76,9 +76,14 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 
 ### UI polish
 
-- (more polish PRs land here before the tag)
+- The Me tab works with the API flow source: device list identities are stored (#458)
+- Network Logs list each pair once (#463)
+- Network Logs sort headers work from the keyboard (#465)
+- A device timeline counts every id of the device (#466)
+- Screen readers name graph cards and edges by hostname (#467)
+- Escape closes the time range picker (#468)
 
 ### Dependencies
 
 - SvelteKit, Vite and the static adapter upgraded together (#370)
-- Go module and npm updates from Renovate
+- Go module and npm updates from Renovate, including klauspost/compress 1.20.3 (#462)
