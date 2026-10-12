@@ -7,6 +7,7 @@
 	import { refreshVisibleData } from '#lib/stores/live-mode';
 	import { loadTrafficShape, storedCoverage, storedSpans, windowCoverage } from '#lib/stores/traffic-shape';
 	import { coverageNote } from './range-coverage';
+	import { pollFailure, realTime } from './poll-health';
 	import {
 		bootstrapRangeFromLocation,
 		commitIntent,
@@ -84,13 +85,15 @@
 
 	const freshness = $derived.by(() => {
 		void tick;
-		const latest = source.dataRange?.latest ? new Date(source.dataRange.latest) : null;
+		const latest = realTime(source.dataRange?.latest);
 		const poll = source.pollerStatus;
 		const interval = refreshIntervalMs(poll?.pollInterval);
 		const lastMs = poll?.lastPollTime ? new Date(poll.lastPollTime).getTime() : 0;
 		const now = Date.now();
 		const behind = lastMs > 0 && new Date(poll?.lastPollTime ?? 0).getFullYear() > 1970 && pollerIsBehind(lastMs, interval, now);
+		const failure = pollFailure(poll);
 		return {
+			failure,
 			through: latest ? formatClock(latest, zone) : '--',
 			next: lastMs > 0 ? formatClock(new Date(nextPollAt(lastMs, interval, now)), zone) : '--',
 			behind,
@@ -259,15 +262,22 @@
 		{#if live}
 			<button
 				type="button"
-				class="group relative ml-1 hidden min-w-0 truncate text-[11px] md:inline {freshness.behind ? 'text-amber-500' : 'text-muted-foreground'}"
+				class="group relative ml-1 hidden min-w-0 truncate text-[11px] md:inline {freshness.failure
+					? 'text-destructive'
+					: freshness.behind
+						? 'text-amber-500'
+						: 'text-muted-foreground'}"
 			>
-				data through {freshness.through} · next poll ≈{freshness.next}
+				data through {freshness.through} · {freshness.failure ? 'last poll failed' : `next poll ≈${freshness.next}`}
 				<span
 					class="pointer-events-none absolute top-full left-0 z-40 mt-1 hidden w-56 rounded-md border border-border bg-popover p-2 text-left text-xs text-popover-foreground shadow-lg group-hover:block group-focus:block"
 				>
 					<div class="flex justify-between gap-3"><span>Stored records</span><span class="font-mono">{freshness.records}</span></div>
 					<div class="mt-1 flex justify-between gap-3"><span>Last poll</span><span class="font-mono">{freshness.lastPoll}</span></div>
 					<div class="mt-1 flex justify-between gap-3"><span>Poll interval</span><span class="font-mono">{freshness.interval}</span></div>
+					{#if freshness.failure}
+						<div class="mt-2 break-words whitespace-normal text-destructive">{freshness.failure.error}</div>
+					{/if}
 				</span>
 			</button>
 		{/if}
