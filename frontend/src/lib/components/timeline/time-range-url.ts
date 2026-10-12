@@ -170,8 +170,22 @@ export function saveTimeZone(zone: TimeZoneMode) {
 	writeRaw(ZONE_KEY, zone);
 }
 
+// Screens this short are phones in landscape. The strip would take half of
+// the height there, so it starts hidden until someone opens it.
+export const SHORT_SCREEN_QUERY = '(max-height: 500px)';
+
+export function timelineStartsCollapsed(stored: string | null, shortScreen: boolean): boolean {
+	if (stored === '1') return true;
+	if (stored === '0') return false;
+	return shortScreen;
+}
+
+function isShortScreen(): boolean {
+	return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(SHORT_SCREEN_QUERY).matches;
+}
+
 export function loadTimelineCollapsed(): boolean {
-	return readRaw(COLLAPSE_KEY) === '1';
+	return timelineStartsCollapsed(readRaw(COLLAPSE_KEY), isShortScreen());
 }
 
 export function saveTimelineCollapsed(collapsed: boolean) {

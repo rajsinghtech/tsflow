@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User } from 'lucide-svelte';
+	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User, MoreHorizontal } from 'lucide-svelte';
 	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
@@ -44,10 +44,20 @@
 		};
 	});
 
+	// Phones fold the theme and log buttons into this menu.
+	let showMore = $state(false);
+
 	function handleCloseAbout(e: MouseEvent) {
 		if (showAbout && !(e.target as Element).closest('.about-flyout-container')) {
 			showAbout = false;
 		}
+		if (showMore && !(e.target as Element).closest('.more-menu-container')) {
+			showMore = false;
+		}
+	}
+
+	function handleMenuKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && showMore) showMore = false;
 	}
 
 	const currentPath = $derived(page.url.pathname);
@@ -128,7 +138,7 @@
 	});
 </script>
 
-<svelte:window onclick={handleCloseAbout} />
+<svelte:window onclick={handleCloseAbout} onkeydown={handleMenuKeydown} />
 
 <div class="relative z-30 border-b border-border bg-card">
 <header class="flex h-12 items-center justify-between gap-1 px-1 sm:h-14 sm:gap-2 sm:px-4">
@@ -137,7 +147,7 @@
 		<div class="relative about-flyout-container shrink-0">
 			<button
 				onclick={() => (showAbout = !showAbout)}
-				class="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors hover:bg-secondary sm:gap-2"
+				class="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center sm:gap-2"
 				title="About TSFlow"
 				aria-label="About TSFlow"
 			>
@@ -190,7 +200,7 @@
 		</div>
 
 		<!-- Navigation -->
-		<nav class="flex shrink-0 items-center rounded-md border border-border bg-muted/30 p-0.5" aria-label="Primary">
+		<nav class="hidden shrink-0 items-center rounded-md border border-border bg-muted/30 p-0.5 sm:flex" aria-label="Primary">
 			{#each primaryNav as item}
 				{@const Icon = item.icon}
 				{@const active = currentPath === item.href}
@@ -199,7 +209,7 @@
 					onclick={() => rememberTab(item.href)}
 					aria-current={active ? 'page' : undefined}
 					aria-label={item.label}
-					class="flex min-h-8 items-center gap-1.5 rounded px-1 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground sm:px-3"
+					class="flex min-h-8 items-center gap-1.5 rounded px-1 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground pointer-coarse:min-h-11 sm:px-3"
 					class:bg-background={active}
 					class:text-foreground={active}
 					class:shadow-sm={active}
@@ -291,7 +301,7 @@
 		{#if isTrafficPage}
 			<button
 				onclick={handleFilterToggle}
-				class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
+				class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:min-h-9 sm:min-w-9 sm:p-2"
 				title="Toggle filters"
 				aria-label="Toggle filters"
 			>
@@ -301,7 +311,7 @@
 
 		<button
 			onclick={cycleTheme}
-			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
+			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
 			title="Theme: {getThemeLabel($themeStore)} (click to cycle)"
 			aria-label="Theme: {getThemeLabel($themeStore)}"
 		>
@@ -310,14 +320,84 @@
 
 		<button
 			onclick={() => uiStore.toggleLogViewer()}
-			class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary sm:min-h-9 sm:min-w-9 sm:p-2"
+			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
 			title="Toggle log viewer"
 			aria-label="Toggle log viewer"
 		>
 			<ScrollText class="h-4 w-4" />
 		</button>
+
+		<div class="more-menu-container relative sm:hidden">
+			<button
+				type="button"
+				onclick={() => (showMore = !showMore)}
+				class="flex h-11 w-11 items-center justify-center rounded-md border border-transparent hover:border-border hover:bg-secondary"
+				aria-haspopup="menu"
+				aria-expanded={showMore}
+				aria-label="More"
+				title="More"
+			>
+				<MoreHorizontal class="h-5 w-5" />
+			</button>
+			{#if showMore}
+				<div
+					transition:fly={{ y: -5, duration: 150 }}
+					class="absolute top-full right-0 z-50 mt-1 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+					role="menu"
+				>
+					{#if $viewerStore?.name || $viewerStore?.login}
+						<div class="truncate px-3 py-2 text-xs text-muted-foreground" title={$viewerStore.login || $viewerStore.name}>
+							Signed in as {$viewerStore.name || $viewerStore.login}
+						</div>
+					{/if}
+					<button
+						type="button"
+						role="menuitem"
+						onclick={cycleTheme}
+						class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-secondary"
+					>
+						<ThemeIcon class="h-4 w-4" />
+						Theme: {getThemeLabel($themeStore)}
+					</button>
+					{#if isTrafficPage}
+						<button
+							type="button"
+							role="menuitem"
+							onclick={() => {
+								showMore = false;
+								uiStore.toggleLogViewer();
+							}}
+							class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-secondary"
+						>
+							<ScrollText class="h-4 w-4" />
+							Toggle logs
+						</button>
+					{/if}
+				</div>
+			{/if}
+		</div>
 	</div>
 </header>
+<!-- Phones: the tabs get their own row, with labels and full-size targets. -->
+<nav class="grid border-t border-border sm:hidden" style="grid-template-columns: repeat({primaryNav.length}, minmax(0, 1fr))" aria-label="Primary">
+	{#each primaryNav as item}
+		{@const Icon = item.icon}
+		{@const active = currentPath === item.href}
+		<a
+			href={hrefWithTailnet(item.href, $selectedTailnetId)}
+			onclick={() => rememberTab(item.href)}
+			aria-current={active ? 'page' : undefined}
+			class="flex h-11 items-center justify-center gap-1.5 border-b-2 text-xs text-muted-foreground transition-colors"
+			class:border-transparent={!active}
+			class:border-primary={active}
+			class:text-foreground={active}
+			class:font-medium={active}
+		>
+			<Icon class="h-4 w-4 shrink-0" />
+			<span class="truncate">{item.label}</span>
+		</a>
+	{/each}
+</nav>
 {#if currentPath !== '/policy'}
 	<TimeControls />
 {/if}

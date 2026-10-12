@@ -60,7 +60,7 @@
 		<button
 			type="button"
 			onclick={toggle}
-			class="flex h-8 min-w-0 max-w-36 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-sm hover:bg-secondary sm:h-9 sm:max-w-52"
+			class="flex h-8 pointer-coarse:h-11 min-w-0 max-w-36 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-sm hover:bg-secondary sm:h-9 sm:max-w-52"
 			aria-haspopup="listbox"
 			aria-expanded={open}
 			aria-label="Tailnet"
@@ -79,7 +79,7 @@
 
 		{#if open}
 			<div
-				class="absolute top-full left-0 z-50 mt-1 w-64 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+				class="absolute top-full left-0 z-50 mt-1 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
 				role="listbox"
 				aria-label="Tailnets"
 			>
@@ -89,7 +89,7 @@
 						role="option"
 						aria-selected={tailnet.id === selected.id}
 						onclick={() => pick(tailnet.id)}
-						class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary"
+						class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:justify-center"
 						class:bg-secondary={tailnet.id === selected.id}
 					>
 						<span class="truncate">{tailnet.displayName}</span>
