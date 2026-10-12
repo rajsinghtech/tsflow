@@ -78,7 +78,7 @@
 
 <svelte:window onkeydown={handleKeydown} onpointermove={handleResizeMove} onpointerup={handleResizeEnd} />
 
-<div class="flex h-screen flex-col bg-background">
+<div class="flex h-dvh flex-col bg-background">
 	<Header />
 
 	<!-- Main split layout -->

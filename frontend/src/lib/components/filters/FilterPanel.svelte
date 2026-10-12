@@ -54,7 +54,7 @@
 		<h2 class="text-lg font-semibold">Filters</h2>
 		<button
 			type="button"
-			class="flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground"
+			class="flex h-11 w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground lg:h-8 lg:w-8"
 			onclick={() => uiStore.toggleFilters()}
 			title="Close filters"
 			aria-label="Close filters"
