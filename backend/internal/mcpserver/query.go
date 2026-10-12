@@ -122,7 +122,7 @@ func (s *Service) topTalkers(ctx context.Context, v Viewer, in rankedIn) (talker
 	rows, truncated, err := s.scanTalkers(ctx, binding.ID, start, end, types, sortKey)
 	if err != nil {
 		log.Printf("ERROR mcp top_talkers: %v", err)
-		return talkersOut{}, fmt.Errorf("failed to query top talkers")
+		return talkersOut{}, queryError("top talkers", err)
 	}
 	merged := map[string]*talkerOut{}
 	var order []string
@@ -172,7 +172,7 @@ func (s *Service) topPairs(ctx context.Context, v Viewer, in rankedIn) (pairsOut
 	rows, truncated, err := s.scanPairs(ctx, binding.ID, start, end, types, sortKey)
 	if err != nil {
 		log.Printf("ERROR mcp top_pairs: %v", err)
-		return pairsOut{}, fmt.Errorf("failed to query top pairs")
+		return pairsOut{}, queryError("top pairs", err)
 	}
 	type key struct{ src, dst string }
 	merged := map[key]*pairOut{}
@@ -255,7 +255,7 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 	rows, err := s.h.Store().FlowsBetween(queryCtx, binding.ID, aIDs, bIDs, start, end, types)
 	if err != nil {
 		log.Printf("ERROR mcp flows_between: %v", err)
-		return flowsOut{}, fmt.Errorf("failed to query flows")
+		return flowsOut{}, queryError("flows", err)
 	}
 	flows := make([]flowOut, 0, len(rows))
 	for _, row := range rows {
@@ -327,7 +327,7 @@ func (s *Service) devicePeers(ctx context.Context, v Viewer, in deviceIn) (peers
 	rows, err := s.h.Store().ListDevicePeers(queryCtx, binding.ID, ids, start, end, types, peerScan)
 	if err != nil {
 		log.Printf("ERROR mcp device_peers: %v", err)
-		return peersOut{}, fmt.Errorf("failed to query device peers")
+		return peersOut{}, queryError("device peers", err)
 	}
 	peers := make([]peerOut, 0, len(rows))
 	for _, row := range rows {
@@ -395,7 +395,7 @@ func (s *Service) deviceTimeline(ctx context.Context, v Viewer, in timelineIn) (
 			rows, err := s.h.Store().GetNodeBandwidthByTrafficTypes(queryCtx, binding.ID, start, end, id, []string{typ})
 			if err != nil {
 				log.Printf("ERROR mcp device_timeline: %v", err)
-				return timelineOut{}, fmt.Errorf("failed to query device timeline")
+				return timelineOut{}, queryError("device timeline", err)
 			}
 			for _, row := range rows {
 				key := row.Time.UTC().Unix()
@@ -476,7 +476,7 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 	windowPairs, err := s.h.Store().DistinctPairs(queryCtx, binding.ID, start, end, types)
 	if err != nil {
 		log.Printf("ERROR mcp new_connections window: %v", err)
-		return newConnectionsOut{}, fmt.Errorf("failed to query new connections")
+		return newConnectionsOut{}, queryError("new connections", err)
 	}
 	if len(windowPairs) > maxNewPairs {
 		return newConnectionsOut{}, fmt.Errorf("window has too many pairs; narrow the time range")
@@ -484,7 +484,7 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 	prior, err := s.h.Store().DistinctPairs(queryCtx, binding.ID, start.Add(-lookback), start, types)
 	if err != nil {
 		log.Printf("ERROR mcp new_connections lookback: %v", err)
-		return newConnectionsOut{}, fmt.Errorf("failed to query new connections")
+		return newConnectionsOut{}, queryError("new connections", err)
 	}
 	if len(prior) > maxNewPairs {
 		return newConnectionsOut{}, fmt.Errorf("lookback has too many pairs; shorten lookback")
@@ -549,7 +549,7 @@ func (s *Service) statsOverview(ctx context.Context, v Viewer, in statsOverviewI
 			return statsOverviewOut{}, errors.New(qe.Public)
 		}
 		log.Printf("ERROR mcp stats_overview: %v", err)
-		return statsOverviewOut{}, fmt.Errorf("failed to query stats overview")
+		return statsOverviewOut{}, queryError("stats overview", err)
 	}
 	buckets := make([]overviewBucket, 0, len(data.Buckets))
 	for _, bucket := range data.Buckets {
@@ -603,46 +603,35 @@ func (s *Service) rankArgs(v Viewer, in rankedIn) (handlers.TailnetBinding, time
 	return binding, start, end, types, sortKey, limit, offset, nil
 }
 
+// scanTalkers ranks the whole window in one read of up to maxScanRows rows,
+// so alias merging and scope filtering see every device before paging. One
+// read keeps a week at 20k devices inside the query timeout, where paging the
+// same ranking 200 rows at a time re-ran the window aggregate for every page.
 func (s *Service) scanTalkers(ctx context.Context, tailnet string, start, end time.Time, types []string, sortKey string) ([]database.RankedTalker, bool, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, handlers.DefaultQueryTimeout)
 	defer cancel()
-	var all []database.RankedTalker
-	offset := 0
-	for len(all) < maxScanRows {
-		pageRows, more, err := s.h.Store().ListRankedTalkers(queryCtx, tailnet, start, end, database.RankQuery{
-			Limit: database.RankMaxLimit, Offset: offset, Sort: sortKey, TrafficTypes: types,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		all = append(all, pageRows...)
-		offset += len(pageRows)
-		if !more || len(pageRows) == 0 {
-			return all, false, nil
-		}
-	}
-	return all, true, nil
+	return s.h.Store().ListRankedTalkers(queryCtx, tailnet, start, end, scanQuery(sortKey, types))
 }
 
+// scanPairs is scanTalkers for device pairs.
 func (s *Service) scanPairs(ctx context.Context, tailnet string, start, end time.Time, types []string, sortKey string) ([]database.RankedPair, bool, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, handlers.DefaultQueryTimeout)
 	defer cancel()
-	var all []database.RankedPair
-	offset := 0
-	for len(all) < maxScanRows {
-		pageRows, more, err := s.h.Store().ListRankedPairs(queryCtx, tailnet, start, end, database.RankQuery{
-			Limit: database.RankMaxLimit, Offset: offset, Sort: sortKey, TrafficTypes: types,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		all = append(all, pageRows...)
-		offset += len(pageRows)
-		if !more || len(pageRows) == 0 {
-			return all, false, nil
-		}
+	return s.h.Store().ListRankedPairs(queryCtx, tailnet, start, end, scanQuery(sortKey, types))
+}
+
+func scanQuery(sortKey string, types []string) database.RankQuery {
+	return database.RankQuery{Limit: maxScanRows, MaxLimit: maxScanRows, Sort: sortKey, TrafficTypes: types}
+}
+
+// queryError is the tool error for a failed read. A read that ran out of time
+// says so and suggests a shorter window, since that is the one thing the
+// caller can change.
+func queryError(what string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s took too long to query; try a shorter window (start/end)", what)
 	}
-	return all, true, nil
+	return fmt.Errorf("failed to query %s", what)
 }
 
 func (s *Service) devices(ctx context.Context, binding handlers.TailnetBinding) ([]services.Device, error) {
