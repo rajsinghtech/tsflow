@@ -324,7 +324,7 @@
 					/>
 				</div>
 			{:else}
-				<div class="flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">
+				<div class="min-h-[40%] flex-1" style="height: calc(100% - {$uiStore.showLogViewer ? logViewerHeight + 110 : 0}px)">
 					<NetworkGraph
 						nodes={$filteredNodes}
 						edges={$filteredEdges}
@@ -386,6 +386,9 @@
 					{/if}
 				{/if}
 			{:else}
+			<!-- The graph keeps at least 40% of the height. When a selection's
+			     details don't fit under it, this part scrolls instead. -->
+			<div class="flex min-h-0 shrink flex-col overflow-y-auto">
 			<DeviceTimeline />
 
 			<!-- Bottom Panel: Bandwidth Chart + Port Details + Log Viewer -->
@@ -403,10 +406,11 @@
 				>
 					<div class="h-0.5 w-8 rounded-full bg-muted-foreground/50 sm:hidden"></div>
 				</div>
-				<div class="overflow-hidden border-t border-border bg-card" style="height: {logViewerHeight}px">
+				<div class="shrink-0 overflow-hidden border-t border-border bg-card" style="height: {logViewerHeight}px">
 					<LogViewer />
 				</div>
 			{/if}
+			</div>
 			{/if}
 		</main>
 	</div>
