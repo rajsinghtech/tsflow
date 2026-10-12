@@ -6,7 +6,7 @@
 	import { uiStore } from '#lib/stores/ui-store';
 	import { filteredNodes } from '#lib/stores/network-store';
 	import { tailscaleService } from '#lib/services';
-	import { selectedDeviceId, timelineColumns, type TimelineColumn } from '#lib/analytics/device-timeline';
+	import { columnGap, selectedDeviceId, timelineColumns, type TimelineColumn } from '#lib/analytics/device-timeline';
 	import { formatBytes } from '#lib/utils';
 
 	let { nodeId = null, scoped = false }: { nodeId?: string | null; scoped?: boolean } = $props();
@@ -116,9 +116,9 @@
 						<span><span class="mr-1 inline-block h-2 w-2 rounded-sm bg-purple-500"></span>Exit</span>
 						<span><span class="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-500"></span>Physical</span>
 					</div>
-					<div class="flex h-20 items-end gap-1 overflow-x-auto">
+					<div class="flex h-20 items-end {columnGap(columns.length)}" data-testid="device-timeline-bars">
 						{#each columns as column}
-							<div class="flex h-full min-w-3 flex-1 flex-col justify-end" title="{timeLabel(column.time)} {formatBytes(column.total)}">
+							<div class="flex h-full min-w-0 flex-1 flex-col justify-end" title="{timeLabel(column.time)} {formatBytes(column.total)}">
 								<div class="flex flex-col justify-end" style="height: {barHeight(column.total)}px">
 									{#if column.physical > 0}
 										<div class="bg-amber-500" style="height: {(column.physical / column.total) * 100}%"></div>

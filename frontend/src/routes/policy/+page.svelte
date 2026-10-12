@@ -20,6 +20,7 @@
 		clearQuery
 	} from '#lib/stores/policy-store';
 	import { buildPolicyFlow } from '#lib/utils/policy-layout';
+	import { isNarrowViewport } from '#lib/utils/viewport';
 
 	onMount(async () => {
 		if (!$policyGraph) {
@@ -35,10 +36,14 @@
 
 	const policyFlow = $derived(buildPolicyFlow($filteredGraph.nodes, $filteredGraph.edges));
 
+	// On a phone the editor and the controls would squeeze the graph to a
+	// sliver, so both start closed there. Wider screens keep the split view.
+	const narrow = isNarrowViewport(typeof window === 'undefined' ? undefined : window);
+
 	// Split pane state
 	let splitPercent = $state(35);
 	let isResizing = $state(false);
-	let showEditor = $state(true);
+	let showEditor = $state(!narrow);
 
 	function handleResizeStart(e: PointerEvent) {
 		isResizing = true;
@@ -59,7 +64,7 @@
 	}
 
 	// Controls panel
-	let showControls = $state(true);
+	let showControls = $state(!narrow);
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -79,7 +84,7 @@
 	<!-- Main split layout -->
 	<div id="split-container" class="relative flex flex-1 overflow-hidden">
 		<!-- Left: Graph area (full width, controls float over it) -->
-		<div class="relative flex-1 overflow-hidden">
+		<div class="relative flex-1 overflow-hidden {showEditor ? 'max-md:hidden' : ''}">
 			{#if $isParsing}
 				<div class="flex h-full flex-col items-center justify-center gap-4">
 					<Loader2 class="h-8 w-8 animate-spin text-primary" />
@@ -166,13 +171,13 @@
 			<!-- Resize handle -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
-				class="w-1 cursor-col-resize {isResizing ? 'bg-primary' : 'bg-border hover:bg-primary/50'}"
+				class="w-1 cursor-col-resize max-md:hidden {isResizing ? 'bg-primary' : 'bg-border hover:bg-primary/50'}"
 				onpointerdown={handleResizeStart}
 				aria-hidden="true"
 			></div>
 
 			<!-- Right: Code Editor -->
-			<div class="flex flex-col overflow-hidden" style="width: {splitPercent}%">
+			<div class="flex flex-col overflow-hidden max-md:!w-full" style="width: {splitPercent}%">
 				<PolicyEditor />
 			</div>
 		{/if}
@@ -182,6 +187,8 @@
 			onclick={() => showEditor = !showEditor}
 			class="absolute bottom-10 right-2 z-10 rounded-md border border-border bg-card/90 p-1.5 shadow-sm hover:bg-secondary"
 			title="{showEditor ? 'Hide' : 'Show'} editor"
+			aria-label="{showEditor ? 'Hide' : 'Show'} policy editor"
+			aria-expanded={showEditor}
 		>
 			{#if showEditor}
 				<PanelRightClose class="h-4 w-4 text-muted-foreground" />
