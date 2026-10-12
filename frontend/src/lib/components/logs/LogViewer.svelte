@@ -393,7 +393,7 @@
 		{#snippet sortButton(field: SortField, label: string)}
 			<button
 				type="button"
-				class="cursor-pointer select-none font-medium transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="cursor-pointer select-none font-medium transition-colors hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
 				onclick={() => toggleSort(field)}
 			>{label}<span aria-hidden="true">{sortIndicator(field)}</span></button>
 		{/snippet}
@@ -420,16 +420,16 @@
 						tabindex="0"
 						onkeydown={(e) => e.key === 'Enter' && handleLogClick(entry)}
 					>
-						<td class="whitespace-nowrap px-2 py-1 text-muted-foreground">
+						<td class="whitespace-nowrap px-2 py-1 pointer-coarse:py-3 text-muted-foreground">
 							{formatTime(entry.logged)}
 						</td>
-						<td class="px-2 py-1">
+						<td class="px-2 py-1 pointer-coarse:py-3">
 							<span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 {getTrafficTypeBgColor(entry.trafficType)} {getTrafficTypeColor(entry.trafficType)}">
 								<span class="h-1.5 w-1.5 rounded-full bg-current"></span>
 								{capitalizeFirst(entry.trafficType)}
 							</span>
 						</td>
-						<td class="px-2 py-1">
+						<td class="px-2 py-1 pointer-coarse:py-3">
 							<div class="flex items-center gap-1">
 								<span class="truncate" title={srcResolved.deviceName ? `${srcResolved.deviceName} (${srcResolved.ip}${srcResolved.port ? ':' + srcResolved.port : ''})` : entry.src}>
 									{#if srcResolved.deviceName}
@@ -448,11 +448,11 @@
 								</span>
 							</div>
 						</td>
-						<td class="px-2 py-1">
+						<td class="px-2 py-1 pointer-coarse:py-3">
 							<span class="font-mono">{entry.protocol}</span>
 						</td>
-						<td class="whitespace-nowrap px-2 py-1 text-right">{formatBytes(entry.txBytes)}</td>
-						<td class="whitespace-nowrap px-2 py-1 text-right">{formatBytes(entry.rxBytes)}</td>
+						<td class="whitespace-nowrap px-2 py-1 pointer-coarse:py-3 text-right">{formatBytes(entry.txBytes)}</td>
+						<td class="whitespace-nowrap px-2 py-1 pointer-coarse:py-3 text-right">{formatBytes(entry.rxBytes)}</td>
 					</tr>
 				{/each}
 			</tbody>

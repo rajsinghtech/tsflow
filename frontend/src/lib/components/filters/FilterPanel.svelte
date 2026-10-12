@@ -71,7 +71,7 @@
 			</div>
 			<button
 				type="button"
-				class="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary"
+				class="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary pointer-coarse:min-h-11"
 				onclick={() => filterStore.clearDeviceScope()}
 			>
 				Clear
@@ -87,14 +87,14 @@
 				id="search-input"
 				type="text"
 				placeholder="Search devices, tag:k8s, ip:100..."
-				class="w-full rounded-md border border-input bg-background py-2 pl-3 pr-8 text-sm"
+				class="w-full rounded-md border border-input bg-background py-2 pl-3 pr-8 text-sm pointer-coarse:min-h-11 pointer-coarse:pr-11 pointer-coarse:text-base"
 				value={$filterStore.search}
 				oninput={(e) => filterStore.setSearch(e.currentTarget.value)}
 			/>
 			{#if $filterStore.search}
 				<button
 					onclick={() => filterStore.setSearch('')}
-					class="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+					class="absolute right-1.5 top-1/2 flex h-7 w-7 pointer-coarse:right-0 pointer-coarse:h-11 pointer-coarse:w-11 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
 					title="Clear search"
 					aria-label="Clear search"
 				>
@@ -131,9 +131,9 @@
 			{/each}
 		</div>
 		<div class="mt-2 flex gap-2 text-xs">
-			<button onclick={selectAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary">All</button
+			<button onclick={selectAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11">All</button
 			>
-			<button onclick={clearAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary">
+			<button onclick={clearAllTrafficTypes} class="rounded-md border border-border px-2 py-1 hover:bg-secondary pointer-coarse:min-h-11">
 				None ({selectedTrafficTypes.size})
 			</button>
 		</div>
