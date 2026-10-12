@@ -365,3 +365,26 @@ func TestRankedTrafficFiltersBeforePaging(t *testing.T) {
 		t.Fatalf("filtered pairs = %+v err=%v", pairs, err)
 	}
 }
+
+func TestNormalizeRankQueryMaxLimit(t *testing.T) {
+	cases := []struct {
+		name            string
+		limit, maxLimit int
+		want            int
+	}{
+		{"request default", 0, 0, RankDefaultLimit},
+		{"request cap", 5000, 0, RankMaxLimit},
+		{"small max keeps request cap", 5000, 50, RankMaxLimit},
+		{"internal scan", 5000, 5000, 5000},
+		{"internal scan ceiling", 9000, 9000, RankScanMaxLimit},
+	}
+	for _, tc := range cases {
+		got, _, _, err := normalizeRankQuery(RankQuery{Limit: tc.limit, MaxLimit: tc.maxLimit})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: limit = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

@@ -194,3 +194,15 @@ button:disabled {
 		animation: none;
 	}
 }
+
+/* Bigger graph buttons for fingers. Mouse users keep the small ones. */
+@media (pointer: coarse) {
+	.svelte-flow__controls-button {
+		width: 44px;
+		height: 44px;
+	}
+	.svelte-flow__controls-button svg {
+		max-width: 16px;
+		max-height: 16px;
+	}
+}
