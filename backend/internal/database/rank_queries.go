@@ -166,8 +166,12 @@ func normalizeRankQuery(query RankQuery) (int, int, string, error) {
 	if limit <= 0 {
 		limit = RankDefaultLimit
 	}
-	if limit > RankMaxLimit {
-		limit = RankMaxLimit
+	maxLimit := RankMaxLimit
+	if query.MaxLimit > maxLimit {
+		maxLimit = min(query.MaxLimit, RankScanMaxLimit)
+	}
+	if limit > maxLimit {
+		limit = maxLimit
 	}
 	if query.Offset < 0 || query.Offset > RankMaxOffset {
 		return 0, 0, "", fmt.Errorf("offset must be a non-negative integer no larger than %d", RankMaxOffset)

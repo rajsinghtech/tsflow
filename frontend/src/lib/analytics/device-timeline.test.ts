@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectedDeviceId, timelineColumns, type TimelineBucket } from './device-timeline';
+import { columnGap, selectedDeviceId, timelineColumns, type TimelineBucket } from './device-timeline';
 
 describe('device timeline', () => {
 	it('splits bytes by traffic type and leaves physical out unless present', () => {
@@ -31,5 +31,13 @@ describe('device timeline', () => {
 		);
 		expect(selectedDeviceId(null, 'ext', [{ id: 'ext', ip: '10.1.1.5' }])).toBe('10.1.1.5');
 		expect(selectedDeviceId('  ', null, [])).toBeNull();
+	});
+});
+
+describe('device timeline column gap', () => {
+	it('tightens the gap as columns get dense so all of them fit', () => {
+		expect(columnGap(24)).toBe('gap-1');
+		expect(columnGap(120)).toBe('gap-px');
+		expect(columnGap(200)).toBe('gap-0');
 	});
 });
