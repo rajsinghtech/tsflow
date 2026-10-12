@@ -2,8 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -390,5 +393,66 @@ func TestNewConnectionsLeaveOutSelfPairs(t *testing.T) {
 	}
 	if len(fresh.Pairs) != 1 || fresh.Pairs[0].SrcNodeID != "ada" || fresh.Pairs[0].DstNodeID != "carol" {
 		t.Fatalf("new pairs = %+v, want only ada -> carol", fresh.Pairs)
+	}
+}
+
+func TestTopTalkersRankWholeWindowInOneRead(t *testing.T) {
+	svc, store, _ := setupMCP(t)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	// More devices than one RankMaxLimit page, so the old paged scan would
+	// have needed several reads.
+	const n = 450
+	rows := make([]database.NodePairAggregate, 0, n)
+	for i := 0; i < n; i++ {
+		tx := int64(1000 + i)
+		rows = append(rows, database.NodePairAggregate{
+			Bucket: base.Unix(), SrcNodeID: "src-" + itoa(int64(i)), DstNodeID: "sink", TrafficType: "virtual",
+			TxBytes: tx, FlowCount: 1, Protocols: "[6]", ProtocolBytes: `{"6":` + itoa(tx) + `}`,
+		})
+	}
+	if err := store.UpsertNodePairAggregates(context.Background(), database.DefaultTailnetID, rows); err != nil {
+		t.Fatal(err)
+	}
+	window := rankedIn{Start: base.Format(time.RFC3339), End: base.Add(time.Minute).Format(time.RFC3339), Limit: 5, Offset: 300}
+	got, err := svc.topTalkers(context.Background(), Viewer{}, window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Truncated || !got.HasMore || got.Count != 5 {
+		t.Fatalf("page = count %d hasMore %v truncated %v", got.Count, got.HasMore, got.Truncated)
+	}
+	// sink is first, then src-449 down; offset 300 lands on src-150.
+	if got.Talkers[0].NodeID != "src-150" {
+		t.Fatalf("talkers[0] = %+v", got.Talkers[0])
+	}
+
+	pairs, err := svc.topPairs(context.Background(), Viewer{}, rankedIn{Start: window.Start, End: window.End, Limit: 1, Offset: n - 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pairs.Truncated || pairs.HasMore || pairs.Count != 1 || pairs.Pairs[0].SrcNodeID != "src-0" {
+		t.Fatalf("last pair page = %+v", pairs)
+	}
+}
+
+func TestQueryErrorSuggestsShorterWindowOnTimeout(t *testing.T) {
+	err := queryError("top talkers", fmt.Errorf("wrapped: %w", context.DeadlineExceeded))
+	if !strings.Contains(err.Error(), "shorter window") {
+		t.Fatalf("timeout error = %q", err)
+	}
+	err = queryError("top talkers", errors.New("disk I/O error at /var/lib/tsflow"))
+	if err.Error() != "failed to query top talkers" {
+		t.Fatalf("other error = %q", err)
+	}
+}
+
+func TestWhoamiWithoutAccessControl(t *testing.T) {
+	got := whoami(Viewer{})
+	if got.AccessControl || got.Login != "" || got.Autoscope != config.AccessAutoscopeOff || got.DefaultScope != "all" || got.Tailnets != nil {
+		t.Fatalf("whoami with access off = %+v", got)
+	}
+	ada := whoami(adaViewer())
+	if !ada.AccessControl || ada.Login != "ada@example.com" || ada.DefaultScope != "mine" || len(ada.Tailnets) != 1 || ada.Tailnets[0] != "*" {
+		t.Fatalf("whoami ada = %+v", ada)
 	}
 }

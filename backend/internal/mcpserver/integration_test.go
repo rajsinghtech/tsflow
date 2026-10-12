@@ -133,10 +133,21 @@ func TestMCPClientEnforcesTailnetAndDeviceScope(t *testing.T) {
 	for _, name := range []string{
 		"list_tailnets", "search_devices", "get_device", "top_talkers", "top_pairs",
 		"flows_between", "device_peers", "device_timeline", "new_connections", "stats_overview",
+		"whoami",
 	} {
 		if !names[name] {
 			t.Fatalf("missing tool %s in %+v", name, names)
 		}
+	}
+
+	var me whoamiOut
+	callTool(t, session, "whoami", map[string]any{}, &me)
+	if !me.AccessControl || me.Login != "ada@example.com" || me.Name != "Ada" ||
+		me.Autoscope != config.AccessAutoscopeUser || me.DefaultScope != "mine" ||
+		len(me.Tailnets) != 1 || me.Tailnets[0] != "alpha" ||
+		len(me.Groups) != 1 || me.Groups[0] != "group:eng" ||
+		me.DeviceScope == nil || len(me.DeviceScope.Owners) != 1 || me.DeviceScope.Owners[0] != "ada@example.com" {
+		t.Fatalf("whoami = %+v", me)
 	}
 
 	var tailnets listTailnetsOut
