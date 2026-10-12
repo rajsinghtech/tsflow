@@ -7,6 +7,7 @@
 	import { refreshVisibleData } from '#lib/stores/live-mode';
 	import { loadTrafficShape, storedCoverage, storedSpans, windowCoverage } from '#lib/stores/traffic-shape';
 	import { coverageNote } from './range-coverage';
+	import { closesPicker } from './picker-keys';
 	import {
 		bootstrapRangeFromLocation,
 		commitIntent,
@@ -56,6 +57,7 @@
 	let chord = false;
 	let chordTimer: ReturnType<typeof setTimeout> | null = null;
 	let pickerRoot: HTMLDivElement | null = $state(null);
+	let pickerTrigger: HTMLButtonElement | null = $state(null);
 
 	const source = $derived($dataSourceStore);
 	const intent = $derived(
@@ -146,13 +148,18 @@
 
 	function onKey(event: KeyboardEvent) {
 		const target = event.target;
+		// Escape closes the picker even while its range input has focus, and
+		// hands focus back to the button that opened it.
+		if (closesPicker(event, open)) {
+			event.preventDefault();
+			const hadFocus = !!pickerRoot && pickerRoot.contains(document.activeElement);
+			open = false;
+			if (hadFocus) pickerTrigger?.focus();
+			return;
+		}
 		if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
 		if (target instanceof HTMLElement && (target.closest('.cm-editor') || target.closest('#time-range-popover'))) return;
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		if (event.key === 'Escape' && open) {
-			open = false;
-			return;
-		}
 		if (!chord && (event.key === 'p' || event.key === 'P')) {
 			event.preventDefault();
 			if (get(dataSourceStore).followLatest) pinCurrentRange();
@@ -216,6 +223,7 @@
 			<button
 				type="button"
 				class="inline-flex h-8 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				bind:this={pickerTrigger}
 				aria-haspopup="dialog"
 				aria-expanded={open}
 				aria-controls="time-range-popover"
