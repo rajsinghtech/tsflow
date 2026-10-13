@@ -8,7 +8,7 @@ before:
 builds:
   - id: tsflow
     dir: backend
-    main: ./main.go
+    main: .
     binary: tsflow
     env:
       - CGO_ENABLED=0
