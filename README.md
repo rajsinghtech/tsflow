@@ -94,6 +94,13 @@ The single-tailnet environment variables configure one tailnet with id `default`
 
 Data routes take an optional `tailnet` query parameter. With one configured tailnet the parameter can be omitted, and the JSON matches a single-tailnet install. With several tailnets, a missing parameter uses id `default` when that id is configured. If it is not, the response is 400 and lists the valid ids. An unknown id is 404. `GET /api/tailnets` returns each id, display name, and poller status, including the last error. The display name is the entry's `display_name` when one is set, and the tailnet name otherwise. With a display name, the entry also has `tailnet`, the tailnet name. It does not return credentials. The UI calls `GET /api/tailnets` once on load. With one tailnet it shows no switcher and leaves data requests unchanged. With several, a header switcher keeps the choice in the `tailnet` query parameter and sends that id on data requests.
 
+**Tailnet switcher**: pick a tailnet from the header. Each entry shows its `display_name`, with the tailnet name and id underneath. Without a `display_name`, the tailnet name is the label.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/tailnet-switcher-dark.png">
+  <img alt="Header tailnet switcher open, listing three tailnets named Home, Lab and Cloud" src="docs/images/tailnet-switcher.png">
+</picture>
+
 ```yaml
 tailnets:
   - id: default
