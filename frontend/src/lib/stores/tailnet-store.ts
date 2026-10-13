@@ -48,9 +48,11 @@ function normalizeTailnet(value: unknown): TailnetInfo | null {
 	const raw = value as Record<string, unknown>;
 	if (typeof raw.id !== 'string' || raw.id.trim() === '') return null;
 	const displayName = typeof raw.displayName === 'string' && raw.displayName.trim() !== '' ? raw.displayName : raw.id;
+	const tailnet = typeof raw.tailnet === 'string' ? raw.tailnet.trim() : '';
 	return {
 		id: raw.id,
 		displayName,
+		...(tailnet ? { tailnet } : {}),
 		poller: normalizePoller(raw.poller)
 	};
 }

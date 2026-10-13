@@ -9,6 +9,9 @@ export default defineConfig({
 	resolve: {
 		alias: [
 			{ find: '#lib', replacement: fileURLToPath(new URL('./src/lib', import.meta.url)) },
+			// Component tests run without SvelteKit, so its $app modules are stubbed.
+			{ find: '$app/state', replacement: fileURLToPath(new URL('./src/test-stubs/app-state.ts', import.meta.url)) },
+			{ find: '$app/navigation', replacement: fileURLToPath(new URL('./src/test-stubs/app-navigation.ts', import.meta.url)) },
 			// Component tests call mount(), which the server runtime does not implement.
 			{ find: /^svelte$/, replacement: clientRuntime }
 		]

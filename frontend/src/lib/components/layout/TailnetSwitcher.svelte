@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import { refreshTailnetStatus, selectTailnet, selectedTailnetId, tailnets } from '#lib/stores/tailnet-store';
+	import { tailnetSubtitle } from '#lib/services/tailnet-query';
 
 	let open = $state(false);
 	// Last id written to the address bar. Stops the URL sync from running again
@@ -12,8 +13,8 @@
 	const selected = $derived($tailnets.find((tailnet) => tailnet.id === $selectedTailnetId) ?? null);
 	const statusLabel = $derived.by(() => {
 		if (!selected) return '';
-		if (selected.poller.lastError) return selected.poller.lastError;
-		return selected.poller.running ? 'Poller running' : 'Poller stopped';
+		const status = selected.poller.lastError || (selected.poller.running ? 'Poller running' : 'Poller stopped');
+		return selected.tailnet ? `${selected.tailnet}: ${status}` : status;
 	});
 
 	// Keep the choice in the address bar without dropping other query params.
@@ -84,6 +85,7 @@
 				aria-label="Tailnets"
 			>
 				{#each $tailnets as tailnet (tailnet.id)}
+					{@const subtitle = tailnetSubtitle(tailnet)}
 					<button
 						type="button"
 						role="option"
@@ -93,8 +95,8 @@
 						class:bg-secondary={tailnet.id === selected.id}
 					>
 						<span class="truncate">{tailnet.displayName}</span>
-						{#if tailnet.displayName !== tailnet.id}
-							<span class="text-[11px] text-muted-foreground">{tailnet.id}</span>
+						{#if subtitle}
+							<span class="text-[11px] text-muted-foreground">{subtitle}</span>
 						{/if}
 						{#if tailnet.poller.lastError}
 							<span class="text-[11px] text-destructive">{tailnet.poller.lastError}</span>

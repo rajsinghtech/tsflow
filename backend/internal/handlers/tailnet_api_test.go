@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -500,4 +501,33 @@ func tailnetHTTP(t *testing.T, devicesByTailnet map[string]string) http.Handler 
 
 func deviceJSON(id string) string {
 	return `{"devices":[{"id":"` + id + `","name":"` + id + `.example.com","hostname":"` + id + `","addresses":["100.64.0.1"],"authorized":true,"lastSeen":"2026-03-01T12:00:00Z","created":"2026-03-01T12:00:00Z"}]}`
+}
+
+func TestListTailnetsDisplayName(t *testing.T) {
+	store := newAPIStore(t)
+	h := registryHandlers(t, store, []config.TailnetSpec{
+		{ID: "home", Name: "home.example.com", DisplayName: "Home", APIURL: "http://127.0.0.1:1", APIKey: "k"},
+		{ID: "lab", Name: "lab.example.com", APIURL: "http://127.0.0.1:1", APIKey: "k"},
+	})
+	code, body := serve(dataRouter(h), http.MethodGet, "/api/tailnets")
+	if code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", code, body)
+	}
+	var got struct {
+		Tailnets []map[string]any `json:"tailnets"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tailnets) != 2 {
+		t.Fatalf("tailnets = %s", body)
+	}
+	home, lab := got.Tailnets[0], got.Tailnets[1]
+	if home["id"] != "home" || home["displayName"] != "Home" || home["tailnet"] != "home.example.com" {
+		t.Fatalf("home = %v", home)
+	}
+	// Unset keeps the old shape: displayName is the tailnet and there is no tailnet key.
+	if _, ok := lab["tailnet"]; ok || lab["displayName"] != "lab.example.com" {
+		t.Fatalf("lab = %v", lab)
+	}
 }

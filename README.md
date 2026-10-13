@@ -92,7 +92,7 @@ TSFlow supports OAuth (recommended) or API key authentication.
 
 The single-tailnet environment variables configure one tailnet with id `default`. To watch more than one, leave `TAILSCALE_TAILNET`, `TAILSCALE_API_KEY`, and the OAuth client variables unset, and set `TSFLOW_TAILNETS_FILE` to a YAML or JSON file. Secrets are not written in the file. Each entry points at an environment variable or a file.
 
-Data routes take an optional `tailnet` query parameter. With one configured tailnet the parameter can be omitted, and the JSON matches a single-tailnet install. With several tailnets, a missing parameter uses id `default` when that id is configured. If it is not, the response is 400 and lists the valid ids. An unknown id is 404. `GET /api/tailnets` returns each id, display name, and poller status, including the last error. It does not return credentials. The UI calls `GET /api/tailnets` once on load. With one tailnet it shows no switcher and leaves data requests unchanged. With several, a header switcher keeps the choice in the `tailnet` query parameter and sends that id on data requests.
+Data routes take an optional `tailnet` query parameter. With one configured tailnet the parameter can be omitted, and the JSON matches a single-tailnet install. With several tailnets, a missing parameter uses id `default` when that id is configured. If it is not, the response is 400 and lists the valid ids. An unknown id is 404. `GET /api/tailnets` returns each id, display name, and poller status, including the last error. The display name is the entry's `display_name` when one is set, and the tailnet name otherwise. With a display name, the entry also has `tailnet`, the tailnet name. It does not return credentials. The UI calls `GET /api/tailnets` once on load. With one tailnet it shows no switcher and leaves data requests unchanged. With several, a header switcher keeps the choice in the `tailnet` query parameter and sends that id on data requests.
 
 ```yaml
 tailnets:
@@ -102,12 +102,13 @@ tailnets:
     s3_prefix: network/
   - id: lab
     tailnet: lab.example.com
+    display_name: Lab
     oauth_client_id_file: /secrets/lab/client-id
     oauth_client_secret_file: /secrets/lab/client-secret
     s3_prefix: lab/network/
 ```
 
-`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `prefix` is the same field. `api_url` and `oauth_scopes` are optional too. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
+`s3_prefix` is optional. When it is omitted, the tailnet uses `TSFLOW_S3_PREFIX`. `prefix` is the same field. `api_url` and `oauth_scopes` are optional too. `display_name` is an optional label for the header switcher, such as `Lab`. The switcher shows it with the tailnet name and id underneath. `displayName` is the same field. Without it, the switcher shows the tailnet name with the id underneath. `oauth_scopes` is a comma-separated string or a list. An entry needs either `api_key_env` or `api_key_file`, or both OAuth client id and secret. Do not set both an environment variable and a file for the same secret. An `auth` block (`type: oauth`, `api_key`, or `wif`) is the other way to set credentials. Do not combine it with the flat credential fields. See [docs/workload-identity.md](docs/workload-identity.md).
 
 An entry can also say where its flow logs live. `flow_backend` is `api`, `s3`, or `gcs`. `bucket`, `region`, `endpoint`, and `s3_auth` (`static`, `aws_default`, or `gcs_adc`) override the matching process settings. A field that is left out inherits the process value, so existing files that only set `s3_prefix` stay valid. `role_arn` with `web_identity_token_file` assumes that AWS role from the OIDC token in the file (`AssumeRoleWithWebIdentity`). That client does not read `AWS_ROLE_ARN` or `AWS_WEB_IDENTITY_TOKEN_FILE`, so two tailnets can use two token files. Static object-store keys stay on the process.
 

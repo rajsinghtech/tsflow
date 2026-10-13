@@ -15,7 +15,21 @@ export interface TailnetPollerStatus {
 export interface TailnetInfo {
 	id: string;
 	displayName: string;
+	// The tailnet name. The API only sends it when a display name is set,
+	// and displayName then holds that label.
+	tailnet?: string;
 	poller: TailnetPollerStatus;
+}
+
+// The small line under a tailnet's label in the switcher: the tailnet name
+// when a display name replaced it, then the id, each only when it adds
+// something the label doesn't already say.
+export function tailnetSubtitle(tailnet: Pick<TailnetInfo, 'id' | 'displayName' | 'tailnet'>): string {
+	const parts: string[] = [];
+	const name = tailnet.tailnet?.trim() ?? '';
+	if (name && name !== tailnet.displayName) parts.push(name);
+	if (tailnet.id !== tailnet.displayName && tailnet.id !== name) parts.push(tailnet.id);
+	return parts.join(' · ');
 }
 
 export function setTailnetLoader(fn: () => Promise<void>) {

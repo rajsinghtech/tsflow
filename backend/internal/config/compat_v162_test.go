@@ -471,6 +471,10 @@ func TestV162ConfigShapesBehaveTheSame(t *testing.T) {
 			if len(tailnets) != 1 || tailnets[0].ID != "default" || tailnets[0].Name != old.TailscaleTailnet {
 				t.Fatalf("tailnets = %+v, want one entry id default named %q", tailnets, old.TailscaleTailnet)
 			}
+			// No display name: the UI keeps labeling the tailnet by its name.
+			if tailnets[0].DisplayName != "" {
+				t.Errorf("display name = %q, want none", tailnets[0].DisplayName)
+			}
 			wantAuth := ""
 			switch {
 			case old.TailscaleOAuthClientID != "" && old.TailscaleOAuthClientSecret != "":

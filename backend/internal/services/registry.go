@@ -14,10 +14,12 @@ import (
 
 // TailnetRuntime is the API client and poller for one configured tailnet.
 type TailnetRuntime struct {
-	ID      string
-	Name    string
-	Service *TailscaleService
-	Poller  *Poller
+	ID   string
+	Name string
+	// DisplayName is the optional label from the tailnets file.
+	DisplayName string
+	Service     *TailscaleService
+	Poller      *Poller
 }
 
 // Registry holds one service and one poller per tailnet. Each poller runs in
@@ -147,10 +149,11 @@ func NewRegistry(ctx context.Context, specs []config.TailnetSpec, store database
 		}
 		reg.order = append(reg.order, spec.ID)
 		reg.byID[spec.ID] = &TailnetRuntime{
-			ID:      spec.ID,
-			Name:    spec.Name,
-			Service: service,
-			Poller:  poller,
+			ID:          spec.ID,
+			Name:        spec.Name,
+			DisplayName: spec.DisplayName,
+			Service:     service,
+			Poller:      poller,
 		}
 	}
 	return reg, nil
