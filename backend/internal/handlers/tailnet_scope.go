@@ -176,9 +176,15 @@ type TailnetPollerStatus struct {
 }
 
 // TailnetSummary is one configured tailnet without credentials.
+//
+// DisplayName is the display_name from the tailnets file when one is set, and
+// the tailnet name otherwise. Tailnet is the tailnet name, and is only sent
+// when a display name replaced it, so a file without display names returns
+// the same JSON as before.
 type TailnetSummary struct {
 	ID          string              `json:"id"`
 	DisplayName string              `json:"displayName"`
+	Tailnet     string              `json:"tailnet,omitempty"`
 	Poller      TailnetPollerStatus `json:"poller"`
 }
 
@@ -223,11 +229,16 @@ func (h *Handlers) allTailnets() []TailnetSummary {
 		if entry == nil {
 			continue
 		}
-		out = append(out, TailnetSummary{
+		summary := TailnetSummary{
 			ID:          entry.ID,
 			DisplayName: entry.Name,
 			Poller:      pollerStatus(entry.Poller),
-		})
+		}
+		if label := strings.TrimSpace(entry.DisplayName); label != "" {
+			summary.DisplayName = label
+			summary.Tailnet = entry.Name
+		}
+		out = append(out, summary)
 	}
 	return out
 }

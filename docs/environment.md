@@ -21,7 +21,7 @@ Any variable read through the config helpers also accepts a `VITE_` prefix, for 
 | `TAILSCALE_WIF_AUDIENCE` | - | Audience for asking the platform for a token. |
 | `TAILSCALE_TAILNET` | `-` | Tailnet name. `-` means the tailnet the credential belongs to. |
 | `TAILSCALE_API_URL` | `https://api.tailscale.com` | |
-| `TSFLOW_TAILNETS_FILE` | - | YAML or JSON list of tailnets. Unset means one tailnet, id `default`, from the variables above. Don't set both. See [Several tailnets](../README.md#several-tailnets). |
+| `TSFLOW_TAILNETS_FILE` | - | YAML or JSON list of tailnets. Unset means one tailnet, id `default`, from the variables above. Don't set both. An entry's optional `display_name` labels it in the header switcher. See [Several tailnets](../README.md#several-tailnets). |
 
 ## Server
 

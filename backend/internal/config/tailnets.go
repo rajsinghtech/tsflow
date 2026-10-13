@@ -17,8 +17,11 @@ import (
 // TailnetSpec is one resolved tailnet. Secrets have already been read from
 // the environment or from files.
 type TailnetSpec struct {
-	ID                string
-	Name              string
+	ID   string
+	Name string
+	// DisplayName is the optional label from display_name (or displayName)
+	// in the tailnets file. Empty means the UI labels the tailnet by Name.
+	DisplayName       string
 	APIURL            string
 	APIKey            string
 	OAuthClientID     string
@@ -174,6 +177,7 @@ func parseTailnetsFile(path string, global *Config) ([]TailnetSpec, error) {
 type tailnetFileEntry struct {
 	ID                    string
 	Tailnet               string
+	DisplayName           string
 	APIURL                string
 	APIKeyEnv             string
 	APIKeyFile            string
@@ -433,6 +437,7 @@ func (e tailnetFileEntry) finish(where string, spec TailnetSpec, global *Config)
 		return TailnetSpec{}, err
 	}
 	spec.S3Prefix = prefix
+	spec.DisplayName = strings.TrimSpace(e.DisplayName)
 	spec.FlowBackend = strings.ToLower(strings.TrimSpace(e.FlowBackend))
 	spec.Bucket = strings.TrimSpace(e.Bucket)
 	spec.Region = strings.TrimSpace(e.Region)
@@ -488,6 +493,8 @@ func readSecret(what, envName, path string) (string, error) {
 var tailnetEntryFields = map[string]struct{}{
 	"id":                       {},
 	"tailnet":                  {},
+	"display_name":             {},
+	"displayName":              {},
 	"api_url":                  {},
 	"api_key_env":              {},
 	"api_key_file":             {},
@@ -611,6 +618,9 @@ func entryFromMap(fields map[string]any, index int) (tailnetFileEntry, error) {
 	if entry.Tailnet, err = optionalString(fields, "tailnet", where); err != nil {
 		return tailnetFileEntry{}, err
 	}
+	if entry.DisplayName, err = displayNameField(fields, where); err != nil {
+		return tailnetFileEntry{}, err
+	}
 	if entry.APIURL, err = optionalString(fields, "api_url", where); err != nil {
 		return tailnetFileEntry{}, err
 	}
@@ -683,6 +693,28 @@ func entryFromMap(fields map[string]any, index int) (tailnetFileEntry, error) {
 		entry.Auth = &block
 	}
 	return entry, nil
+}
+
+// displayNameField reads the optional label. display_name matches the other
+// keys in the file and displayName is accepted as the same field. Both may be
+// set only when they match.
+func displayNameField(fields map[string]any, where string) (string, error) {
+	snake, err := optionalString(fields, "display_name", where)
+	if err != nil {
+		return "", err
+	}
+	camel, err := optionalString(fields, "displayName", where)
+	if err != nil {
+		return "", err
+	}
+	snake, camel = strings.TrimSpace(snake), strings.TrimSpace(camel)
+	if snake != "" && camel != "" && snake != camel {
+		return "", fmt.Errorf("%s sets both display_name and displayName", where)
+	}
+	if snake != "" {
+		return snake, nil
+	}
+	return camel, nil
 }
 
 func parseAuthBlock(raw any, where string) (tailnetAuthBlock, error) {

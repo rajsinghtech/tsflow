@@ -10,6 +10,7 @@ import {
 	chooseTailnet,
 	hrefWithTailnet,
 	searchWithTailnet,
+	tailnetSubtitle,
 	type TailnetInfo
 } from '#lib/services/tailnet-query';
 import {
@@ -18,7 +19,8 @@ import {
 	selectTailnet,
 	selectedTailnetId,
 	setTailnetPathReader,
-	setTailnetSearchReader
+	setTailnetSearchReader,
+	tailnets
 } from '#lib/stores/tailnet-store';
 
 const calls: string[] = [];
@@ -229,5 +231,27 @@ describe('tailnet url and cache', () => {
 		expect(calls).toContain('/api/flow-logs/range?tailnet=lab');
 		expect(calls.some((url) => url.includes('/flow-logs/aggregated'))).toBe(false);
 		expect(calls.some((url) => url.includes('/api/devices'))).toBe(false);
+	});
+});
+
+describe('tailnet display names', () => {
+	it('keeps the id under the tailnet name when no display name is set', () => {
+		expect(tailnetSubtitle({ id: 'lab', displayName: 'lab.example.com' })).toBe('lab');
+		expect(tailnetSubtitle({ id: 'lab', displayName: 'lab' })).toBe('');
+	});
+
+	it('puts the tailnet name and id under a display name', () => {
+		expect(tailnetSubtitle({ id: 'home', displayName: 'Home', tailnet: 'home.example.com' })).toBe('home.example.com · home');
+		expect(tailnetSubtitle({ id: 'home', displayName: 'home', tailnet: 'home.example.com' })).toBe('home.example.com');
+		expect(tailnetSubtitle({ id: 'home', displayName: 'Home', tailnet: 'home' })).toBe('home');
+	});
+
+	it('keeps the tailnet name from the list only when the API sends it', async () => {
+		tailnetList = [{ ...tailnet('home', 'Home'), tailnet: 'home.example.com' }, tailnet('lab', 'lab.example.com')];
+		await tailscaleService.getDevices();
+		const list = get(tailnets);
+		expect(list[0]).toMatchObject({ id: 'home', displayName: 'Home', tailnet: 'home.example.com' });
+		expect(list[1]).toMatchObject({ id: 'lab', displayName: 'lab.example.com' });
+		expect('tailnet' in list[1]).toBe(false);
 	});
 });
