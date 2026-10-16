@@ -122,7 +122,13 @@
 				onkeydown={handleKeydown}
 			/>
 			{#if selectorInput}
-				<button onclick={handleClear} class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+				<button
+					type="button"
+					onclick={handleClear}
+					class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+					aria-label="Clear query"
+					title="Clear query"
+				>
 					<X class="h-3 w-3" />
 				</button>
 			{/if}

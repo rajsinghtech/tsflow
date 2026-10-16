@@ -141,9 +141,12 @@
 								<span class="ml-auto">{$filteredGraph.nodes.length}n · {$filteredGraph.edges.length}e</span>
 							</div>
 							<button
+								type="button"
 								onclick={() => showControls = !showControls}
 								class="shrink-0 rounded p-0.5 hover:bg-secondary"
-								title="{showControls ? 'Collapse' : 'Expand'} controls"
+								title="{showControls ? 'Hide' : 'Show'} policy controls"
+								aria-label="{showControls ? 'Hide' : 'Show'} policy controls"
+								aria-expanded={showControls}
 							>
 								<SlidersHorizontal class="h-3.5 w-3.5 {showControls ? 'text-primary' : 'text-muted-foreground'}" />
 							</button>
@@ -184,6 +187,7 @@
 
 		<!-- Editor toggle button (bottom-right of graph) -->
 		<button
+			type="button"
 			onclick={() => showEditor = !showEditor}
 			class="absolute bottom-10 right-2 z-10 rounded-md border border-border bg-card/90 p-1.5 shadow-sm hover:bg-secondary"
 			title="{showEditor ? 'Hide' : 'Show'} editor"

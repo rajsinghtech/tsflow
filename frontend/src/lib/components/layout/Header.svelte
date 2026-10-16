@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PanelLeft, ScrollText, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User, MoreHorizontal } from 'lucide-svelte';
+	import { ListFilter, Logs, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User, MoreHorizontal } from 'lucide-svelte';
 	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
@@ -126,6 +126,9 @@
 			case 'system': return 'System';
 		}
 	}
+
+	const THEME_ORDER: ThemeMode[] = ['light', 'dark', 'system'];
+	const nextThemeLabel = $derived(getThemeLabel(THEME_ORDER[(THEME_ORDER.indexOf($themeStore) + 1) % THEME_ORDER.length]));
 
 	function handleFilterToggle() {
 		uiStore.toggleFilters();
@@ -300,32 +303,42 @@
 		{/if}
 		{#if isTrafficPage}
 			<button
+				type="button"
 				onclick={handleFilterToggle}
-				class="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-transparent p-1.5 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:min-h-9 sm:min-w-9 sm:p-2"
-				title="Toggle filters"
+				class="flex min-h-8 min-w-8 items-center justify-center gap-1.5 rounded-md border border-transparent p-1.5 text-sm hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:min-h-9 sm:min-w-9 sm:p-2"
+				title="Show or hide filters"
 				aria-label="Toggle filters"
 			>
-				<PanelLeft class="h-4 w-4" />
+				<ListFilter class="h-4 w-4" />
+				<span class="hidden xl:inline">Filters</span>
 			</button>
 		{/if}
 
+		<!-- The icon shows the current theme; the label says so, and the tooltip names the next one. -->
 		<button
+			type="button"
 			onclick={cycleTheme}
-			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
-			title="Theme: {getThemeLabel($themeStore)} (click to cycle)"
+			class="hidden min-h-9 min-w-9 items-center justify-center gap-1.5 rounded-md border border-transparent p-2 text-sm hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
+			title="Theme: {getThemeLabel($themeStore)}. Click for {nextThemeLabel}"
 			aria-label="Theme: {getThemeLabel($themeStore)}"
 		>
 			<ThemeIcon class="h-4 w-4" />
+			<span class="hidden xl:inline">{getThemeLabel($themeStore)}</span>
 		</button>
 
-		<button
-			onclick={() => uiStore.toggleLogViewer()}
-			class="hidden min-h-9 min-w-9 items-center justify-center rounded-md border border-transparent p-2 hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
-			title="Toggle log viewer"
-			aria-label="Toggle log viewer"
-		>
-			<ScrollText class="h-4 w-4" />
-		</button>
+		<!-- The log panel only exists on Traffic, so the button only shows there, like the phone menu. -->
+		{#if isTrafficPage}
+			<button
+				type="button"
+				onclick={() => uiStore.toggleLogViewer()}
+				class="hidden min-h-9 min-w-9 items-center justify-center gap-1.5 rounded-md border border-transparent p-2 text-sm hover:border-border hover:bg-secondary pointer-coarse:min-h-11 pointer-coarse:min-w-11 sm:flex"
+				title="Show or hide flow logs"
+				aria-label="Toggle log viewer"
+			>
+				<Logs class="h-4 w-4" />
+				<span class="hidden xl:inline">Logs</span>
+			</button>
+		{/if}
 
 		<div class="more-menu-container relative sm:hidden">
 			<button
@@ -355,6 +368,7 @@
 						role="menuitem"
 						onclick={cycleTheme}
 						class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-secondary"
+						title="Click for {nextThemeLabel}"
 					>
 						<ThemeIcon class="h-4 w-4" />
 						Theme: {getThemeLabel($themeStore)}
@@ -369,8 +383,8 @@
 							}}
 							class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm hover:bg-secondary"
 						>
-							<ScrollText class="h-4 w-4" />
-							Toggle logs
+							<Logs class="h-4 w-4" />
+							Flow logs
 						</button>
 					{/if}
 				</div>

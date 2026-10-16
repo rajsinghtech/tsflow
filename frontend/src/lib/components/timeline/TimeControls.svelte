@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertTriangle, CalendarClock, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Minus, RefreshCw } from 'lucide-svelte';
+	import { AlertTriangle, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Link, RefreshCw, ZoomOut } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { get } from 'svelte/store';
 	import { page } from '$app/state';
@@ -231,6 +231,7 @@
 				aria-expanded={open}
 				aria-controls="time-range-popover"
 				aria-label={pillLabel}
+				title="Pick a time range"
 				onclick={() => (open = !open)}
 			>
 				{#if live}
@@ -253,7 +254,7 @@
 			title="Zoom out (t then minus, or t then z)"
 			onclick={() => zoomWindow(2)}
 		>
-			<Minus class="h-4 w-4" />
+			<ZoomOut class="h-4 w-4" />
 		</button>
 		<button
 			type="button"
@@ -312,29 +313,36 @@
 		<div class="ml-auto flex items-center gap-1">
 			<button
 				type="button"
-				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="inline-flex h-8 min-w-8 pointer-coarse:h-11 pointer-coarse:min-w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)] xl:px-2"
 				aria-label="Refresh now"
 				title="Refresh now (R)"
 				onclick={() => void refresh()}
 				disabled={refreshing}
 			>
 				<RefreshCw class="h-3.5 w-3.5 {refreshing ? 'animate-spin' : ''}" />
+				<span class="ml-1 hidden text-xs xl:inline">Refresh</span>
 			</button>
 			<button
 				type="button"
-				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)]"
+				class="inline-flex h-8 min-w-8 pointer-coarse:h-11 pointer-coarse:min-w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-ring)] xl:px-2"
 				aria-label={copied ? 'Link copied' : 'Copy link'}
 				aria-keyshortcuts="t c"
-				title="Copy link (t then c)"
+				title="Copy link to this view (t then c)"
 				onclick={() => void copyLink()}
 			>
-				<Copy class="h-3.5 w-3.5" />
+				{#if copied}
+					<Check class="h-3.5 w-3.5" />
+				{:else}
+					<Link class="h-3.5 w-3.5" />
+				{/if}
+				<span class="ml-1 hidden text-xs xl:inline">{copied ? 'Copied' : 'Copy link'}</span>
 			</button>
 			<button
 				type="button"
 				class="inline-flex h-8 w-8 pointer-coarse:h-11 pointer-coarse:w-11 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground"
 				aria-expanded={!collapsed}
 				aria-label={collapsed ? 'Show timeline' : 'Hide timeline'}
+				title={collapsed ? 'Show timeline' : 'Hide timeline'}
 				onclick={toggleCollapsed}
 			>
 				{#if collapsed}
