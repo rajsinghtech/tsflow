@@ -63,10 +63,14 @@ async function fetchPoints(start: number, end: number, signal: AbortSignal): Pro
 			const time = new Date(bucket.time).getTime();
 			if (!Number.isFinite(time)) continue;
 			const existing = merged.get(time);
+			// A bucket split across two request windows comes back twice, each
+			// half with its own bytes and seconds. Summing both keeps the rate right.
+			const coveredMs = bucket.seconds && bucket.seconds > 0 ? bucket.seconds * 1000 : durationMs;
 			merged.set(time, {
 				time,
 				bytes: (existing?.bytes || 0) + bucket.txBytes + bucket.rxBytes,
-				durationMs: existing?.durationMs ? Math.min(existing.durationMs, durationMs) : durationMs
+				durationMs: existing?.durationMs ? Math.min(existing.durationMs, durationMs) : durationMs,
+				coveredMs: (existing?.coveredMs || 0) + coveredMs
 			});
 		}
 	}
