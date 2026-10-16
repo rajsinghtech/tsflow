@@ -30,6 +30,9 @@ export interface TrafficPoint {
 	bytes: number;
 	// How long this sample represents. Missing samples outside these spans are gaps.
 	durationMs?: number;
+	// How much of the sample sits inside the window it was fetched for. A partial
+	// edge bucket (the current hour, say) is shorter than durationMs.
+	coveredMs?: number;
 }
 
 export interface SparkBin {

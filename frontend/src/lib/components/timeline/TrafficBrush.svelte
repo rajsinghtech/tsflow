@@ -7,6 +7,8 @@
 		timeToRatio,
 		type BrushAction
 	} from './time-window';
+	import { formatBps, niceCeiling, ratePaths, type RateBin } from './throughput';
+	import { formatBytes } from '#lib/utils/format';
 
 	let {
 		bins,
@@ -16,9 +18,11 @@
 		selectionEnd,
 		onChange,
 		label = 'Traffic overview',
-		tall = true
+		tall = true,
+		rate = null,
+		formatTime = (time: number) => formatStamp(time)
 	}: {
-		bins: { bytes: number | null }[];
+		bins: { start?: number; end?: number; bytes: number | null }[];
 		domainStart: number;
 		domainEnd: number;
 		selectionStart: number;
@@ -26,6 +30,9 @@
 		onChange: (start: number, end: number) => void;
 		label?: string;
 		tall?: boolean;
+		// Draws a throughput chart (bits per second) instead of byte bars.
+		rate?: RateBin[] | null;
+		formatTime?: (time: number) => string;
 	} = $props();
 
 	let chartEl: HTMLDivElement | null = $state(null);
@@ -45,6 +52,37 @@
 	const overlaps = $derived(domain > 0 && shownEnd > domainStart && shownStart < domainEnd);
 	const leftRatio = $derived(overlaps ? timeToRatio(Math.max(shownStart, domainStart), domainStart, domainEnd) : 0);
 	const rightRatio = $derived(overlaps ? timeToRatio(Math.min(shownEnd, domainEnd), domainStart, domainEnd) : 0);
+
+	// Chart geometry in the 0..100 x 0..40 viewBox. The top leaves room for the axis label.
+	const FLOOR = 38;
+	const HEIGHT = 32;
+	const rateTop = $derived(rate ? niceCeiling(Math.max(0, ...rate.map((bin) => bin.bps ?? 0))) : 1);
+	const paths = $derived(rate ? ratePaths(rate, rateTop, HEIGHT, FLOOR) : { area: '', line: '' });
+	const gridLines = $derived(rate ? [1, 0.5].map((fraction) => ({ y: FLOOR - HEIGHT * fraction, value: rateTop * fraction })) : []);
+
+	const gradientId = `rate-fill-${Math.random().toString(36).slice(2, 8)}`;
+
+	// Hover readout. Mouse and pen only, so a tap on a phone still just selects.
+	let hoverRatio = $state<number | null>(null);
+	const hover = $derived.by(() => {
+		if (hoverRatio === null || drag || domain <= 0) return null;
+		const list = rate ?? bins;
+		if (!list.length) return null;
+		const index = Math.min(list.length - 1, Math.floor(hoverRatio * list.length));
+		const time = domainStart + hoverRatio * domain;
+		if (rate) {
+			const bin = rate[index];
+			const y = bin.bps === null ? null : FLOOR - (Math.min(bin.bps, rateTop) / rateTop) * HEIGHT;
+			return { ratio: hoverRatio, time, value: bin.bps === null ? 'No data' : formatBps(bin.bps), y };
+		}
+		const bin = bins[index];
+		return { ratio: hoverRatio, time: bin.start ?? time, value: bin.bytes === null ? 'No data' : formatBytes(bin.bytes), y: null };
+	});
+
+	function track(event: PointerEvent) {
+		if (event.pointerType === 'touch' || !tall) return;
+		hoverRatio = ratioFromEvent(event);
+	}
 
 	function ratioFromEvent(event: PointerEvent): number {
 		const rect = chartEl?.getBoundingClientRect();
@@ -108,11 +146,15 @@
 
 <div
 	bind:this={chartEl}
-	class="relative touch-none rounded-md bg-muted/50 {tall ? 'h-16' : 'h-3'}"
+	class="relative touch-none rounded-md bg-muted/50 {tall ? (rate ? 'h-20' : 'h-16') : 'h-3'}"
 	role="group"
 	aria-label={label}
 	onpointerdown={(event) => begin('create', event)}
-	onpointermove={move}
+	onpointermove={(event) => {
+		move(event);
+		track(event);
+	}}
+	onpointerleave={() => (hoverRatio = null)}
 	onpointerup={finish}
 	onpointercancel={finish}
 >
@@ -125,6 +167,27 @@
 			></div>
 		{/if}
 	{/each}
+	{#if rate}
+		<svg class="absolute inset-0 h-full w-full" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
+			{#each gridLines as line}
+				<line x1="0" x2="100" y1={line.y} y2={line.y} class="stroke-border" stroke-width="1" vector-effect="non-scaling-stroke" stroke-dasharray="2 3" />
+			{/each}
+			<line x1="0" x2="100" y1={FLOOR} y2={FLOOR} class="stroke-border" stroke-width="1" vector-effect="non-scaling-stroke" />
+			<defs>
+				<linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+					<stop offset="0%" stop-color="var(--color-primary)" stop-opacity="0.32" />
+					<stop offset="100%" stop-color="var(--color-primary)" stop-opacity="0.03" />
+				</linearGradient>
+			</defs>
+			<path d={paths.area} fill="url(#{gradientId})" data-rate-area="true" />
+			<path d={paths.line} fill="none" stroke="var(--color-primary)" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+		</svg>
+		<div class="pointer-events-none absolute inset-0 text-[9px] leading-none text-muted-foreground tabular-nums" aria-hidden="true">
+			{#each gridLines as line}
+				<span class="absolute left-1 -translate-y-full pb-px" style="top: {(line.y / 40) * 100}%" data-axis-label="true">{formatBps(line.value)}</span>
+			{/each}
+		</div>
+	{:else}
 	<svg class="absolute inset-0 h-full w-full" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
 		{#each bins as bin, index}
 			{#if bin.bytes !== null && bin.bytes > 0}
@@ -140,6 +203,7 @@
 			{/if}
 		{/each}
 	</svg>
+	{/if}
 
 	{#if overlaps}
 		<div class="pointer-events-none absolute inset-y-0 left-0 bg-background/75" style="width: {leftRatio * 100}%"></div>
@@ -178,5 +242,25 @@
 			onpointerdown={(event) => begin('end', event)}
 			onkeydown={(event) => onKey('end', event)}
 		></button>
+	{/if}
+
+	{#if hover}
+		<div class="pointer-events-none absolute inset-y-0 z-30 w-px bg-foreground/40" style="left: {hover.ratio * 100}%" aria-hidden="true"></div>
+		{#if hover.y !== null}
+			<div
+				class="pointer-events-none absolute z-30 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary ring-2 ring-background"
+				style="left: {hover.ratio * 100}%; top: {(hover.y / 40) * 100}%"
+				aria-hidden="true"
+			></div>
+		{/if}
+		<div
+			class="pointer-events-none absolute bottom-full z-40 mb-1 rounded-md border border-border bg-popover px-2 py-1 text-[11px] whitespace-nowrap text-popover-foreground shadow-sm"
+			style="left: {hover.ratio * 100}%; transform: translateX(-{Math.round(hover.ratio * 100)}%)"
+			role="status"
+			data-chart-tooltip="true"
+		>
+			<span class="text-muted-foreground">{formatTime(hover.time)}</span>
+			<span class="ml-1.5 font-medium tabular-nums">{hover.value}</span>
+		</div>
 	{/if}
 </div>
