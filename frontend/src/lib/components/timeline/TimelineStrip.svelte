@@ -4,7 +4,7 @@
 	import { trafficPoints, trafficShapeError } from '#lib/stores/traffic-shape';
 	import { loadTrafficDetail, trafficDetail } from '#lib/stores/traffic-detail';
 	import TrafficBrush from './TrafficBrush.svelte';
-	import { byteBins, formatBps, rateBins, slotLabel, windowRates } from './throughput';
+	import { byteBins, formatBps, peakBin, rateBins, slotLabel, windowRates } from './throughput';
 	import {
 		binTraffic,
 		resolveCoverage,
@@ -41,6 +41,8 @@
 	const rate = $derived(rateBins(chartPoints, view.start, view.end, 180));
 	const mainBins = $derived(byteBins(rateBins(chartPoints, view.start, view.end, 96)));
 	const readout = $derived(windowRates(chartPoints, selectionStart, selectionEnd));
+	// Peak covers the whole strip, the same span the line and its marker show.
+	const stripPeak = $derived(peakBin(rate));
 
 	const UNIT_KEY = 'tsflow-timebar-unit';
 	let unit = $state<'bits' | 'bytes'>(
@@ -73,9 +75,9 @@
 						{source.followLatest ? 'Now' : 'Latest'}
 						<span class="ml-0.5 text-[13px] font-semibold text-foreground">{readout.latest === null ? 'n/a' : formatBps(readout.latest)}</span>
 					</span>
-					<span class="truncate">
+					<span class="truncate" title="Highest point on the chart">
 						Peak
-						<span class="ml-0.5 font-medium text-foreground">{readout.peak === null ? 'n/a' : formatBps(readout.peak)}</span>
+						<span class="ml-0.5 font-medium text-foreground">{stripPeak === null ? 'n/a' : formatBps(stripPeak.bps)}</span>
 					</span>
 				</div>
 			{:else}

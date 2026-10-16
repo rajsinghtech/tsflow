@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byteBins, formatBps, niceCeiling, ratePaths, rateBins, slotLabel, windowRates } from './throughput';
+import { byteBins, formatBps, niceCeiling, peakBin, ratePaths, rateBins, slotLabel, windowRates } from './throughput';
 import { detailSlices, DETAIL_CHUNK_MS } from '#lib/stores/traffic-detail';
 
 const minute = 60_000;
@@ -116,5 +116,19 @@ describe('bytes view', () => {
 		expect(slotLabel(16 * minute)).toBe('16 min');
 		expect(slotLabel(2 * hour)).toBe('2 h');
 		expect(slotLabel(3 * 24 * hour)).toBe('3 d');
+	});
+});
+
+describe('strip peak', () => {
+	it('picks the highest bin and skips gaps', () => {
+		expect(
+			peakBin([
+				{ start: 0, end: 1, bps: 5, coveredMs: 1 },
+				{ start: 1, end: 2, bps: null, coveredMs: 0 },
+				{ start: 2, end: 3, bps: 9, coveredMs: 1 },
+				{ start: 3, end: 4, bps: 2, coveredMs: 1 }
+			])
+		).toEqual({ index: 2, bps: 9 });
+		expect(peakBin([])).toBeNull();
 	});
 });

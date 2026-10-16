@@ -111,6 +111,15 @@ export function windowRates(points: TrafficPoint[], start: number, end: number):
 	return { latest, peak, latestAt };
 }
 
+// The highest bin on the chart, so the readout and the marker agree with the line.
+export function peakBin(bins: RateBin[]): { index: number; bps: number } | null {
+	let best: { index: number; bps: number } | null = null;
+	bins.forEach((bin, index) => {
+		if (bin.bps !== null && (best === null || bin.bps > best.bps)) best = { index, bps: bin.bps };
+	});
+	return best;
+}
+
 // A round axis top at or above max, close enough that the line fills the chart.
 export function niceCeiling(max: number): number {
 	if (!(max > 0) || !Number.isFinite(max)) return 1;

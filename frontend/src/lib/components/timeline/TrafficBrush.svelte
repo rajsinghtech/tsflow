@@ -7,7 +7,7 @@
 		timeToRatio,
 		type BrushAction
 	} from './time-window';
-	import { formatBps, niceCeiling, ratePaths, type RateBin } from './throughput';
+	import { formatBps, niceCeiling, peakBin, ratePaths, type RateBin } from './throughput';
 	import { formatBytes } from '#lib/utils/format';
 
 	let {
@@ -58,6 +58,7 @@
 	const HEIGHT = 32;
 	const rateTop = $derived(rate ? niceCeiling(Math.max(0, ...rate.map((bin) => bin.bps ?? 0))) : 1);
 	const paths = $derived(rate ? ratePaths(rate, rateTop, HEIGHT, FLOOR) : { area: '', line: '' });
+	const peak = $derived(rate ? peakBin(rate) : null);
 	const gridLines = $derived(rate ? [1, 0.5].map((fraction) => ({ y: FLOOR - HEIGHT * fraction, value: rateTop * fraction })) : []);
 
 	const gradientId = `rate-fill-${Math.random().toString(36).slice(2, 8)}`;
@@ -242,6 +243,16 @@
 			onpointerdown={(event) => begin('end', event)}
 			onkeydown={(event) => onKey('end', event)}
 		></button>
+	{/if}
+
+	{#if rate && peak}
+		<div
+			class="pointer-events-none absolute z-10 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-primary"
+			style="left: {((peak.index + 0.5) / rate.length) * 100}%; top: {((FLOOR - (Math.min(peak.bps, rateTop) / rateTop) * HEIGHT) / 40) * 100}%"
+			title="Peak {formatBps(peak.bps)}"
+			data-peak-marker="true"
+			aria-hidden="true"
+		></div>
 	{/if}
 
 	{#if hover}

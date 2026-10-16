@@ -48,6 +48,10 @@ describe('time bar chart', () => {
 		expect(chart.querySelectorAll('rect')).toHaveLength(0);
 		const axis = [...chart.querySelectorAll('[data-axis-label]')].map((node) => node.textContent);
 		expect(axis).toEqual(['4 Gbps', '2 Gbps']);
+		const marker = chart.querySelector<HTMLElement>('[data-peak-marker]');
+		expect(marker?.title).toBe('Peak 4 Gbps');
+		// The 4 Gbps hour is the third of four, bins 4 and 5 of 8.
+		expect(marker?.style.left).toBe('56.25%');
 	});
 
 	it('shows the rate under the pointer', () => {
@@ -70,6 +74,7 @@ describe('time bar chart', () => {
 	it('keeps the byte bars without a rate series', () => {
 		const chart = render(null);
 		expect(chart.querySelector('[data-rate-area]')).toBeNull();
+		expect(chart.querySelector('[data-peak-marker]')).toBeNull();
 		expect(chart.querySelectorAll('rect')).toHaveLength(3);
 		expect(chart.querySelectorAll('[data-gap]')).toHaveLength(1);
 		hover(chart, 150);
