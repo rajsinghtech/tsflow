@@ -15,11 +15,17 @@ vi.mock('#lib/stores/tailnet-store', () => {
 		tailnets: stores.tailnets,
 		selectedTailnetId: stores.selected,
 		refreshTailnetStatus: vi.fn(async () => {}),
-		selectTailnet: vi.fn(async () => {})
+		// Like the real store: the choice lands at once, the URL catches up later.
+		selectTailnet: vi.fn(async (id: string) => {
+			(stores.selected as import('svelte/store').Writable<string | null>).set(id);
+		})
 	};
 });
 
 import TailnetSwitcher from './TailnetSwitcher.svelte';
+import { page } from '$app/state';
+import { selectTailnet } from '#lib/stores/tailnet-store';
+
 
 const running = { running: true, lastError: '' };
 
@@ -28,6 +34,9 @@ describe('TailnetSwitcher', () => {
 	let component: ReturnType<typeof mount> | null = null;
 
 	afterEach(async () => {
+		vi.mocked(selectTailnet).mockClear();
+		window.history.replaceState(null, '', '/');
+		page.url = new URL('http://localhost/');
 		if (component) await unmount(component);
 		component = null;
 		target?.remove();
@@ -79,5 +88,45 @@ describe('TailnetSwitcher', () => {
 			['Home', 'home.example.com · home', 'Poller running'],
 			['lab.example.com', 'lab']
 		]);
+	});
+
+	it('keeps the picked tailnet while the URL still shows the old one', async () => {
+		// SvelteKit leaves page.url at the last full navigation after a shallow
+		// replaceState, so it still says home after the pick.
+		page.url = new URL('http://localhost/?tailnet=home');
+		window.history.replaceState(null, '', '/?tailnet=home');
+		await open([
+			{ id: 'home', displayName: 'Home', poller: running },
+			{ id: 'lab', displayName: 'Lab', poller: running },
+			{ id: 'cloud', displayName: 'Cloud', poller: running }
+		]);
+		const lab = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((option) =>
+			option.textContent?.includes('Lab')
+		);
+		lab?.click();
+		await tick();
+		await tick();
+		expect(vi.mocked(selectTailnet).mock.calls.map(([id]) => id)).toEqual(['lab']);
+		expect(document.querySelector('button[aria-label="Tailnet"]')?.textContent).toContain('Lab');
+	});
+
+	it('follows the URL on back and forward', async () => {
+		window.history.replaceState(null, '', '/?tailnet=home');
+		await open([
+			{ id: 'home', displayName: 'Home', poller: running },
+			{ id: 'lab', displayName: 'Lab', poller: running }
+		]);
+		window.history.replaceState(null, '', '/?tailnet=lab');
+		window.dispatchEvent(new PopStateEvent('popstate'));
+		await tick();
+		expect(vi.mocked(selectTailnet).mock.calls.map(([id]) => id)).toEqual(['lab']);
+		window.history.replaceState(null, '', '/?tailnet=home');
+		window.dispatchEvent(new PopStateEvent('popstate'));
+		await tick();
+		expect(vi.mocked(selectTailnet).mock.calls.map(([id]) => id)).toEqual(['lab', 'home']);
+		window.history.replaceState(null, '', '/?tailnet=nope');
+		window.dispatchEvent(new PopStateEvent('popstate'));
+		await tick();
+		expect(vi.mocked(selectTailnet)).toHaveBeenCalledTimes(2);
 	});
 });
