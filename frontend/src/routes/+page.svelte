@@ -379,6 +379,7 @@
 							onpointerdown={(e) => (pillStartY = e.clientY)}
 							onpointerup={pillPointerUp}
 							aria-label="Show {sheetTitle.toLowerCase()}"
+							title="Show {sheetTitle.toLowerCase()}"
 						>
 							<ChevronUp class="h-4 w-4" />
 							{sheetTitle}
