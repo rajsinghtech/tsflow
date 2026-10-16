@@ -2,6 +2,7 @@
 	import { ChevronDown } from 'lucide-svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
+	import { get } from 'svelte/store';
 	import { refreshTailnetStatus, selectTailnet, selectedTailnetId, tailnets } from '#lib/stores/tailnet-store';
 	import { tailnetSubtitle } from '#lib/services/tailnet-query';
 
@@ -28,14 +29,17 @@
 		void replaceState(current, page.state);
 	});
 
-	// Back and forward restore the tailnet from the URL.
-	$effect(() => {
-		const fromUrl = page.url.searchParams.get('tailnet');
-		if (!fromUrl || fromUrl === $selectedTailnetId) return;
-		if (!$tailnets.some((tailnet) => tailnet.id === fromUrl)) return;
+	// Back and forward restore the tailnet from the URL. This reads the URL the
+	// browser went back to, not page.url: the shallow replaceState above never
+	// updates page.url, so it keeps the id from the last full navigation and
+	// used to pull a fresh pick straight back to the old tailnet.
+	function handlePopState() {
+		const fromUrl = new URL(window.location.href).searchParams.get('tailnet');
+		if (!fromUrl || fromUrl === get(selectedTailnetId)) return;
+		if (!get(tailnets).some((tailnet) => tailnet.id === fromUrl)) return;
 		urlTailnet = fromUrl;
 		void selectTailnet(fromUrl);
-	});
+	}
 
 	function toggle() {
 		open = !open;
@@ -54,7 +58,7 @@
 	}
 </script>
 
-<svelte:window onclick={handleWindowClick} />
+<svelte:window onclick={handleWindowClick} onpopstate={handlePopState} />
 
 {#if $tailnets.length > 1 && selected}
 	<div class="tailnet-switcher relative min-w-0 shrink">
