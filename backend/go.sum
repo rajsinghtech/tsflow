@@ -463,6 +463,8 @@ go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.6
 go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.68.0/go.mod h1:Sje3i3MjSPKTSPvVWCaL8ugBzJwik3u4smCjUeuupqg=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 h1:8tvICD4vSTOOsNrsI4Ljf6C+6UKvpTEH5XY3JMoyPoo=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0/go.mod h1:z9+yiacE0IHRqM4qFfkbt/JYlmYXgss8GY/jXoNuPJI=
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 h1:LMuyCAyfalSjDyjdC65nK6N0zoTT63+E/u95X0JovZI=
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0/go.mod h1:085m8qbm4hgc8rZWGDEa4vmyyo2c3nPxUslYUKUIU04=
 go.opentelemetry.io/otel v1.45.0 h1:pdrWmLHofpubmArBv1LgFSv1Z0Ie/ppdZzu+kUN5EeU=
 go.opentelemetry.io/otel v1.45.0/go.mod h1:XZxIqPapzEYnhNSScF5DIqXhm/rYi0FzCe2XddAwZfQ=
 go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.45.0 h1:dm9iyzn6tioYZtwqaiBSU0TSI8Yu/8dTIbfG0+B49DY=
@@ -608,6 +610,8 @@ tailscale.com v1.104.0 h1:7LgglawekeutAexqXUzSxP/Kqo3HHwF/SkcbX5HpiU4=
 tailscale.com v1.104.0/go.mod h1:Cb1XjScRgSOeRD7NW6uCEznme782WiOU9IxqyTWoRf0=
 tailscale.com v1.104.1 h1:9GNOm9Izqll9RH5jA5NWcLiCzXi/WtqY4EHQY2Dy2zk=
 tailscale.com v1.104.1/go.mod h1:Cb1XjScRgSOeRD7NW6uCEznme782WiOU9IxqyTWoRf0=
+tailscale.com v1.104.2 h1:zBbSW0tI4Xi2PhrZEl9yt6oWay3l8A+M8scsTnZpyAk=
+tailscale.com v1.104.2/go.mod h1:D+gqEyJjFnwIaojBLaKxUbOfEO3cRXOaFaOZ5BIvYqs=
 tailscale.com/client/tailscale/v2 v2.11.0 h1:pBWzbKzVzjIMFj0Kmn1ZXDjBJ7cHSyl9xHn+iai69z4=
 tailscale.com/client/tailscale/v2 v2.11.0/go.mod h1:FGjvGT3ThHelqo0gfdK3IN3k1dwNbRzYbQh2XO3C47U=
 tailscale.com/client/tailscale/v2 v2.12.0 h1:v7oMM/u0/vuchgLTwCdT0nJ6PyD0Mlpm2mWnoUKVyBo=
