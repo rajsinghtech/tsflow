@@ -1,6 +1,6 @@
 module github.com/rajsinghtech/tsflow/backend
 
-go 1.27.1
+go 1.27.3
 
 require (
 	cloud.google.com/go/auth v0.24.1-0.20261001053825-dbc26066f70a
@@ -21,7 +21,7 @@ require (
 	google.golang.org/api v0.306.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.60.1
-	tailscale.com v1.104.1
+	tailscale.com v1.104.2
 	tailscale.com/client/tailscale/v2 v2.12.0
 )
 
@@ -122,7 +122,7 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.45.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.68.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect
 	go.opentelemetry.io/otel/metric v1.45.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
