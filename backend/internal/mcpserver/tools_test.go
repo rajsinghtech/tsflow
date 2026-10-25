@@ -457,6 +457,45 @@ func TestWhoamiWithoutAccessControl(t *testing.T) {
 	}
 }
 
+func TestScopedTopTalkersLeaveOutSharedEndpoints(t *testing.T) {
+	svc, store, _ := setupMCP(t)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	seedPair(t, store, database.DefaultTailnetID, base, "ada", "internet", "exit", 100)
+	seedPair(t, store, database.DefaultTailnetID, base, "bob", "internet", "exit", 900)
+	in := rankedIn{Start: base.Format(time.RFC3339), End: base.Add(time.Minute).Format(time.RFC3339)}
+
+	mine, err := svc.topTalkers(ctx, adaViewer(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mine.Scope != scopeMine {
+		t.Fatalf("scope = %q, want mine", mine.Scope)
+	}
+	for _, talker := range mine.Talkers {
+		if talker.NodeID == "internet" {
+			t.Fatalf("scoped talkers include the shared internet row with other devices' bytes: %+v", mine.Talkers)
+		}
+	}
+	if len(mine.Talkers) != 1 || mine.Talkers[0].NodeID != "ada" || mine.Talkers[0].TotalBytes != 100 {
+		t.Fatalf("scoped talkers = %+v, want only ada with 100 bytes", mine.Talkers)
+	}
+
+	all, err := svc.topTalkers(ctx, adaViewer(), rankedIn{Start: in.Start, End: in.End, Scope: scopeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var internet int64
+	for _, talker := range all.Talkers {
+		if talker.NodeID == "internet" {
+			internet = talker.TotalBytes
+		}
+	}
+	if internet != 1000 {
+		t.Fatalf("scope=all internet total = %d, want 1000; talkers = %+v", internet, all.Talkers)
+	}
+}
+
 func TestFlowsBetweenCIDRCoversStoredSubnetHosts(t *testing.T) {
 	svc, store, _ := setupMCP(t)
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
