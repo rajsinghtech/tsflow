@@ -278,17 +278,21 @@ type newPairOut struct {
 }
 
 type newConnectionsOut struct {
-	Tailnet      string       `json:"tailnet"`
-	Start        time.Time    `json:"start"`
-	End          time.Time    `json:"end"`
-	Lookback     string       `json:"lookback"`
-	TrafficTypes []string     `json:"trafficTypes,omitempty"`
-	Limit        int          `json:"limit"`
-	Offset       int          `json:"offset"`
-	Count        int          `json:"count"`
-	HasMore      bool         `json:"hasMore"`
-	Scope        string       `json:"scope"`
-	Pairs        []newPairOut `json:"pairs"`
+	Tailnet  string    `json:"tailnet"`
+	Start    time.Time `json:"start"`
+	End      time.Time `json:"end"`
+	Lookback string    `json:"lookback"`
+	// Same coverage fields as the REST new-pairs route.
+	LookbackStart    time.Time    `json:"lookbackStart"`
+	DataStart        *time.Time   `json:"dataStart,omitempty" jsonschema:"Oldest stored minute for this tailnet. Absent when nothing is stored."`
+	LookbackComplete bool         `json:"lookbackComplete" jsonschema:"False when stored data begins after lookbackStart. Pairs seen only before dataStart cannot be ruled out, so they may not really be new."`
+	TrafficTypes     []string     `json:"trafficTypes,omitempty"`
+	Limit            int          `json:"limit"`
+	Offset           int          `json:"offset"`
+	Count            int          `json:"count"`
+	HasMore          bool         `json:"hasMore"`
+	Scope            string       `json:"scope"`
+	Pairs            []newPairOut `json:"pairs"`
 }
 
 type overviewBucket struct {
@@ -388,7 +392,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "new_connections",
-		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups.",
+		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups. lookbackComplete is false when stored data starts after the lookback begins, so a pair listed as new may simply predate the data.",
 		Annotations: readOnly("New connections"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newConnectionsIn) (*mcp.CallToolResult, newConnectionsOut, error) {
 		out, err := s.newConnections(ctx, v, in)

@@ -487,3 +487,36 @@ func TestFlowsBetweenCIDRCoversStoredSubnetHosts(t *testing.T) {
 		t.Fatalf("scoped CIDR flows = %+v; a scoped view keeps only devices", scoped.Flows)
 	}
 }
+
+func TestNewConnectionsReportLookbackCoverage(t *testing.T) {
+	svc, store, _ := setupMCP(t)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	seedPair(t, store, database.DefaultTailnetID, base.Add(-30*time.Minute), "ada", "bob", "virtual", 5)
+	seedPair(t, store, database.DefaultTailnetID, base, "ada", "carol", "virtual", 30)
+	start := base.Format(time.RFC3339)
+	end := base.Add(time.Minute).Format(time.RFC3339)
+
+	// Data starts 30 minutes before the window, so a 1h lookback is not covered.
+	short, err := svc.newConnections(ctx, Viewer{}, newConnectionsIn{Start: start, End: end, Lookback: "1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if short.LookbackComplete {
+		t.Fatalf("lookbackComplete = true with data starting after the lookback: %+v", short)
+	}
+	if short.DataStart == nil || !short.DataStart.Equal(base.Add(-30*time.Minute)) {
+		t.Fatalf("dataStart = %v, want %v", short.DataStart, base.Add(-30*time.Minute))
+	}
+	if !short.LookbackStart.Equal(base.Add(-time.Hour)) {
+		t.Fatalf("lookbackStart = %v, want %v", short.LookbackStart, base.Add(-time.Hour))
+	}
+
+	covered, err := svc.newConnections(ctx, Viewer{}, newConnectionsIn{Start: start, End: end, Lookback: "20m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !covered.LookbackComplete {
+		t.Fatalf("lookbackComplete = false with data covering the lookback: %+v", covered)
+	}
+}

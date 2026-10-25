@@ -485,8 +485,6 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 	if s.h.Store() == nil {
 		return newConnectionsOut{}, fmt.Errorf("database not configured")
 	}
-	// TODO: share this read with a REST new-connections handler when one exists.
-	// Main has no such route, so the comparison lives with the tool for now.
 	queryCtx, cancel := context.WithTimeout(ctx, handlers.AggregationQueryTimeout)
 	defer cancel()
 	windowPairs, err := s.h.Store().DistinctPairs(queryCtx, binding.ID, start, end, types)
@@ -539,8 +537,10 @@ func (s *Service) newConnections(ctx context.Context, v Viewer, in newConnection
 		return fresh[i].DstNodeID < fresh[j].DstNodeID
 	})
 	paged, more := page(fresh, offset, limit)
+	lookbackStart, dataStart, complete := s.h.LookbackCoverage(queryCtx, binding.ID, start, lookback)
 	return newConnectionsOut{
-		Tailnet: binding.ID, Start: start, End: end, Lookback: lookback.String(), TrafficTypes: types,
+		Tailnet: binding.ID, Start: start, End: end, Lookback: lookback.String(),
+		LookbackStart: lookbackStart, DataStart: dataStart, LookbackComplete: complete, TrafficTypes: types,
 		Limit: limit, Offset: offset, Count: len(paged), HasMore: more, Scope: scopeName, Pairs: paged,
 	}, nil
 }
