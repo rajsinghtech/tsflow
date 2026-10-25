@@ -237,3 +237,47 @@ func TestAggregateKeepsPhysicalBytesOutOfProtocolTotalsBandwidthAndPorts(t *test
 		t.Fatalf("physical ports = %s, want none", physical.Ports)
 	}
 }
+
+func TestAggregateAttributesPhysicalBytesToTheLoggingNode(t *testing.T) {
+	poller := NewPoller(nil, nil, DefaultPollerConfig())
+	poller.deviceCache.Update([]Device{
+		{ID: "nAlphaCNTRL", Hostname: "alpha", Addresses: []string{"100.64.0.1"}},
+		{ID: "nBravoCNTRL", Hostname: "bravo", Addresses: []string{"100.64.0.2"}},
+	})
+	base := time.Now().UTC().Truncate(time.Minute)
+	// The shape Tailscale documents for physicalTraffic: src is the remote
+	// peer's Tailscale IP, dst is the external address the bytes went to,
+	// and TX is what the logging node (alpha) sent.
+	logs := []database.FlowLog{
+		{LoggedAt: base.Add(5 * time.Second), NodeID: "nAlphaCNTRL", SrcIP: "100.64.0.2", DstIP: "198.51.100.2", DstPort: 41641, TrafficType: "physical", TxBytes: 1100},
+		// Same shape with an unknown logger keeps the old src-based answer.
+		{LoggedAt: base.Add(6 * time.Second), NodeID: "nGhostCNTRL", SrcIP: "100.64.0.2", DstIP: "198.51.100.9", DstPort: 41641, TrafficType: "physical", TxBytes: 7},
+		// Virtual records still use src, whoever logged them.
+		{LoggedAt: base.Add(7 * time.Second), NodeID: "nAlphaCNTRL", SrcIP: "100.64.0.2", DstIP: "100.64.0.1", DstPort: 443, TrafficType: "virtual", Protocol: 6, TxBytes: 40},
+	}
+
+	pairs, _, _, _ := poller.aggregate(logs)
+	type key struct{ a, b, kind string }
+	got := map[key]database.NodePairAggregate{}
+	for _, pair := range pairs {
+		got[key{pair.SrcNodeID, pair.DstNodeID, pair.TrafficType}] = pair
+	}
+
+	alpha, ok := got[key{"198.51.100.2", "nAlphaCNTRL", "physical"}]
+	if !ok {
+		t.Fatalf("no physical pair for the logging node; pairs = %+v", pairs)
+	}
+	// "198.51.100.2" sorts before "nAlphaCNTRL", so alpha's TX lands on RxBytes.
+	if alpha.RxBytes != 1100 || alpha.TxBytes != 0 {
+		t.Fatalf("physical pair = %+v, want alpha to have sent the 1100 bytes", alpha)
+	}
+	if _, wrong := got[key{"198.51.100.2", "nBravoCNTRL", "physical"}]; wrong {
+		t.Fatalf("physical bytes were credited to the remote peer: %+v", pairs)
+	}
+	if fallback, ok := got[key{"198.51.100.9", "nBravoCNTRL", "physical"}]; !ok || fallback.RxBytes != 7 {
+		t.Fatalf("unknown logger should fall back to src; pairs = %+v", pairs)
+	}
+	if virtual, ok := got[key{"nAlphaCNTRL", "nBravoCNTRL", "virtual"}]; !ok || virtual.RxBytes != 40 {
+		t.Fatalf("virtual pair = %+v, want bravo's 40 bytes on the reverse side", virtual)
+	}
+}
