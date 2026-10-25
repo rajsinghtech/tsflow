@@ -173,6 +173,12 @@ func labelNewPairs(pairs []database.NewPair) {
 	}
 }
 
+// LookbackCoverage is lookbackCoverage for callers outside this package,
+// so the MCP new_connections tool reports the same coverage as this route.
+func (h *Handlers) LookbackCoverage(ctx context.Context, tailnetID string, start time.Time, lookback time.Duration) (time.Time, *time.Time, bool) {
+	return h.lookbackCoverage(ctx, tailnetID, start, lookback)
+}
+
 // lookbackCoverage reports where a new-pair lookback begins, the oldest
 // stored minute, and whether stored data covers the whole lookback.
 func (h *Handlers) lookbackCoverage(ctx context.Context, tailnetID string, start time.Time, lookback time.Duration) (time.Time, *time.Time, bool) {
