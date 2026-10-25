@@ -4,9 +4,8 @@
 	import { trafficPoints, trafficShapeError } from '#lib/stores/traffic-shape';
 	import { loadTrafficDetail, trafficDetail } from '#lib/stores/traffic-detail';
 	import TrafficBrush from './TrafficBrush.svelte';
-	import { byteBins, formatBps, peakBin, rateBins, slotLabel, windowRates } from './throughput';
+	import { byteBins, coverageBins, formatBps, peakBin, rateBins, slotLabel, windowRates } from './throughput';
 	import {
-		binTraffic,
 		resolveCoverage,
 		timelineViewDomain
 	} from './time-window';
@@ -56,7 +55,7 @@
 			// Private mode. The choice just does not stick.
 		}
 	}
-	const overviewBins = $derived(binTraffic(points, coverage.start, coverage.end, 120));
+	const overviewBins = $derived(coverageBins(points, coverage.start, coverage.end));
 	const failing = $derived(!!pollFailure(source.pollerStatus));
 	const ready = $derived(coverage.end > coverage.start && !!source.selectedStart && !!source.selectedEnd);
 

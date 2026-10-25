@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byteBins, formatBps, niceCeiling, peakBin, ratePaths, rateBins, slotLabel, windowRates } from './throughput';
+import { byteBins, coverageBins, formatBps, niceCeiling, peakBin, ratePaths, rateBins, slotLabel, windowRates } from './throughput';
 import { detailSlices, DETAIL_CHUNK_MS } from '#lib/stores/traffic-detail';
 
 const minute = 60_000;
@@ -130,5 +130,23 @@ describe('strip peak', () => {
 			])
 		).toEqual({ index: 2, bps: 9 });
 		expect(peakBin([])).toBeNull();
+	});
+});
+
+describe('coverage bins', () => {
+	it('keeps bars even when minute buckets do not line up with the bars', () => {
+		// 3h of steady minute buckets on 120 bars of 1.5 min each.
+		const points = Array.from({ length: 180 }, (_, index) => ({ time: base + index * minute, bytes: 600, durationMs: minute }));
+		const bins = coverageBins(points, base, base + 3 * hour);
+		expect(bins).toHaveLength(120);
+		expect(new Set(bins.map((bin) => Math.round(bin.bytes ?? -1)))).toEqual(new Set([900]));
+		const total = bins.reduce((sum, bin) => sum + (bin.bytes ?? 0), 0);
+		expect(Math.round(total)).toBe(180 * 600);
+	});
+
+	it('leaves bars with no data empty', () => {
+		const bins = coverageBins([{ time: base, bytes: 600, durationMs: minute }], base, base + 2 * minute, 2);
+		expect(bins[0].bytes).toBeCloseTo(600);
+		expect(bins[1].bytes).toBeNull();
 	});
 });
