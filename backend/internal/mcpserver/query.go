@@ -253,6 +253,21 @@ func (s *Service) flowsBetween(ctx context.Context, v Viewer, in flowsBetweenIn)
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, handlers.DefaultQueryTimeout)
 	defer cancel()
+	if filter == nil && (strings.Contains(in.A, "/") || strings.Contains(in.B, "/")) {
+		// A CIDR also covers stored endpoints that are not tailnet devices,
+		// like subnet-routed hosts, which only exist as IPs in the pair rows.
+		pairs, err := s.h.Store().DistinctPairs(queryCtx, binding.ID, start, end, types)
+		if err != nil {
+			log.Printf("ERROR mcp flows_between endpoints: %v", err)
+			return flowsOut{}, queryError("flows", err)
+		}
+		if aIDs, err = addStoredInPrefix(aIDs, in.A, pairs); err != nil {
+			return flowsOut{}, err
+		}
+		if bIDs, err = addStoredInPrefix(bIDs, in.B, pairs); err != nil {
+			return flowsOut{}, err
+		}
+	}
 	rows, err := s.h.Store().FlowsBetween(queryCtx, binding.ID, aIDs, bIDs, start, end, types)
 	if err != nil {
 		log.Printf("ERROR mcp flows_between: %v", err)
@@ -743,6 +758,31 @@ func (s *Service) endpointIDs(filter *access.DeviceScope, binding handlers.Tailn
 		}
 	}
 	return []string{raw}, nil
+}
+
+// addStoredInPrefix adds the stored endpoint ids that are IPs inside raw's
+// prefix. raw that is not a CIDR leaves ids alone.
+func addStoredInPrefix(ids []string, raw string, pairs [][2]string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "/") {
+		return ids, nil
+	}
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CIDR %q", raw)
+	}
+	for _, pair := range pairs {
+		for _, id := range pair {
+			if addr, err := netip.ParseAddr(id); err == nil && prefix.Contains(addr.Unmap()) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	ids = dedupe(ids)
+	if len(ids) > maxEndpointIDs {
+		return nil, fmt.Errorf("CIDR matches too many endpoints; narrow it")
+	}
+	return ids, nil
 }
 
 func deviceEntry(poller *services.Poller, id string) *services.DeviceCacheEntry {
