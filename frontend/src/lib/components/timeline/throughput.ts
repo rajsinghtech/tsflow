@@ -85,6 +85,13 @@ export function byteBins(bins: RateBin[]): { start: number; end: number; bytes: 
 	}));
 }
 
+// Bars for the Coverage strip. Each bar holds the bytes that fall inside it,
+// so minute buckets on 1.5 min bars come out even instead of every other bar
+// carrying two whole buckets.
+export function coverageBins(points: TrafficPoint[], domainStart: number, domainEnd: number, binCount = 120) {
+	return byteBins(rateBins(points, domainStart, domainEnd, binCount));
+}
+
 // "16 min", "2 h": how wide one bar is.
 export function slotLabel(ms: number): string {
 	const minutes = ms / 60_000;
