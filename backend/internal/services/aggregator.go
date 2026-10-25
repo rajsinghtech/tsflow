@@ -83,7 +83,7 @@ func (p *Poller) aggregate(logs []database.FlowLog) (
 		bucket := (log.LoggedAt.Unix() / bucketSize) * bucketSize
 
 		// Resolve IPs to device IDs
-		srcNodeID := p.deviceCache.ResolveIP(log.SrcIP)
+		srcNodeID := p.physicalSender(log)
 		dstNodeID := p.deviceCache.ResolveIP(log.DstIP)
 
 		// Normalize node pair: smaller ID is always nodeA
@@ -446,4 +446,19 @@ func servicePort(log database.FlowLog) int {
 		return log.SrcPort
 	}
 	return log.DstPort
+}
+
+// physicalSender picks the node that sent a record's TX bytes. For virtual,
+// subnet and exit records that is the src address. Physical records are
+// different: src is the remote peer's Tailscale IP and dst is the external
+// address the bytes went to, while the bytes were sent by the node that wrote
+// the log. Falls back to src when the logging node is unknown, which is also
+// what older logs that put the node's own IP in src resolve to anyway.
+func (p *Poller) physicalSender(log database.FlowLog) string {
+	if log.TrafficType == "physical" && log.NodeID != "" {
+		if entry := p.deviceCache.GetDevice(log.NodeID); entry != nil && entry.ID != "" {
+			return entry.ID
+		}
+	}
+	return p.deviceCache.ResolveIP(log.SrcIP)
 }
