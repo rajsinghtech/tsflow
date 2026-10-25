@@ -128,6 +128,13 @@ func (s *Service) topTalkers(ctx context.Context, v Viewer, in rankedIn) (talker
 	merged := map[string]*talkerOut{}
 	var order []string
 	for _, row := range rows {
+		// The internet stand-in and DERP relays are shared by every device.
+		// Their talker row sums everyone's traffic, so a scoped view would
+		// show other people's bytes. Pairs and peers still show them, next
+		// to a device the scope keeps.
+		if _, shared := handlers.PseudoEndpointName(row.NodeID); shared && filter != nil {
+			continue
+		}
 		id, name, ok := s.present(filter, binding.Poller, row.NodeID)
 		if !ok {
 			continue

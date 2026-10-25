@@ -348,7 +348,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "top_talkers",
-		Description: "Rank devices by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. A DERP relay is labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every device in the permitted tailnet. The default window is the last hour and the default limit is 20.",
+		Description: "Rank devices by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. A DERP relay is labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every device in the permitted tailnet. A scoped view leaves out the internet stand-in and DERP relays, whose totals cover every device. The default window is the last hour and the default limit is 20.",
 		Annotations: readOnly("Top talkers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rankedIn) (*mcp.CallToolResult, talkersOut, error) {
 		out, err := s.topTalkers(ctx, v, in)
