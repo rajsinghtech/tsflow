@@ -496,6 +496,37 @@ func TestScopedTopTalkersLeaveOutSharedEndpoints(t *testing.T) {
 	}
 }
 
+func TestFlowsBetweenCIDRCoversStoredSubnetHosts(t *testing.T) {
+	svc, store, _ := setupMCP(t)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	seedPair(t, store, database.DefaultTailnetID, base, "ada", "192.168.50.10", "subnet", 300)
+	seedPair(t, store, database.DefaultTailnetID, base, "ada", "192.168.60.10", "subnet", 7)
+	in := flowsBetweenIn{
+		Start: base.Format(time.RFC3339), End: base.Add(time.Minute).Format(time.RFC3339),
+		A: "ada", B: "192.168.50.0/24",
+	}
+	flows, err := svc.flowsBetween(context.Background(), Viewer{}, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows.Flows) != 1 || flows.Flows[0].DstNodeID != "192.168.50.10" || flows.Flows[0].TxBytes != 300 {
+		t.Fatalf("CIDR flows = %+v, want ada to 192.168.50.10 with 300 bytes", flows.Flows)
+	}
+
+	single, err := svc.flowsBetween(context.Background(), Viewer{}, flowsBetweenIn{Start: in.Start, End: in.End, A: "ada", B: "192.168.50.10"})
+	if err != nil || len(single.Flows) != 1 || single.Flows[0].TxBytes != 300 {
+		t.Fatalf("single IP flows = %+v, err %v; the CIDR should agree with it", single.Flows, err)
+	}
+
+	scoped, err := svc.flowsBetween(context.Background(), adaViewer(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.Flows) != 0 {
+		t.Fatalf("scoped CIDR flows = %+v; a scoped view keeps only devices", scoped.Flows)
+	}
+}
+
 func TestNewConnectionsReportLookbackCoverage(t *testing.T) {
 	svc, store, _ := setupMCP(t)
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
