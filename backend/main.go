@@ -164,6 +164,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid trusted proxies: %v", err)
 	}
+	router.Use(middleware.WarnUntrustedForwarded(trustedProxies))
 
 	router.HandleMethodNotAllowed = true
 
