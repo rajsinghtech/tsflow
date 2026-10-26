@@ -110,6 +110,72 @@ func (h *Handlers) LoadStatsOverview(ctx context.Context, tailnetID string, poll
 		return StatsOverviewData{}, &QueryError{Status: http.StatusServiceUnavailable, Public: "Database not configured"}
 	}
 
+	// The window's distinct pairs don't depend on the buckets, so read them
+	// while the buckets load. Both are separate read transactions, as they
+	// were when they ran one after the other.
+	pairsCtx, pairsCancel := context.WithTimeout(ctx, AggregationQueryTimeout)
+	defer pairsCancel()
+	type pairsResult struct {
+		pairs [][2]string
+		err   error
+	}
+	pairsDone := make(chan pairsResult, 1)
+	go func() {
+		pairs, err := h.store.DistinctPairs(pairsCtx, tailnetID, startTime, endTime, trafficTypes)
+		pairsDone <- pairsResult{pairs, err}
+	}()
+
+	buckets, source, err := h.loadOverviewBuckets(ctx, tailnetID, poller, startTime, endTime, trafficTypes)
+	if err != nil {
+		pairsCancel()
+		<-pairsDone
+		return StatsOverviewData{}, err
+	}
+
+	var summary StatsSummary
+	var maxUniquePairs int64
+	for _, b := range buckets {
+		summary.TCPBytes += b.TCPBytes
+		summary.UDPBytes += b.UDPBytes
+		summary.OtherProtoBytes += b.OtherProtoBytes
+		summary.VirtualBytes += b.VirtualBytes
+		summary.ExitBytes += b.ExitBytes
+		summary.SubnetBytes += b.SubnetBytes
+		summary.PhysicalBytes += b.PhysicalBytes
+		summary.TotalFlows += b.TotalFlows
+		if b.UniquePairs > maxUniquePairs {
+			maxUniquePairs = b.UniquePairs
+		}
+	}
+
+	// Per-bucket uniquePairs is the busiest minute or hour, which undercounts
+	// a window. Count distinct endpoints across the whole range instead, using
+	// hourly rollups where they already cover the middle of the window.
+	stored := <-pairsDone
+	if stored.err != nil {
+		log.Printf("ERROR GetStatsOverview unique pairs: %v", stored.err)
+		return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to count unique pairs", Err: stored.err}
+	}
+	// One device can be stored under several ids (legacy numeric id, stable
+	// id, or an address before it was known), so resolve before counting.
+	resolve := memoizeResolve(func(id string) string {
+		return h.resolveNodeID(poller, id)
+	})
+	summary.UniquePairs = countDistinctPairs(stored.pairs, resolve)
+	if summary.UniquePairs == 0 {
+		summary.UniquePairs = maxUniquePairs
+	}
+
+	// Active nodes are the endpoints of those same pairs: ActiveNodeIDs reads
+	// the same rows with the same filter, so this skips a second scan.
+	summary.TotalNodes = countDistinctNodes(nodesOfPairs(stored.pairs), resolve)
+
+	return StatsOverviewData{Summary: summary, Buckets: buckets, Source: source}, nil
+}
+
+// loadOverviewBuckets reads the overview buckets: the rolling cache for a
+// recent unfiltered hour, otherwise the database.
+func (h *Handlers) loadOverviewBuckets(ctx context.Context, tailnetID string, poller *services.Poller, startTime, endTime time.Time, trafficTypes []string) ([]database.TrafficStats, string, error) {
 	var buckets []database.TrafficStats
 	source := "database"
 
@@ -136,7 +202,7 @@ func (h *Handlers) LoadStatsOverview(ctx context.Context, tailnetID string, poll
 		}
 		if err != nil {
 			log.Printf("ERROR GetStatsOverview: %v", err)
-			return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch traffic stats", Err: err}
+			return nil, "", &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch traffic stats", Err: err}
 		}
 		source = "database"
 
@@ -148,7 +214,7 @@ func (h *Handlers) LoadStatsOverview(ctx context.Context, tailnetID string, poll
 			derivedBuckets, err := h.store.FillMissingTrafficStats(queryCtx, tailnetID, startTime, endTime, buckets)
 			if err != nil {
 				log.Printf("ERROR GetStatsOverview (derived): %v", err)
-				return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch supplemental traffic stats", Err: err}
+				return nil, "", &QueryError{Status: http.StatusInternalServerError, Public: "Failed to fetch supplemental traffic stats", Err: err}
 			}
 			if len(buckets) == 0 {
 				source = "database (derived)"
@@ -156,51 +222,20 @@ func (h *Handlers) LoadStatsOverview(ctx context.Context, tailnetID string, poll
 			buckets = mergeTrafficStatsBuckets(buckets, derivedBuckets)
 		}
 	}
+	return buckets, source, nil
+}
 
-	var summary StatsSummary
-	var maxUniquePairs int64
-	for _, b := range buckets {
-		summary.TCPBytes += b.TCPBytes
-		summary.UDPBytes += b.UDPBytes
-		summary.OtherProtoBytes += b.OtherProtoBytes
-		summary.VirtualBytes += b.VirtualBytes
-		summary.ExitBytes += b.ExitBytes
-		summary.SubnetBytes += b.SubnetBytes
-		summary.PhysicalBytes += b.PhysicalBytes
-		summary.TotalFlows += b.TotalFlows
-		if b.UniquePairs > maxUniquePairs {
-			maxUniquePairs = b.UniquePairs
+// nodesOfPairs lists every endpoint of the pairs. Duplicates are fine, the
+// caller counts distinct ids after resolving them.
+func nodesOfPairs(pairs [][2]string) []string {
+	ids := make([]string, 0, 2*len(pairs))
+	for _, pair := range pairs {
+		ids = append(ids, pair[0])
+		if pair[1] != pair[0] {
+			ids = append(ids, pair[1])
 		}
 	}
-
-	// Per-bucket uniquePairs is the busiest minute or hour, which undercounts
-	// a window. Count distinct endpoints across the whole range instead, using
-	// hourly rollups where they already cover the middle of the window.
-	countCtx, countCancel := context.WithTimeout(ctx, AggregationQueryTimeout)
-	defer countCancel()
-	storedPairs, err := h.store.DistinctPairs(countCtx, tailnetID, startTime, endTime, trafficTypes)
-	if err != nil {
-		log.Printf("ERROR GetStatsOverview unique pairs: %v", err)
-		return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to count unique pairs", Err: err}
-	}
-	// One device can be stored under several ids (legacy numeric id, stable
-	// id, or an address before it was known), so resolve before counting.
-	resolve := memoizeResolve(func(id string) string {
-		return h.resolveNodeID(poller, id)
-	})
-	summary.UniquePairs = countDistinctPairs(storedPairs, resolve)
-	if summary.UniquePairs == 0 {
-		summary.UniquePairs = maxUniquePairs
-	}
-
-	activeIDs, err := h.store.ActiveNodeIDs(countCtx, tailnetID, startTime, endTime, trafficTypes)
-	if err != nil {
-		log.Printf("ERROR GetStatsOverview active nodes: %v", err)
-		return StatsOverviewData{}, &QueryError{Status: http.StatusInternalServerError, Public: "Failed to count active nodes", Err: err}
-	}
-	summary.TotalNodes = countDistinctNodes(activeIDs, resolve)
-
-	return StatsOverviewData{Summary: summary, Buckets: buckets, Source: source}, nil
+	return ids
 }
 
 // mergeTrafficStatsBuckets adds derived buckets that are absent from the
