@@ -17,14 +17,14 @@ var (
 // Built once: serverFor runs per request, and the SDK caches resolved
 // schemas by pointer, so a fresh schema per request would never hit the cache.
 var (
-	deviceInSchema = inputSchema[deviceIn]()
-	flowsBetweenInSchema = inputSchema[flowsBetweenIn]()
-	getDeviceInSchema = inputSchema[getDeviceIn]()
+	deviceInSchema         = inputSchema[deviceIn]()
+	flowsBetweenInSchema   = inputSchema[flowsBetweenIn]()
+	getDeviceInSchema      = inputSchema[getDeviceIn]()
 	newConnectionsInSchema = inputSchema[newConnectionsIn]()
-	rankedInSchema = inputSchema[rankedIn]()
-	searchDevicesInSchema = inputSchema[searchDevicesIn]()
-	statsOverviewInSchema = inputSchema[statsOverviewIn]()
-	timelineInSchema = inputSchema[timelineIn]()
+	rankedInSchema         = inputSchema[rankedIn]()
+	searchDevicesInSchema  = inputSchema[searchDevicesIn]()
+	statsOverviewInSchema  = inputSchema[statsOverviewIn]()
+	timelineInSchema       = inputSchema[timelineIn]()
 )
 
 // inputSchema infers T's schema the way the SDK does and adds enums for the
