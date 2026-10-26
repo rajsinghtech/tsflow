@@ -124,6 +124,7 @@ func Mount(router *gin.Engine, opts Options) {
 	}
 	svc := New(opts.Handlers, opts.Version)
 	handle := func(c *gin.Context) {
+		markReached(c)
 		viewer := Viewer{}
 		if ident, ok := access.FromGin(c); ok {
 			viewer = Viewer{Restricted: true, Ident: ident}
@@ -138,6 +139,7 @@ func Mount(router *gin.Engine, opts Options) {
 	if opts.RateLimit != nil {
 		chain = append([]gin.HandlerFunc{opts.RateLimit}, chain...)
 	}
+	chain = append([]gin.HandlerFunc{jsonRPCErrors}, chain...)
 	router.POST("/mcp", chain...)
 	router.GET("/mcp", chain...)
 	router.DELETE("/mcp", chain...)
