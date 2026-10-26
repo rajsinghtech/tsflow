@@ -19,6 +19,8 @@ import (
 const instructions = "Read-only TSFlow flow data. Tailnet allowlists match the REST API. " +
 	"Identity autoscope is the default device view and can be cleared with scope=all. " +
 	"Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. " +
+	"Omitting trafficTypes includes exit traffic, while the TSFlow UI defaults to virtual and subnet; pass [virtual, subnet] to match the screen. " +
+	"new_connections looks back 24h by default where the UI and REST use 7d. " +
 	"Pass tailnet when more than one tailnet is configured. Windows default to the last hour and cannot exceed 7 days."
 
 // Options configures the /mcp route.
