@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -308,5 +309,55 @@ func TestPollChunkedPropagatesFailureAfterCommittedProgress(t *testing.T) {
 	}
 	if !state.LastPollEnd.Equal(failingChunkStart) {
 		t.Fatalf("poll cursor = %v, want committed first-chunk end %v", state.LastPollEnd, failingChunkStart)
+	}
+}
+
+// After a long outage the cursor can be far older than retention. Rows from
+// before the retention cutoff are deleted by the next cleanup, so fetching
+// them only spends API calls and holds up the first fresh poll.
+func TestPollCatchUpStartsAtRetention(t *testing.T) {
+	var mu sync.Mutex
+	var starts []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s, err := time.Parse(time.RFC3339, r.URL.Query().Get("start")); err == nil {
+			mu.Lock()
+			starts = append(starts, s)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[]}`))
+	}))
+	defer server.Close()
+
+	store, err := database.NewSQLiteStore(t.TempDir() + "/poller.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdatePollState(ctx, database.DefaultTailnetID, time.Now().Add(-10*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewTailscaleService(&config.Config{TailscaleAPIURL: server.URL, TailscaleTailnet: "example.com"})
+	cfg := DefaultPollerConfig()
+	cfg.Retention = 2 * time.Hour
+	cfg.PollDelay = 0
+	poller := NewPoller(service, store, cfg)
+	before := time.Now()
+	if err := poller.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) == 0 || len(starts) > 5 {
+		t.Fatalf("made %d log requests, want the 2h retention window in about 4 chunks", len(starts))
+	}
+	if cutoff := before.Add(-cfg.Retention).Add(-time.Second); starts[0].Before(cutoff) {
+		t.Fatalf("first request starts %v, before the retention cutoff %v", starts[0], cutoff)
 	}
 }

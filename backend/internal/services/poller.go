@@ -471,6 +471,17 @@ func (p *Poller) poll(ctx context.Context) error {
 		p.rollingCache.CoverFrom(end)
 		return p.pollObjectStore(ctx, start, end)
 	}
+	// Never fetch API logs older than retention. After a long outage the cursor
+	// can be days or weeks back; those rows would be deleted by the next
+	// cleanup, and fetching them first holds up fresh data for a long time.
+	if p.config.Retention > 0 {
+		if oldest := end.Add(-p.config.Retention); start.Before(oldest) {
+			log.Printf("Poll cursor %v is older than retention (%v); resuming from %v",
+				start.Format(time.RFC3339), p.config.Retention, oldest.Format(time.RFC3339))
+			start = oldest
+		}
+	}
+
 	// Everything from the cursor on is written by this process, so it also
 	// lands in the cache. The minute holding the cursor may already be
 	// partly in the database from before a restart.
