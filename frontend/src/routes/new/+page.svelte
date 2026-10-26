@@ -4,6 +4,7 @@
 	import Header from '#lib/components/layout/Header.svelte';
 	import { dataSourceStore, filterStore, queryTimeWindow } from '#lib/stores';
 	import { pageRefresh } from '#lib/stores/live-mode';
+	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { tailscaleService } from '#lib/services';
 	import { DEFAULT_NEW_PAIR_LOOKBACK, NEW_PAIR_LOOKBACKS, lookbackNotice, type NewPairCoverage } from '#lib/analytics/new-pairs';
 	import { formatBytes } from '#lib/utils';
@@ -129,10 +130,11 @@
 		const pageOffset = offset;
 		const selectedLookback = lookback;
 		const refreshCount = $pageRefresh;
+		const tailnet = $selectedTailnetId ?? '';
 		if (!rangeReady) return;
 		if (!range?.start || !range?.end || range.end <= range.start) return;
-		// A new window starts again from the first page.
-		const windowKey = `${range.start.getTime()}-${range.end.getTime()}`;
+		// A new window or tailnet starts again from the first page.
+		const windowKey = `${tailnet}|${range.start.getTime()}-${range.end.getTime()}`;
 		const windowChanged = lastWindowKey !== '' && windowKey !== lastWindowKey;
 		lastWindowKey = windowKey;
 		if (windowChanged && pageOffset !== 0) {

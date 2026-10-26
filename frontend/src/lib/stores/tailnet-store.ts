@@ -94,7 +94,7 @@ export async function refreshTailnetStatus(): Promise<void> {
 }
 
 export function resetTailnetCaches(): void {
-	dataSourceStore.reset();
+	dataSourceStore.resetKeepWindow();
 	clearNetworkData();
 	clearStatsData();
 	clearRankingsData();
@@ -112,11 +112,11 @@ async function reloadCurrentView(): Promise<void> {
 		await fetchAndRenderPolicy();
 		return;
 	}
-	if (path === '/new') {
-		// The page reloads its list when the window changes; only the new
-		// tailnet's stored range is needed, not the traffic graph.
-		const range = await dataSourceStore.fetchDataRange();
-		if (range?.count) dataSourceStore.showLatestWindow(range);
+	if (path === '/new' || path === '/me') {
+		// These pages reload on a tailnet change themselves; only the new
+		// tailnet's stored range is needed, not the traffic graph. A live
+		// window slides to the new range and keeps its length.
+		await dataSourceStore.fetchDataRange();
 		return;
 	}
 	await loadNetworkData();

@@ -9,6 +9,10 @@
 	import type { NetworkLog, TrafficType } from '#lib/types';
 
 	import { ariaSort } from './log-sort';
+
+	// Rows are totals over the selected window, so every row carries the
+	// window end rather than the time the traffic happened.
+	const TIME_HEADER_TITLE = 'Rows are totals for the selected window. This is when the window ends, not when the traffic happened.';
 	type SortField = 'logged' | 'txBytes' | 'rxBytes' | 'trafficType' | 'protocol';
 	let sortField: SortField = $state('logged');
 	let sortDir: 'asc' | 'desc' = $state('desc');
@@ -371,7 +375,7 @@
 				{:else if $uiStore.selectedEdgeId}
 					Showing logs for selected connection
 				{:else}
-					Showing recent logs (select a node or edge to filter)
+					Showing totals for the window (select a node or edge to filter)
 				{/if}
 				{#if $filterStore.trafficTypes.length > 0}
 					<span class="text-primary"> · Filtered: {$filterStore.trafficTypes.join(', ')}</span>
@@ -401,7 +405,7 @@
 		<table class="hidden w-full text-xs sm:table">
 			<thead class="sticky top-0 bg-card">
 				<tr class="border-b border-border text-left">
-					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('logged', sortField, sortDir)}>{@render sortButton('logged', 'Time')}</th>
+					<th class="px-2 py-1.5 font-medium" title={TIME_HEADER_TITLE} aria-sort={ariaSort('logged', sortField, sortDir)}>{@render sortButton('logged', 'Window end')}</th>
 					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('trafficType', sortField, sortDir)}>{@render sortButton('trafficType', 'Type')}</th>
 					<th class="px-2 py-1.5 font-medium">Flow</th>
 					<th class="px-2 py-1.5 font-medium" aria-sort={ariaSort('protocol', sortField, sortDir)}>{@render sortButton('protocol', 'Proto')}</th>
@@ -492,7 +496,7 @@
 						</span>
 					</div>
 					<div class="mt-0.5 flex items-center justify-between text-[10px] text-muted-foreground">
-						<span>{formatTime(entry.logged)}</span>
+						<span title={TIME_HEADER_TITLE}>through {formatTime(entry.logged)}</span>
 						<span>TX {formatBytes(entry.txBytes)} / RX {formatBytes(entry.rxBytes)}</span>
 					</div>
 				</button>

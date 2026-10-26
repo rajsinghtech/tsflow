@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -29,6 +30,11 @@ func (s *Service) bind(v Viewer, raw string) (handlers.TailnetBinding, error) {
 	if err != nil {
 		var te *handlers.TailnetError
 		if errors.As(err, &te) {
+			// The shared message talks about a query parameter, which means
+			// nothing to a tool caller; tailnet is a tool argument here.
+			if te.Status == http.StatusBadRequest && len(te.Tailnets) > 0 {
+				return handlers.TailnetBinding{}, fmt.Errorf("tailnet is required. Valid ids: %s", strings.Join(te.Tailnets, ", "))
+			}
 			return handlers.TailnetBinding{}, errors.New(te.Message)
 		}
 		return handlers.TailnetBinding{}, err

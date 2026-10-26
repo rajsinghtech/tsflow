@@ -135,7 +135,9 @@ func parseLookback(raw string) (time.Duration, string, error) {
 	var lookback time.Duration
 	if strings.HasSuffix(raw, "d") {
 		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
-		if err != nil || days <= 0 {
+		// Check the day count before multiplying so a huge value cannot wrap
+		// around into the allowed range.
+		if err != nil || days <= 0 || days > int(database.NewPairMaxLookback/(24*time.Hour)) {
 			return 0, "", fmt.Errorf("lookback must be between %s and %s", database.NewPairMinLookback, database.NewPairMaxLookback)
 		}
 		lookback = time.Duration(days) * 24 * time.Hour
