@@ -455,6 +455,12 @@ func (p *Poller) poll(ctx context.Context) error {
 	if p.objectStore == nil && p.config.PollDelay > 0 {
 		end = end.Add(-p.config.PollDelay)
 	}
+	if p.objectStore == nil {
+		// The logs API takes whole seconds. Keep every range boundary on a
+		// whole second so a leftover under a second can't format to
+		// start == end and fail the poll.
+		end = end.Truncate(time.Second)
+	}
 
 	if pollState.LastPollEnd.IsZero() {
 		// First poll - backfill
