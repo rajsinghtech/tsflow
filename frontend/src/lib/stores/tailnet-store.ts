@@ -112,8 +112,8 @@ async function reloadCurrentView(): Promise<void> {
 		await fetchAndRenderPolicy();
 		return;
 	}
-	if (path === '/new' || path === '/me') {
-		// These pages reload on a tailnet change themselves; only the new
+	if (path === '/me') {
+		// Me reloads on a tailnet change itself; only the new
 		// tailnet's stored range is needed, not the traffic graph. A live
 		// window slides to the new range and keeps its length.
 		await dataSourceStore.fetchDataRange();
