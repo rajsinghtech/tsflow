@@ -207,7 +207,7 @@
 							{#each newPairs as pair}
 								<li class="flex items-center justify-between gap-3 py-1">
 									<span class="min-w-0 truncate">
-										{pair.srcHostname || pair.srcNodeId} → {pair.dstHostname || pair.dstNodeId}
+										{pair.srcHostname || pair.srcNodeId} <span aria-label="and" title="Pairs are unordered">↔</span> {pair.dstHostname || pair.dstNodeId}
 										<span class="block text-xs text-muted-foreground">{seenLabel(pair.firstSeen)}</span>
 									</span>
 									<span class="shrink-0 tabular-nums text-muted-foreground">{formatBytes(pair.totalBytes)}</span>

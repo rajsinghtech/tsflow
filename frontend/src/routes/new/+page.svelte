@@ -221,7 +221,7 @@
 						<li class="py-2.5">
 							<div class="flex min-w-0 items-baseline gap-1.5 text-sm">
 								<span class="min-w-0 truncate" title={pair.srcNodeId}>{endpointLabel(pair.srcNodeId, pair.srcHostname)}</span>
-								<span class="shrink-0 text-muted-foreground" aria-label="to">→</span>
+								<span class="shrink-0 text-muted-foreground" aria-label="and" title="Pairs are unordered">↔</span>
 								<span class="min-w-0 truncate" title={pair.dstNodeId}>{endpointLabel(pair.dstNodeId, pair.dstHostname)}</span>
 							</div>
 							<div class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
@@ -239,8 +239,8 @@
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
 								<th class="pb-2 pr-4">First seen</th>
-								<th class="pb-2 pr-4">Source</th>
-								<th class="pb-2 pr-4">Destination</th>
+								<th class="pb-2 pr-4" title="Pairs are unordered. The order is not who started the connection.">Endpoint A</th>
+								<th class="pb-2 pr-4" title="Pairs are unordered. The order is not who started the connection.">Endpoint B</th>
 								<th class="pb-2 pr-4 text-right">Traffic</th>
 								<th class="pb-2 text-right">Flows</th>
 							</tr>
