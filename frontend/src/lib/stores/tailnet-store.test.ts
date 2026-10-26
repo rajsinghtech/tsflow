@@ -221,11 +221,11 @@ describe('tailnet url and cache', () => {
 		expect(calls.some((url) => url.includes('tailnet=default'))).toBe(false);
 	});
 
-	it('reloads the new connections range for the new tailnet without loading the graph', async () => {
+	it('reloads only the range for the new tailnet on Me without loading the graph', async () => {
 		tailnetList = several;
 		await tailscaleService.getDevices();
 		calls.length = 0;
-		setTailnetPathReader(() => '/new');
+		setTailnetPathReader(() => '/me');
 
 		await selectTailnet('lab');
 
@@ -255,7 +255,7 @@ describe('tailnet url and cache', () => {
 		await tailscaleService.getDevices();
 		const threeHours = 3 * 60 * 60 * 1000;
 		dataSourceStore.showLatestWindow(null, threeHours);
-		setTailnetPathReader(() => '/new');
+		setTailnetPathReader(() => '/me');
 
 		await selectTailnet('lab');
 

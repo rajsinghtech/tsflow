@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ListFilter, Logs, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, Waypoints, User, MoreHorizontal } from 'lucide-svelte';
+	import { ListFilter, Logs, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, User, MoreHorizontal } from 'lucide-svelte';
 	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
@@ -66,7 +66,6 @@
 	const baseNav = [
 		{ href: '/', label: 'Traffic', icon: Network },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
-		{ href: '/new', label: 'New', icon: Waypoints },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
 	const primaryNav = $derived(
