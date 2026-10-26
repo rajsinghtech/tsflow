@@ -323,7 +323,12 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*Data
 	if err := checkTailnetID(tailnetID); err != nil {
 		return nil, err
 	}
-	return readDataRange(ctx, s.db, tailnetID)
+	tx, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	return readDataRange(ctx, tx, tailnetID)
 }
 
 // Cleanup deletes rows older than retention from all four data tables, and
@@ -361,6 +366,9 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 		if n > 0 {
 			total += n
 		}
+	}
+	if err := pruneBucketRows(ctx, tx, tailnetID, cutoff); err != nil {
+		return 0, err
 	}
 	pruned, err := pruneHourRollups(ctx, tx, tailnetID, cutoff)
 	if err != nil {
@@ -423,9 +431,20 @@ func (s *SQLiteStore) GetStats(ctx context.Context, tailnetID string) (map[strin
 	}
 	defer tx.Rollback()
 
+	counted, err := bucketRowsReady(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	tableCounts := make(map[string]int64)
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats", "ingested_objects", "node_metadata"} {
 		var count int64
+		if table == "node_pairs" {
+			if count, err = countAllNodePairs(ctx, tx, tailnetID, counted); err != nil {
+				return nil, err
+			}
+			tableCounts[table] = count
+			continue
+		}
 		if err := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE tailnet_id = ?", table), tailnetID).Scan(&count); err != nil {
 			return nil, fmt.Errorf("failed to count %s: %w", table, err)
 		}
@@ -440,7 +459,7 @@ func (s *SQLiteStore) GetStats(ctx context.Context, tailnetID string) (map[strin
 		return nil, fmt.Errorf("failed to read database page size: %w", err)
 	}
 
-	dr, err := readDataRange(ctx, tx, tailnetID)
+	dr, err := readDataRangeWith(ctx, tx, tailnetID, counted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read database data range: %w", err)
 	}
