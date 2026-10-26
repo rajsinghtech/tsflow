@@ -144,7 +144,11 @@ func statsBothWays(t *testing.T, store *SQLiteStore, tailnetID string, start, en
 }
 
 func TestStatsSinglePassMatchesSQL(t *testing.T) {
-	for seed := int64(1); seed <= 4; seed++ {
+	seeds := int64(4)
+	if raceEnabled {
+		seeds = 1 // SQLite is slow under -race; the plain run covers all seeds
+	}
+	for seed := int64(1); seed <= seeds; seed++ {
 		t.Run(fmt.Sprint("seed", seed), func(t *testing.T) {
 			store := setupTestDB(t)
 			ctx := context.Background()
@@ -227,7 +231,15 @@ func TestStatsSinglePassFallsBackOnUnusualRows(t *testing.T) {
 			store := setupTestDB(t)
 			ctx := context.Background()
 			rng := rand.New(rand.NewSource(7))
-			insertStatsPassRows(t, store, DefaultTailnetID, randomStatsRows(rng, statsPassBase, 4*60))
+			// A sparse background keeps this quick under -race; the
+			// randomized test above covers volume.
+			var background []statsPassRow
+			for i, r := range randomStatsRows(rng, statsPassBase, 4*60) {
+				if i%8 == 0 {
+					background = append(background, r)
+				}
+			}
+			insertStatsPassRows(t, store, DefaultTailnetID, background)
 			for _, bucket := range []int64{statsPassBase + 20*60, statsPassBase + 3600 + 20*60} {
 				r := row
 				r.bucket, r.src, r.dst, r.traffic = bucket, "odd", "n1", "virtual"
@@ -243,8 +255,16 @@ func TestStatsSinglePassFallsBackOnUnusualRows(t *testing.T) {
 			if err := store.backfillHourRollups(ctx); err != nil {
 				t.Fatal(err)
 			}
-			for _, w := range statsPassWindows(statsPassBase) {
-				for _, types := range statsPassTypeSets {
+			// The odd row is virtual, so these are the type sets that read it.
+			windows := statsPassWindows(statsPassBase)
+			typeSets := [][]string{nil, {"virtual"}, {"virtual", "subnet", "exit", "physical"}}
+			if raceEnabled {
+				// Minutes and the rollup with minute edges both read the odd
+				// rows; the plain run covers every window.
+				windows, typeSets = windows[:2], typeSets[:2]
+			}
+			for _, w := range windows {
+				for _, types := range typeSets {
 					statsBothWays(t, store, DefaultTailnetID, w[0], w[1], types)
 				}
 			}
