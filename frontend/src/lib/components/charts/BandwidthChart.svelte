@@ -52,10 +52,8 @@
 	const hasActiveTrafficFilter = $derived(
 		$filterStore.trafficTypes.length > 0 && $filterStore.trafficTypes.length < ALL_TRAFFIC_TYPES.length
 	);
-	const chartTrafficTypes = $derived.by(() => {
-		if (selectedDeviceId) return undefined;
-		return $filterStore.trafficTypes;
-	});
+	// The node view follows the filter too, like the graph's node card.
+	const chartTrafficTypes = $derived($filterStore.trafficTypes);
 
 	$effect(() => {
 		if (container) {
@@ -430,8 +428,8 @@
 		</div>
 		<div class="flex items-center gap-2">
 			{#if hasActiveTrafficFilter}
-				<span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary" title={selectedNodeName ? 'Per-node bandwidth is not split by traffic type' : 'Network throughput follows the selected traffic types'}>
-					{selectedNodeName ? 'node all types' : $filterStore.trafficTypes.join(', ')}
+				<span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary" title={selectedNodeName ? 'Node bandwidth follows the selected traffic types' : 'Network throughput follows the selected traffic types'}>
+					{$filterStore.trafficTypes.join(', ')}
 				</span>
 			{/if}
 			{#if chartData.length > 0}
