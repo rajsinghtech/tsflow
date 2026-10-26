@@ -6,6 +6,7 @@
 	import { tailscaleService } from '#lib/services';
 	import { formatBytes, formatBitsRate } from '#lib/utils';
 	import { bytesPerSecond, coveredBucketSeconds } from '#lib/utils/bandwidth-rate';
+	import { bandwidthPlotPoints, fillBandwidthGaps } from '#lib/utils/bandwidth-series';
 
 	// Chart dimensions
 	const height = 80;
@@ -20,6 +21,8 @@
 	let chartData = $state<{ time: Date; txBytes: number; rxBytes: number; seconds: number }[]>([]);
 	// Raw totals (un-normalized bytes) for header summary
 	let rawTotals = $state<{ tx: number; rx: number }>({ tx: 0, rx: 0 });
+	// The window the chart was fetched for; the x axis spans all of it.
+	let chartRange = $state<{ start: Date; end: Date } | null>(null);
 	let isLoading = $state(false);
 	let emptyReason = $state('No bandwidth data available');
 	let bandwidthController: AbortController | null = null;
@@ -52,10 +55,8 @@
 	const hasActiveTrafficFilter = $derived(
 		$filterStore.trafficTypes.length > 0 && $filterStore.trafficTypes.length < ALL_TRAFFIC_TYPES.length
 	);
-	const chartTrafficTypes = $derived.by(() => {
-		if (selectedDeviceId) return undefined;
-		return $filterStore.trafficTypes;
-	});
+	// The node view follows the filter too, like the graph's node card.
+	const chartTrafficTypes = $derived($filterStore.trafficTypes);
 
 	$effect(() => {
 		if (container) {
@@ -130,7 +131,7 @@
 			);
 			// Normalize to bytes/sec. Partial edge buckets carry their own duration
 			// so the first and last points are not divided as if they were full.
-			chartData = buckets
+			const points = buckets
 				.map((b) => {
 					const seconds = coveredBucketSeconds(bs, b.seconds);
 					return {
@@ -141,6 +142,8 @@
 					};
 				})
 				.sort((a, b) => a.time.getTime() - b.time.getTime());
+			chartData = points.length > 0 ? fillBandwidthGaps(points, start, end, bs) : [];
+			chartRange = { start, end };
 			emptyReason = 'No bandwidth data in the selected range';
 			return chartData;
 		} catch (err) {
@@ -164,6 +167,9 @@
 		}
 
 		const times = chartData.map((d) => d.time.getTime());
+		if (chartRange) {
+			times.push(chartRange.start.getTime(), chartRange.end.getTime());
+		}
 		// For network total (no node selected), only use txBytes since rxBytes is 0
 		// For per-node view, use both tx and rx
 		const maxBytes = selectedNodeName
@@ -193,34 +199,35 @@
 	}
 
 	// Generate SVG paths
+	const plotPoints = $derived(chartRange ? bandwidthPlotPoints(chartData, chartRange.end) : chartData);
 	const txPath = $derived.by(() => {
-		if (chartData.length === 0) return '';
-		const points = chartData.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.txBytes)}`);
+		if (plotPoints.length === 0) return '';
+		const points = plotPoints.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.txBytes)}`);
 		return `M${points.join('L')}`;
 	});
 
 	const rxPath = $derived.by(() => {
-		if (chartData.length === 0) return '';
-		const points = chartData.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.rxBytes)}`);
+		if (plotPoints.length === 0) return '';
+		const points = plotPoints.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.rxBytes)}`);
 		return `M${points.join('L')}`;
 	});
 
 	// Area paths (filled)
 	const txArea = $derived.by(() => {
-		if (chartData.length === 0) return '';
+		if (plotPoints.length === 0) return '';
 		const baseline = scaleY(0);
-		const points = chartData.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.txBytes)}`);
-		const first = chartData[0];
-		const last = chartData[chartData.length - 1];
+		const points = plotPoints.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.txBytes)}`);
+		const first = plotPoints[0];
+		const last = plotPoints[plotPoints.length - 1];
 		return `M${scaleX(first.time.getTime())},${baseline}L${points.join('L')}L${scaleX(last.time.getTime())},${baseline}Z`;
 	});
 
 	const rxArea = $derived.by(() => {
-		if (chartData.length === 0) return '';
+		if (plotPoints.length === 0) return '';
 		const baseline = scaleY(0);
-		const points = chartData.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.rxBytes)}`);
-		const first = chartData[0];
-		const last = chartData[chartData.length - 1];
+		const points = plotPoints.map((d) => `${scaleX(d.time.getTime())},${scaleY(d.rxBytes)}`);
+		const first = plotPoints[0];
+		const last = plotPoints[plotPoints.length - 1];
 		return `M${scaleX(first.time.getTime())},${baseline}L${points.join('L')}L${scaleX(last.time.getTime())},${baseline}Z`;
 	});
 
@@ -430,8 +437,8 @@
 		</div>
 		<div class="flex items-center gap-2">
 			{#if hasActiveTrafficFilter}
-				<span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary" title={selectedNodeName ? 'Per-node bandwidth is not split by traffic type' : 'Network throughput follows the selected traffic types'}>
-					{selectedNodeName ? 'node all types' : $filterStore.trafficTypes.join(', ')}
+				<span class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary" title={selectedNodeName ? 'Node bandwidth follows the selected traffic types' : 'Network throughput follows the selected traffic types'}>
+					{$filterStore.trafficTypes.join(', ')}
 				</span>
 			{/if}
 			{#if chartData.length > 0}

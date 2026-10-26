@@ -41,11 +41,11 @@ describe('header stats visibility', () => {
 		expect(headerShowsStats('/analytics', false)).toBe(true);
 	});
 	it('hides it on pages that load no summary', () => {
-		expect(headerShowsStats('/new', false)).toBe(false);
+		expect(headerShowsStats('/me', false)).toBe(false);
 		expect(headerShowsStats('/policy', false)).toBe(false);
 	});
 	it('keeps graph data that is already loaded', () => {
-		expect(headerShowsStats('/new', true)).toBe(true);
+		expect(headerShowsStats('/me', true)).toBe(true);
 	});
 });
 

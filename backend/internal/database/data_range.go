@@ -70,16 +70,28 @@ func continuousBucketStart(buckets []int64) (int64, bool) {
 }
 
 func readDataRange(ctx context.Context, q rowQuerier, tailnetID string) (*DataRange, error) {
+	counted, err := bucketRowsReady(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return readDataRangeWith(ctx, q, tailnetID, counted)
+}
+
+// readDataRangeWith reads the range with or without the per-bucket row
+// counts. Both paths return the same values; the counted one never scans
+// node_pairs. MIN and MAX are separate subqueries so each is a seek on the
+// primary key. Asked together with COUNT(*), SQLite scans a whole index.
+func readDataRangeWith(ctx context.Context, q rowQuerier, tailnetID string, counted bool) (*DataRange, error) {
 	var minBucket, maxBucket sql.NullInt64
-	var count int64
-	err := q.QueryRowContext(ctx,
-		"SELECT MIN(bucket), MAX(bucket), COUNT(*) FROM node_pairs WHERE tailnet_id = ?",
-		tailnetID,
-	).Scan(&minBucket, &maxBucket, &count)
+	err := q.QueryRowContext(ctx, `
+		SELECT (SELECT MIN(bucket) FROM node_pairs WHERE tailnet_id = ?),
+		       (SELECT MAX(bucket) FROM node_pairs WHERE tailnet_id = ?)`,
+		tailnetID, tailnetID,
+	).Scan(&minBucket, &maxBucket)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get data range: %w", err)
 	}
-	if count == 0 || !minBucket.Valid || !maxBucket.Valid {
+	if !minBucket.Valid || !maxBucket.Valid {
 		return &DataRange{}, nil
 	}
 
@@ -93,14 +105,13 @@ func readDataRange(ctx context.Context, q rowQuerier, tailnetID string) (*DataRa
 			start = trimmed
 		}
 	}
-	covered := count
-	if start != minBucket.Int64 {
-		if err := q.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM node_pairs WHERE tailnet_id = ? AND bucket >= ?",
-			tailnetID, start,
-		).Scan(&covered); err != nil {
-			return nil, fmt.Errorf("failed to count covered rows: %w", err)
-		}
+	// Coverage comes from the stats tables and can start before the oldest
+	// pair row. No pair is stored below MIN(bucket), so counting from there
+	// is the same total, and it skips counters retention already cleared.
+	countFrom := max(start, minBucket.Int64)
+	covered, err := countNodePairs(ctx, q, tailnetID, countFrom, counted)
+	if err != nil {
+		return nil, err
 	}
 
 	return &DataRange{

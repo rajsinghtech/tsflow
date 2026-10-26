@@ -123,6 +123,14 @@ func main() {
 
 	pollerCtx, pollerCancel := context.WithCancel(context.Background())
 	defer pollerCancel()
+	// Count pair rows stored before the per-minute counters existed. Until
+	// this finishes, the data range and poller status count node_pairs as
+	// before.
+	go func() {
+		if err := store.BuildPairRowCounts(pollerCtx); err != nil && pollerCtx.Err() == nil {
+			log.Printf("Warning: pair row counters not built, row counts will scan node_pairs: %v", err)
+		}
+	}()
 	if err := registry.Start(pollerCtx); err != nil {
 		log.Printf("Warning: Failed to start poller: %v", err)
 	}
@@ -164,6 +172,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid trusted proxies: %v", err)
 	}
+	router.Use(middleware.WarnUntrustedForwarded(trustedProxies))
 
 	router.HandleMethodNotAllowed = true
 

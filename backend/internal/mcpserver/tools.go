@@ -53,7 +53,7 @@ type rankedIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default, so pass [virtual, subnet] to match its numbers. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 	Sort         string   `json:"sort,omitempty" jsonschema:"Order by bytes (default) or flows."`
 	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum rows. Defaults to 20 and is clamped to 100."`
@@ -64,7 +64,7 @@ type flowsBetweenIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default, so pass [virtual, subnet] to match its numbers. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	A            string   `json:"a" jsonschema:"First endpoint: device id, hostname, name, IP, or CIDR."`
 	B            string   `json:"b" jsonschema:"Second endpoint: device id, hostname, name, IP, or CIDR."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
@@ -75,7 +75,7 @@ type deviceIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default, so pass [virtual, subnet] to match its numbers. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
 	Device       string   `json:"device" jsonschema:"Device id, hostname, name, or IP address."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum peers. Defaults to 20 and is clamped to 100."`
@@ -86,7 +86,7 @@ type timelineIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to split by: virtual, subnet, exit, physical. Physical is omitted unless this list contains physical."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to split by: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default. Physical is omitted unless this list contains physical."`
 	Device       string   `json:"device" jsonschema:"Device id, hostname, name, or IP address."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 }
@@ -95,8 +95,8 @@ type newConnectionsIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
-	Lookback     string   `json:"lookback,omitempty" jsonschema:"How far before start a pair must be absent to count as new. A duration such as 24h, 3d, or 1w. Defaults to 24h and cannot exceed 7d."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default, so pass [virtual, subnet] to match its numbers. Physical transport is excluded unless this list contains physical. DERP relays are labeled DERP relay."`
+	Lookback     string   `json:"lookback,omitempty" jsonschema:"How far before start a pair must be absent to count as new. A duration such as 24h, 3d, or 1w. Defaults to 24h and cannot exceed 7d. The UI New tab and the REST new-pairs route default to 7d, so pass 7d to match them."`
 	Scope        string   `json:"scope,omitempty" jsonschema:"Device view. mine applies the viewer's identity autoscope and is the default when autoscope is user or groups. all clears that filter and returns every device in the permitted tailnets. A tailnet outside the allowlist is still denied."`
 	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum rows. Defaults to 20 and is clamped to 100."`
 	Offset       int      `json:"offset,omitempty" jsonschema:"Rows to skip. Defaults to 0 and cannot exceed 1000."`
@@ -106,7 +106,7 @@ type statsOverviewIn struct {
 	Tailnet      string   `json:"tailnet,omitempty" jsonschema:"Tailnet id. Omit when one tailnet is configured, or when the id default is permitted. Required when several tailnets are configured and default is not permitted."`
 	Start        string   `json:"start,omitempty" jsonschema:"Window start. RFC3339 such as 2026-01-02T15:04:05Z (a time without a zone is UTC), or relative to now such as now-2h, 2h ago, last 24h, or 7d. Defaults to one hour before end."`
 	End          string   `json:"end,omitempty" jsonschema:"Window end, in the same forms as start (now, now-1h, RFC3339). Defaults to now. Future times are clamped to now. The window cannot exceed 7 days."`
-	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Physical bytes stay in physicalBytes. Protocol totals include physical only when this list contains physical."`
+	TrafficTypes []string `json:"trafficTypes,omitempty" jsonschema:"Traffic types to include: virtual, subnet, exit, physical. Omitted means virtual, subnet, and exit. The TSFlow UI shows virtual and subnet by default, so pass [virtual, subnet] to match its numbers. Physical bytes stay in physicalBytes. Protocol totals include physical only when this list contains physical."`
 }
 
 type deviceOut struct {
@@ -337,6 +337,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_devices",
 		Description: "Search devices by name, hostname, IP address, tag, or user login. An empty query lists devices. Results stay inside the viewer's tailnet allowlist. scope defaults to the viewer's autoscope (mine) and scope=all clears that filter, matching the UI.",
+		InputSchema: searchDevicesInSchema,
 		Annotations: readOnly("Search devices"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchDevicesIn) (*mcp.CallToolResult, searchDevicesOut, error) {
 		out, err := s.searchDevices(ctx, v, in)
@@ -345,6 +346,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_device",
 		Description: "Get one device by id, hostname, name, or IP, including tags and owner. scope defaults to the viewer's autoscope. scope=all returns any device in a permitted tailnet. A tailnet outside the allowlist is denied.",
+		InputSchema: getDeviceInSchema,
 		Annotations: readOnly("Get device"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getDeviceIn) (*mcp.CallToolResult, getDeviceOut, error) {
 		out, err := s.getDevice(ctx, v, in)
@@ -353,6 +355,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "top_talkers",
 		Description: "Rank devices by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. A DERP relay is labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every device in the permitted tailnet. A scoped view leaves out the internet stand-in and DERP relays, whose totals cover every device. The default window is the last hour and the default limit is 20.",
+		InputSchema: rankedInSchema,
 		Annotations: readOnly("Top talkers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rankedIn) (*mcp.CallToolResult, talkersOut, error) {
 		out, err := s.topTalkers(ctx, v, in)
@@ -360,7 +363,8 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "top_pairs",
-		Description: "Rank device pairs by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope and hides pairs touching other devices; scope=all clears that filter. Tailnet allowlists still apply. The default window is the last hour and the default limit is 20.",
+		Description: "Rank device pairs by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope and hides pairs touching other devices; scope=all clears that filter. Tailnet allowlists still apply. The default window is the last hour and the default limit is 20. Pairs are unordered: src and dst are sorted by node id, not who started the connection.",
+		InputSchema: rankedInSchema,
 		Annotations: readOnly("Top pairs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rankedIn) (*mcp.CallToolResult, pairsOut, error) {
 		out, err := s.topPairs(ctx, v, in)
@@ -369,6 +373,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "flows_between",
 		Description: "Summarize stored traffic between two endpoints, each a device id, hostname, name, IP, or CIDR. Returns bytes, flow counts, protocols, and destination ports for both directions. Physical transport is excluded unless requested. scope defaults to the viewer's autoscope; scope=all allows any device in a permitted tailnet.",
+		InputSchema: flowsBetweenInSchema,
 		Annotations: readOnly("Flows between endpoints"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in flowsBetweenIn) (*mcp.CallToolResult, flowsOut, error) {
 		out, err := s.flowsBetween(ctx, v, in)
@@ -377,6 +382,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "device_peers",
 		Description: "List the busiest peers of one device over a window, using stored rollups. Physical transport is excluded unless trafficTypes includes physical. scope defaults to the viewer's autoscope and omits other devices; scope=all clears that filter.",
+		InputSchema: deviceInSchema,
 		Annotations: readOnly("Device peers"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deviceIn) (*mcp.CallToolResult, peersOut, error) {
 		out, err := s.devicePeers(ctx, v, in)
@@ -385,6 +391,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "device_timeline",
 		Description: "Bytes over time for one device, split by traffic type. The default series are virtual, subnet, and exit. Physical transport is included only when requested. scope defaults to the viewer's autoscope; scope=all selects any device in a permitted tailnet. Buckets are capped so the result stays small.",
+		InputSchema: timelineInSchema,
 		Annotations: readOnly("Device timeline"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in timelineIn) (*mcp.CallToolResult, timelineOut, error) {
 		out, err := s.deviceTimeline(ctx, v, in)
@@ -392,7 +399,8 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "new_connections",
-		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups. lookbackComplete is false when stored data starts after the lookback begins, so a pair listed as new may simply predate the data.",
+		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups. lookbackComplete is false when stored data starts after the lookback begins, so a pair listed as new may simply predate the data. Pairs are unordered: src and dst are sorted by node id, not who started the connection.",
+		InputSchema: newConnectionsInSchema,
 		Annotations: readOnly("New connections"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newConnectionsIn) (*mcp.CallToolResult, newConnectionsOut, error) {
 		out, err := s.newConnections(ctx, v, in)
@@ -401,6 +409,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "stats_overview",
 		Description: "Network-wide totals for a window: protocol bytes, traffic-type bytes, flows, distinct pairs, and active nodes. This matches the stats overview route. physicalBytes is kept separate. Protocol totals include physical traffic only when trafficTypes requests it. DERP region numbers are not counted as service ports.",
+		InputSchema: statsOverviewInSchema,
 		Annotations: readOnly("Stats overview"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in statsOverviewIn) (*mcp.CallToolResult, statsOverviewOut, error) {
 		out, err := s.statsOverview(ctx, v, in)
