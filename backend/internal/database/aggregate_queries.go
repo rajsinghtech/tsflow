@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -995,7 +996,19 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 			if err != nil {
 				return nil, err
 			}
+			if !statsSinglePassDisabled {
+				stats, err := singlePassRollupStats(ctx, tx, tailnetID, bs, plan, trafficTypes)
+				if !errors.Is(err, errStatsSinglePass) {
+					return stats, err
+				}
+			}
 			return queryTrafficStatsFromRollup(ctx, tx, tailnetID, bs, plan, trafficTypes)
+		}
+	}
+	if !statsSinglePassDisabled {
+		stats, err := singlePassMinuteStats(ctx, tx, tailnetID, bs, ranges, trafficTypes)
+		if !errors.Is(err, errStatsSinglePass) {
+			return stats, err
 		}
 	}
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
