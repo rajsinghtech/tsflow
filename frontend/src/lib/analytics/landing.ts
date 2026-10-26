@@ -1,6 +1,6 @@
 export const LAST_TAB_KEY = 'tsflow-last-tab';
 
-export const KNOWN_TABS = ['/', '/me', '/analytics', '/new', '/policy'] as const;
+export const KNOWN_TABS = ['/', '/me', '/analytics', '/policy'] as const;
 
 export function showMeTab(login: string | null | undefined): boolean {
 	return !!login?.trim();

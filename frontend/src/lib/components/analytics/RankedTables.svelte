@@ -320,8 +320,8 @@
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
 								<th class="pb-2 pr-4">#</th>
-								<th class="pb-2 pr-4">Source</th>
-								<th class="pb-2 pr-4">Destination</th>
+								<th class="pb-2 pr-4" title="Pairs are unordered. The order is not who started the connection.">Endpoint A</th>
+								<th class="pb-2 pr-4" title="Pairs are unordered. The order is not who started the connection.">Endpoint B</th>
 								{@render metricHeader('Traffic', 'bytes', true)}
 								{@render metricHeader('Flows', 'flows', false)}
 							</tr>
@@ -355,7 +355,7 @@
 							</div>
 							<div class="mt-0.5 flex min-w-0 items-center gap-1 text-xs">
 								<span class="truncate">{@render nodeName(pair.srcHostname, pair.srcNodeId)}</span>
-								<span class="shrink-0 text-muted-foreground">&rarr;</span>
+								<span class="shrink-0 text-muted-foreground" aria-label="and" title="Pairs are unordered">&harr;</span>
 								<span class="truncate">{@render nodeName(pair.dstHostname, pair.dstNodeId)}</span>
 							</div>
 							<div class="mt-0.5 text-[10px] text-muted-foreground">

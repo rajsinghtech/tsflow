@@ -180,3 +180,16 @@ export async function applyPolicyElkLayout(
 		};
 	}
 }
+
+/**
+ * Options for fitting the policy graph to the screen. Fitting zooms in as far
+ * as it can, so a small policy (one or two nodes) filled the whole canvas at
+ * several times normal size. Cap the auto-fit zoom; users can still zoom in
+ * further by hand.
+ */
+export const POLICY_FIT_MAX_ZOOM = 1.25;
+
+export function policyFitOptions(padding: number, duration?: number) {
+	return { padding, duration, maxZoom: POLICY_FIT_MAX_ZOOM };
+}
+

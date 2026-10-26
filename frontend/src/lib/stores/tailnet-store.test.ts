@@ -6,6 +6,7 @@ import { tailscaleService } from '#lib/services/tailscale-service';
 import { fetchAndRenderPolicy, policyGraph } from '#lib/stores/policy-store';
 import { devices, networkLogs } from '#lib/stores/network-store';
 import { statsSummary } from '#lib/stores/stats-store';
+import { dataSourceStore } from '#lib/stores/data-source-store';
 import {
 	chooseTailnet,
 	hrefWithTailnet,
@@ -220,17 +221,47 @@ describe('tailnet url and cache', () => {
 		expect(calls.some((url) => url.includes('tailnet=default'))).toBe(false);
 	});
 
-	it('reloads the new connections range for the new tailnet without loading the graph', async () => {
+	it('reloads only the range for the new tailnet on Me without loading the graph', async () => {
 		tailnetList = several;
 		await tailscaleService.getDevices();
 		calls.length = 0;
-		setTailnetPathReader(() => '/new');
+		setTailnetPathReader(() => '/me');
 
 		await selectTailnet('lab');
 
 		expect(calls).toContain('/api/flow-logs/range?tailnet=lab');
 		expect(calls.some((url) => url.includes('/flow-logs/aggregated'))).toBe(false);
 		expect(calls.some((url) => url.includes('/api/devices'))).toBe(false);
+	});
+
+	it('keeps a pinned range when the tailnet changes', async () => {
+		tailnetList = several;
+		await tailscaleService.getDevices();
+		const start = new Date('2026-10-20T09:00:00Z');
+		const end = new Date('2026-10-20T15:00:00Z');
+		dataSourceStore.setSelectedRange(start, end);
+		setTailnetPathReader(() => '/analytics');
+
+		await selectTailnet('lab');
+
+		const state = get(dataSourceStore);
+		expect(state.followLatest).toBe(false);
+		expect(state.selectedStart?.getTime()).toBe(start.getTime());
+		expect(state.selectedEnd?.getTime()).toBe(end.getTime());
+	});
+
+	it('keeps a live window length when the tailnet changes', async () => {
+		tailnetList = several;
+		await tailscaleService.getDevices();
+		const threeHours = 3 * 60 * 60 * 1000;
+		dataSourceStore.showLatestWindow(null, threeHours);
+		setTailnetPathReader(() => '/me');
+
+		await selectTailnet('lab');
+
+		const state = get(dataSourceStore);
+		expect(state.followLatest).toBe(true);
+		expect(state.latestWindowMs).toBe(threeHours);
 	});
 });
 

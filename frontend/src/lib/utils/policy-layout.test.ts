@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import appCss from '../../app.css?raw';
 import layoutSource from './policy-layout.ts?raw';
+import { policyFitOptions } from './policy-layout';
+import graphSource from '../components/policy/PolicyGraph.svelte?raw';
 
 const LIGHT_NEUTRALS = {
 	'--color-policy-ip': '#4b5563',
@@ -113,5 +115,21 @@ describe('policy neutral node colors', () => {
 		expect(colors).toContain("unknown: 'var(--color-policy-unknown)'");
 		expect(colors).not.toContain('#4b5563');
 		expect(colors).not.toContain('#111827');
+	});
+});
+
+describe('policyFitOptions', () => {
+	it('caps the auto-fit zoom so a one-node policy is not blown up', () => {
+		const opts = policyFitOptions(0.15, 400);
+		expect(opts.maxZoom).toBeLessThanOrEqual(1.5);
+		expect(opts.padding).toBe(0.15);
+		expect(opts.duration).toBe(400);
+	});
+
+	it('is used by every fit in the policy graph', () => {
+		const fits = graphSource.match(/fitView(Ref)?\(([^)]*)\)/g) ?? [];
+		expect(fits.length).toBeGreaterThan(0);
+		for (const call of fits) expect(call).toContain('policyFitOptions(');
+		expect(graphSource).toContain('fitViewOptions={policyFitOptions(');
 	});
 });
