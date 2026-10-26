@@ -361,3 +361,42 @@ func TestPollCatchUpStartsAtRetention(t *testing.T) {
 		t.Fatalf("first request starts %v, before the retention cutoff %v", starts[0], cutoff)
 	}
 }
+
+// The logs API takes whole-second times. A range whose leftover chunk is
+// under a second used to format to start == end, and the poll failed.
+func TestPollRangeBoundariesAreWholeSeconds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"logs":[]}`))
+	}))
+	defer server.Close()
+
+	store, err := database.NewSQLiteStore(t.TempDir() + "/poller.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := NewTailscaleService(&config.Config{TailscaleAPIURL: server.URL, TailscaleTailnet: "example.com"})
+	cfg := DefaultPollerConfig()
+	cfg.PollDelay = 0
+	poller := NewPoller(service, store, cfg)
+
+	// Ten polls in quick succession: each one starts where the last ended,
+	// a few milliseconds back, so every range is under a second long.
+	for i := 0; i < 10; i++ {
+		if err := poller.poll(ctx); err != nil {
+			t.Fatalf("poll %d: %v", i, err)
+		}
+	}
+	state, err := store.GetPollState(ctx, database.DefaultTailnetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastPollEnd.Nanosecond() != 0 {
+		t.Fatalf("cursor %v is not on a whole second", state.LastPollEnd)
+	}
+}
