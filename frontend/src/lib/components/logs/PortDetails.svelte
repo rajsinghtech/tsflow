@@ -1,11 +1,8 @@
 <script lang="ts">
 	import { uiStore, filteredNodes, rawLogs, devices } from '#lib/stores';
-	import { formatBytes, extractIP, extractPort, getProtocolName, wellKnownPortName } from '#lib/utils';
+	import { formatBytes, extractIP } from '#lib/utils';
+	import { portUsageForNode } from '#lib/utils/port-usage';
 	import type { NetworkLog } from '#lib/types';
-
-	function getPortName(port: number): string {
-		return wellKnownPortName(port) || (port > 0 ? `Port ${port}` : 'Unknown');
-	}
 
 	// Build device ID to primary IP mapping (for resolving aggregated flow addresses)
 	const deviceIdToIP = $derived.by(() => {
@@ -30,80 +27,11 @@
 		return $filteredNodes.find((n) => n.id === selectedId) || null;
 	});
 
-	interface PortStat {
-		port: number;
-		name: string;
-		protocol: string;
-		txBytes: number;
-		rxBytes: number;
-		connections: number;
-	}
-
 	const portData = $derived.by(() => {
 		if (!selectedNode) return { stats: [], totalCount: 0 };
-
 		const nodeIPs = new Set(selectedNode.ips || []);
 		nodeIPs.add(selectedNode.id);
-		const portMap = new Map<string, PortStat>();
-
-		$rawLogs.forEach((log: NetworkLog) => {
-			const allTraffic = [
-				...(log.virtualTraffic || []),
-				...(log.exitTraffic || []),
-				...(log.subnetTraffic || [])
-			];
-
-			allTraffic.forEach((t) => {
-				const srcIP = resolveToNodeIP(t.src);
-				const dstIP = resolveToNodeIP(t.dst);
-				const dstPort = extractPort(t.dst) || 0;
-				const proto = getProtocolName(t.proto || 0);
-
-				// TX-only: attribute txBytes based on whether the selected node is
-				// the sender (src) or receiver (dst) in this flow entry
-				const nodeIsSrc = nodeIPs.has(srcIP);
-				const nodeIsDst = nodeIPs.has(dstIP);
-				if (!nodeIsSrc && !nodeIsDst) return;
-
-				const addPort = (port: number, protocol: string, bytes: number) => {
-					if (port <= 0) return;
-					const key = `${port}-${protocol}`;
-					const existing = portMap.get(key);
-					const txAdd = nodeIsSrc ? bytes : 0;
-					// If both endpoints belong to the selected node, this is a self-flow;
-					// count it once as TX instead of also attributing it as RX.
-					const rxAdd = nodeIsDst && !nodeIsSrc ? bytes : 0;
-
-					if (existing) {
-						existing.txBytes += txAdd;
-						existing.rxBytes += rxAdd;
-						existing.connections += 1;
-					} else {
-						portMap.set(key, {
-							port,
-							name: getPortName(port),
-							protocol,
-							txBytes: txAdd,
-							rxBytes: rxAdd,
-							connections: 1
-						});
-					}
-				};
-
-				if (t.ports?.length) {
-					for (const stat of t.ports) {
-						addPort(stat.port, getProtocolName(stat.proto), stat.bytes || 0);
-					}
-				} else {
-					if (dstPort === 0) return;
-					addPort(dstPort, proto, t.txBytes || 0);
-				}
-			});
-		});
-
-		const allPorts = Array.from(portMap.values())
-			.sort((a, b) => (b.txBytes + b.rxBytes) - (a.txBytes + a.rxBytes));
-
+		const allPorts = portUsageForNode($rawLogs, nodeIPs, resolveToNodeIP);
 		return {
 			stats: allPorts.slice(0, 20),
 			totalCount: allPorts.length
@@ -166,7 +94,7 @@
 						<th class="px-3 py-1.5 font-medium">Port</th>
 						<th class="px-3 py-1.5 font-medium">Service</th>
 						<th class="px-3 py-1.5 font-medium">Proto</th>
-						<th class="px-3 py-1.5 font-medium text-right">Connections</th>
+						<th class="px-3 py-1.5 font-medium text-right" title="Distinct peers on this port">Peers</th>
 						<th class="px-3 py-1.5 font-medium text-right">TX</th>
 						<th class="px-3 py-1.5 font-medium text-right">RX</th>
 						<th class="px-3 py-1.5 font-medium text-right">Total</th>
@@ -178,7 +106,7 @@
 							<td class="px-3 py-1 font-mono text-primary">{stat.port}</td>
 							<td class="px-3 py-1">{stat.name}</td>
 							<td class="px-3 py-1 uppercase text-muted-foreground">{stat.protocol}</td>
-							<td class="px-3 py-1 text-right">{stat.connections}</td>
+							<td class="px-3 py-1 text-right">{stat.peers}</td>
 							<td class="px-3 py-1 text-right text-blue-400">{formatBytes(stat.txBytes)}</td>
 							<td class="px-3 py-1 text-right text-emerald-400">{formatBytes(stat.rxBytes)}</td>
 							<td class="px-3 py-1 text-right font-medium">{formatBytes(stat.txBytes + stat.rxBytes)}</td>
@@ -198,7 +126,7 @@
 							<span class="text-xs">{stat.name}</span>
 							<span class="text-[10px] uppercase text-muted-foreground">{stat.protocol}</span>
 						</div>
-						<span class="text-[10px] text-muted-foreground">{stat.connections} conn</span>
+						<span class="text-[10px] text-muted-foreground">{stat.peers} {stat.peers === 1 ? 'peer' : 'peers'}</span>
 					</div>
 					<div class="mt-0.5 flex gap-3 text-[10px]">
 						<span class="text-blue-400">TX {formatBytes(stat.txBytes)}</span>
