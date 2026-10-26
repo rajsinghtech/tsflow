@@ -171,7 +171,12 @@ func parseDuration(raw string) (time.Duration, error) {
 		if n > float64(maxParsedDuration/unit) {
 			return 0, fmt.Errorf("duration too large")
 		}
-		total += time.Duration(n * float64(unit))
+		part := time.Duration(n * float64(unit))
+		// Cap the running sum too, or enough parts wrap around.
+		if total > maxParsedDuration-part {
+			return 0, fmt.Errorf("duration too large")
+		}
+		total += part
 		rest = strings.TrimLeft(rest[j:], " ")
 	}
 	if total <= 0 {

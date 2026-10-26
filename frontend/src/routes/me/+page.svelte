@@ -10,6 +10,7 @@
 	import DeviceTimeline from '#lib/components/charts/DeviceTimeline.svelte';
 	import { dataSourceStore, filterStore, queryTimeWindow, viewerStore } from '#lib/stores';
 	import { pageRefresh } from '#lib/stores/live-mode';
+	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { tailscaleService } from '#lib/services';
 	import { formatBytes } from '#lib/utils';
 
@@ -105,11 +106,12 @@
 		const range = $queryTimeWindow;
 		const types = $filterStore.trafficTypes;
 		const refreshCount = $pageRefresh;
+		const tailnet = $selectedTailnetId ?? '';
 		if (!rangeReady) return;
 		if (!range?.start || !range?.end || range.end <= range.start) return;
 		// The range poll replaces the window with equal dates while live; only a
 		// real change or an explicit refresh reloads.
-		const loadKey = [range.start.getTime(), range.end.getTime(), types.join(','), refreshCount].join('|');
+		const loadKey = [tailnet, range.start.getTime(), range.end.getTime(), types.join(','), refreshCount].join('|');
 		if (loadKey === lastLoadKey) return;
 		lastLoadKey = loadKey;
 		void load(range.start, range.end, types);
@@ -205,7 +207,7 @@
 							{#each newPairs as pair}
 								<li class="flex items-center justify-between gap-3 py-1">
 									<span class="min-w-0 truncate">
-										{pair.srcHostname || pair.srcNodeId} → {pair.dstHostname || pair.dstNodeId}
+										{pair.srcHostname || pair.srcNodeId} <span aria-label="and" title="Pairs are unordered">↔</span> {pair.dstHostname || pair.dstNodeId}
 										<span class="block text-xs text-muted-foreground">{seenLabel(pair.firstSeen)}</span>
 									</span>
 									<span class="shrink-0 tabular-nums text-muted-foreground">{formatBytes(pair.totalBytes)}</span>

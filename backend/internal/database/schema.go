@@ -199,6 +199,11 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if err := s.backfillHourRollups(ctx); err != nil {
 		return fmt.Errorf("failed to backfill hourly node pair rollups: %w", err)
 	}
+	// After every rebuild of node_pairs above, so the counters are created
+	// on the final table.
+	if err := s.ensureBucketRowCounts(ctx); err != nil {
+		return err
+	}
 
 	log.Printf("Database initialized at %s", s.dbPath)
 	return nil

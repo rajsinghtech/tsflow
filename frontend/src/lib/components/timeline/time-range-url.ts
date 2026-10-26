@@ -90,7 +90,7 @@ export function parseRangeInput(raw: string, now: Date, zone: TimeZoneMode = 'lo
 	if (since) {
 		const start = parseInstant(since[1], now, zone, true);
 		if (!start) return { ok: false, message: "Couldn't read that start time." };
-		return { ok: true, intent: { kind: 'since', start: rollClock(start, now, isClock(since[1])) } };
+		return { ok: true, intent: { kind: 'since', start: rollClock(start, now, isClock(since[1]), zone) } };
 	}
 
 	const pair = splitPair(text);
@@ -99,17 +99,19 @@ export function parseRangeInput(raw: string, now: Date, zone: TimeZoneMode = 'lo
 		const end = parseInstant(pair[1], now, zone, true);
 		if (!start || !end) return { ok: false, message: "Couldn't read that range." };
 		const clocks = isClock(pair[0]) && isClock(pair[1]);
-		let startMs = start.getTime();
-		let endMs = end.getTime();
-		if (endMs <= startMs && clocks) endMs += DAY_MS;
+		let startDate = start;
+		let endDate = end;
+		if (endDate.getTime() <= startDate.getTime() && clocks) endDate = shiftDays(endDate, 1, zone);
+		const startMs = startDate.getTime();
+		const endMs = endDate.getTime();
 		if (endMs <= startMs) return { ok: false, message: 'End must be after start.' };
 		if (endMs - startMs < MIN_WINDOW_MS) return { ok: false, message: 'Use at least 5 minutes.' };
 		// Like "since 9am", a clock range that has not started yet means yesterday.
 		if (clocks && startMs > now.getTime()) {
-			startMs -= DAY_MS;
-			endMs -= DAY_MS;
+			startDate = shiftDays(startDate, -1, zone);
+			endDate = shiftDays(endDate, -1, zone);
 		}
-		return { ok: true, intent: { kind: 'absolute', start: new Date(startMs), end: new Date(endMs) } };
+		return { ok: true, intent: { kind: 'absolute', start: startDate, end: endDate } };
 	}
 
 	const single = parseInstant(text, now, zone, false);
@@ -291,9 +293,18 @@ function parseClock(text: string): { hour: number; minute: number } | null {
 	return { hour, minute };
 }
 
-function rollClock(start: Date, now: Date, clock: boolean): Date {
+function rollClock(start: Date, now: Date, clock: boolean, zone: TimeZoneMode): Date {
 	if (!clock || start.getTime() <= now.getTime()) return start;
-	return new Date(start.getTime() - 24 * 60 * 60 * 1000);
+	return shiftDays(start, -1, zone);
+}
+
+// Moves a clock time by calendar days. In local time a day across a DST
+// change is 23 or 25 hours, so keep the wall clock instead of adding 24h.
+function shiftDays(date: Date, days: number, zone: TimeZoneMode): Date {
+	if (zone === 'utc') return new Date(date.getTime() + days * DAY_MS);
+	const shifted = new Date(date.getTime());
+	shifted.setDate(shifted.getDate() + days);
+	return shifted;
 }
 
 function zoneParts(now: Date, zone: TimeZoneMode): { year: number; month: number; day: number } {

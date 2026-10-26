@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -196,11 +197,14 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggreg
 	// Directional metadata is kept as JSON for consistency with the existing
 	// protocol and port aggregates. Keep the merge expressions here, alongside
 	// the legacy metadata merge, so one upsert remains atomic.
+	// A bare number in a protocol bytes column comes from rows written by old
+	// builds. json_each gives it a NULL key, and json_group_object would drop
+	// that group, so the merge keys it as protocol 0 to keep its bytes.
 	mergeProtocolBytes := func(existing, incoming string) string {
 		return fmt.Sprintf(`(
 				SELECT COALESCE(json_group_object(proto, bytes), '{}')
 				FROM (
-					SELECT CAST(key AS INTEGER) AS proto,
+					SELECT CAST(COALESCE(key, 0) AS INTEGER) AS proto,
 					       SUM(CAST(value AS INTEGER)) AS bytes
 					FROM (
 						SELECT key, value FROM json_each(
@@ -266,7 +270,7 @@ func upsertNodePairsTx(ctx context.Context, tx *sql.Tx, tailnetID string, aggreg
 			protocol_bytes = (
 				SELECT COALESCE(json_group_object(proto, bytes), '{}')
 				FROM (
-					SELECT CAST(key AS INTEGER) AS proto,
+					SELECT CAST(COALESCE(key, 0) AS INTEGER) AS proto,
 					       SUM(CAST(value AS INTEGER)) AS bytes
 					FROM (
 						SELECT key, value FROM json_each(
@@ -992,7 +996,19 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 			if err != nil {
 				return nil, err
 			}
+			if !statsSinglePassDisabled {
+				stats, err := singlePassRollupStats(ctx, tx, tailnetID, bs, plan, trafficTypes)
+				if !errors.Is(err, errStatsSinglePass) {
+					return stats, err
+				}
+			}
 			return queryTrafficStatsFromRollup(ctx, tx, tailnetID, bs, plan, trafficTypes)
+		}
+	}
+	if !statsSinglePassDisabled {
+		stats, err := singlePassMinuteStats(ctx, tx, tailnetID, bs, ranges, trafficTypes)
+		if !errors.Is(err, errStatsSinglePass) {
+			return stats, err
 		}
 	}
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)

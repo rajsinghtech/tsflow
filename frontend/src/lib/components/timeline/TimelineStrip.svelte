@@ -43,6 +43,11 @@
 	// Peak covers the whole strip, the same span the line and its marker show.
 	const stripPeak = $derived(peakBin(rate));
 
+	// The chart reads the stored bandwidth series, which has no traffic type
+	// split, so say that the Traffic Type filter does not apply to it.
+	const TIMEBAR_SCOPE_TITLE =
+		"Virtual, subnet, and exit traffic. The Traffic Type filter doesn't change this chart.";
+
 	const UNIT_KEY = 'tsflow-timebar-unit';
 	let unit = $state<'bits' | 'bytes'>(
 		typeof localStorage !== 'undefined' && localStorage.getItem(UNIT_KEY) === 'bytes' ? 'bytes' : 'bits'
@@ -83,6 +88,11 @@
 				<span>Bytes per {slotLabel((view.end - view.start) / 96)}</span>
 			{/if}
 			<span class="sr-only">Hatched bands are gaps with no data, not zero traffic.</span>
+			<span
+				class="ml-auto truncate text-[10px]"
+				data-testid="timebar-scope"
+				title={TIMEBAR_SCOPE_TITLE}
+			>All traffic<span class="sr-only">. {TIMEBAR_SCOPE_TITLE}</span></span>
 			<div class="flex shrink-0 items-center rounded-md bg-muted/60 p-0.5 text-[10px]" role="group" aria-label="Chart unit">
 				{#each [['bits', 'bits/s'], ['bytes', 'bytes']] as [value, text]}
 					<button

@@ -13,7 +13,7 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - Opt-in access control for internal deploys: tsnet WhoIs or a trusted proxy, capability or group grants (#386, #392, #398)
 - Analytics page with ranked talkers and pairs, search, paging and owners (#396, #397)
 - Filter the graph and analytics by tag and login (#405)
-- New connections: src/dst pairs first seen in the selected window (#407)
+- New connections: src/dst pairs first seen in the selected window, in the API, MCP and the Me tab (#407)
 - Per-device timeline with top peers (#408)
 - Me tab for the signed-in viewer (#410)
 - Time range in the header and in the URL, with free-text ranges like `last 3 hours` (#415)
@@ -88,6 +88,7 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - A crashed graph layout retries fast instead of freezing the tab (#473)
 - The Traffic header count is labeled pairs (#471)
 - Empty ranges say when the poller can't fetch flow logs (#464)
+- The New tab is gone; old `/new` links open Analytics with the same query string
 
 ### Mobile
 

@@ -171,6 +171,22 @@ function createDataSourceStore() {
 			dataRangeGeneration++;
 			pollerStatusRequest = null;
 			set(defaultState);
+		},
+
+		// Drop the stored range and poller status but keep the chosen window, so
+		// switching tailnets doesn't quietly fall back to the default 2h.
+		resetKeepWindow: () => {
+			dataRangeRequest = null;
+			dataRangeGeneration++;
+			pollerStatusRequest = null;
+			update((s) => ({
+				...defaultState,
+				selectedStart: s.selectedStart,
+				selectedEnd: s.selectedEnd,
+				latestWindowMs: s.latestWindowMs,
+				followLatest: s.followLatest,
+				anchoredStart: s.anchoredStart
+			}));
 		}
 	};
 }
