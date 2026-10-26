@@ -14,7 +14,7 @@
 	import '@xyflow/svelte/dist/style.css';
 	import PolicyNode from './PolicyNode.svelte';
 	import PolicyEdge from './PolicyEdge.svelte';
-	import { NODE_COLORS, isFastRenderMode, applyPolicyElkLayout } from '#lib/utils/policy-layout';
+	import { NODE_COLORS, isFastRenderMode, applyPolicyElkLayout, policyFitOptions } from '#lib/utils/policy-layout';
 	import { runQuery, clearQuery } from '#lib/stores/policy-store';
 	import { themeStore } from '#lib/stores';
 
@@ -74,7 +74,7 @@
 				flowEdgesStore.set(le);
 				// Auto-fit after layout
 				requestAnimationFrame(() => {
-					if (fitViewRef) fitViewRef({ duration: 400, padding: 0.15 });
+					if (fitViewRef) fitViewRef(policyFitOptions(0.15, 400));
 				});
 			})
 			.finally(() => {
@@ -101,7 +101,7 @@
 	function captureFlowInstance() {
 		const { fitView } = useSvelteFlow();
 		fitViewRef = fitView;
-		requestAnimationFrame(() => fitView({ duration: 300, padding: 0.1 }));
+		requestAnimationFrame(() => fitView(policyFitOptions(0.1, 300)));
 	}
 </script>
 
@@ -119,6 +119,7 @@
 				{edgeTypes}
 				{colorMode}
 				fitView
+				fitViewOptions={policyFitOptions(0.1)}
 				minZoom={0.01}
 				maxZoom={10}
 				proOptions={{ hideAttribution: true }}
