@@ -360,7 +360,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "top_pairs",
-		Description: "Rank device pairs by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope and hides pairs touching other devices; scope=all clears that filter. Tailnet allowlists still apply. The default window is the last hour and the default limit is 20.",
+		Description: "Rank device pairs by traffic over a window using stored rollups. Physical transport is excluded unless trafficTypes includes physical. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope and hides pairs touching other devices; scope=all clears that filter. Tailnet allowlists still apply. The default window is the last hour and the default limit is 20. Pairs are unordered: src and dst are sorted by node id, not who started the connection.",
 		Annotations: readOnly("Top pairs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rankedIn) (*mcp.CallToolResult, pairsOut, error) {
 		out, err := s.topPairs(ctx, v, in)
@@ -392,7 +392,7 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "new_connections",
-		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups. lookbackComplete is false when stored data starts after the lookback begins, so a pair listed as new may simply predate the data.",
+		Description: "List pairs first seen in the window: present in the window and absent from the preceding lookback. A device talking to itself is left out. Physical pairs are excluded unless requested. DERP relays are labeled DERP relay. scope defaults to the viewer's autoscope; scope=all includes every pair in the permitted tailnet. Results come from stored rollups. lookbackComplete is false when stored data starts after the lookback begins, so a pair listed as new may simply predate the data. Pairs are unordered: src and dst are sorted by node id, not who started the connection.",
 		Annotations: readOnly("New connections"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newConnectionsIn) (*mcp.CallToolResult, newConnectionsOut, error) {
 		out, err := s.newConnections(ctx, v, in)
