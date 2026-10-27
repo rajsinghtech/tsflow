@@ -33,6 +33,8 @@ Any variable read through the config helpers also accepts a `VITE_` prefix, for 
 | `TSFLOW_TRUSTED_PROXIES` | - | Proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the rate limit (100 requests a minute) and shows in request logs. Unset means the TCP peer. |
 | `TSFLOW_MCP_ENABLED` | `false` | Serve a read-only MCP endpoint at `/mcp`. |
 | `TSFLOW_METRICS_ADDR` | - | Serve Prometheus metrics at `/metrics` on this address, for example `:9090`. Its own plain listener, never behind access control. Set it to `PORT` to share the UI listener. See [Metrics](metrics.md). |
+| `TSFLOW_METRICS_TRAFFIC` | `false` | Add traffic metrics: byte, packet and flow counters by traffic type and protocol, and the last 15 minutes by tag, user and port, top 20 each. Needs `TSFLOW_METRICS_ADDR`. See [Traffic metrics](metrics.md#traffic-metrics). |
+| `TSFLOW_METRICS_TOP_TALKERS` | `0` | List this many top devices by bytes over the last 15 minutes, up to 100. `0` lists none. Needs `TSFLOW_METRICS_ADDR`. |
 | `TSFLOW_LOG_LEVEL` | - | `debug` logs every denied request instead of one per peer and reason a minute. |
 
 ## tsnet serve mode

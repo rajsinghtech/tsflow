@@ -182,6 +182,8 @@ JSON uses the same fields:
 | `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
 | `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
 | `TSFLOW_METRICS_ADDR` | Serve Prometheus metrics at `/metrics` on this address, for example `:9090`. Off unless set. See [Prometheus metrics](#prometheus-metrics). | - |
+| `TSFLOW_METRICS_TRAFFIC` | Add traffic counters and top-20 tag, user and port breakdowns to `/metrics`. | `false` |
+| `TSFLOW_METRICS_TOP_TALKERS` | List this many top devices by bytes in `/metrics`, up to 100. | `0` |
 | `TSFLOW_LOG_LEVEL` | `debug` logs every denied request instead of one line per peer and reason a minute. | - |
 
 #### tsnet Serve Mode
@@ -551,6 +553,8 @@ Mount a volume to persist data: `-v tsflow_data:/app/data`
 ### Prometheus metrics
 
 `TSFLOW_METRICS_ADDR=:9090` serves Prometheus metrics at `http://<host>:9090/metrics`. It's off unless set. The listener is separate from the UI and only answers `/metrics`, so it's never behind access control and never on the tailnet in tsnet mode. You get poller freshness and errors per tailnet, ingest counts, database size, startup and counter-rebuild timings, HTTP latency by route, MCP tool calls, and the Go runtime and process metrics. The full list and some alert examples are in [docs/metrics.md](docs/metrics.md).
+
+`TSFLOW_METRICS_TRAFFIC=true` adds traffic: bytes, packets and flows by traffic type and protocol, plus the last 15 minutes by tag, user and port, each folded to the top 20 and `other`. `TSFLOW_METRICS_TOP_TALKERS=20` lists the top 20 devices. Both are off by default, and nothing is labeled per device unless you ask for top talkers, so the series count stays flat at 20,000 devices.
 
 ### Upgrading from 1.6
 

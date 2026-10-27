@@ -84,6 +84,9 @@ type Poller struct {
 	// pollObserver, when set, gets each finished poll's duration and error.
 	// The metrics endpoint uses it for the poll duration histogram.
 	pollObserver func(time.Duration, error)
+	// ingestObserver, when set, gets the aggregates of every committed poll
+	// or object. It runs on the poll goroutine after the commit.
+	ingestObserver func([]database.NodePairAggregate, []database.TrafficStats)
 
 	// Device identities last written to node_metadata, by id, so a device
 	// refresh only writes rows that changed. See persistDeviceIdentities.
@@ -367,6 +370,24 @@ func (p *Poller) SetPollObserver(fn func(time.Duration, error)) {
 	p.mu.Lock()
 	p.pollObserver = fn
 	p.mu.Unlock()
+}
+
+// SetIngestObserver sets a function called with the aggregates of every
+// committed poll or object-store object. Set it before Start. It must not
+// keep the slices.
+func (p *Poller) SetIngestObserver(fn func([]database.NodePairAggregate, []database.TrafficStats)) {
+	p.mu.Lock()
+	p.ingestObserver = fn
+	p.mu.Unlock()
+}
+
+func (p *Poller) observeIngest(pairs []database.NodePairAggregate, stats []database.TrafficStats) {
+	p.mu.RLock()
+	fn := p.ingestObserver
+	p.mu.RUnlock()
+	if fn != nil {
+		fn(pairs, stats)
+	}
 }
 
 // PollerMetrics is the poller state the metrics endpoint reads on scrape.
@@ -676,6 +697,7 @@ func (p *Poller) pollRange(ctx context.Context, start, end time.Time) error {
 
 	// Update rolling cache for fast live view queries
 	p.rollingCache.Update(nodePairs, totalBandwidth, nodeBandwidth, trafficStats)
+	p.observeIngest(nodePairs, trafficStats)
 
 	p.mu.Lock()
 	p.lastPollTime = time.Now()

@@ -434,6 +434,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		}
 
 		p.rollingCache.Update(nodePairs, totalBandwidth, nodeBandwidth, trafficStats)
+		p.observeIngest(nodePairs, trafficStats)
 		processedObjects++
 		processedFlows += len(flows)
 		if pollEnd.After(lastProcessed) {

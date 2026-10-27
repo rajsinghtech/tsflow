@@ -189,6 +189,12 @@ func TestHealthMetricsScrape(t *testing.T) {
 	if got, _ := value(t, fams, "tsflow_poll_duration_seconds", "tailnet", "broken", "result", "error"); got.GetHistogram().GetSampleCount() < 1 {
 		t.Errorf("broken failed polls = %v, want at least 1", got)
 	}
+	// Traffic metrics stay off even after real polls when not asked for.
+	for _, name := range trafficFamilies {
+		if _, ok := fams[name]; ok {
+			t.Errorf("%s served without TSFLOW_METRICS_TRAFFIC", name)
+		}
+	}
 	for _, name := range []string{"go_goroutines", "process_resident_memory_bytes", "process_cpu_seconds_total"} {
 		if _, ok := fams[name]; !ok {
 			t.Errorf("%s missing; the runtime and process collectors are not registered", name)

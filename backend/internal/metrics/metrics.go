@@ -36,6 +36,11 @@ type Options struct {
 	Version  string
 	Registry *services.Registry
 	Store    Store
+	// Traffic adds traffic counters and the tag, user and port window
+	// gauges (TSFLOW_METRICS_TRAFFIC).
+	Traffic bool
+	// TopTalkers lists this many top devices by bytes. 0 lists none.
+	TopTalkers int
 }
 
 // Metrics owns a private Prometheus registry, so nothing else in the process
@@ -52,6 +57,13 @@ type Metrics struct {
 	countersReady   prometheus.Gauge
 	countersSeconds prometheus.Gauge
 	collectErrors   prometheus.Counter
+
+	traffic         bool
+	trafficBytes    *prometheus.CounterVec
+	trafficPackets  *prometheus.CounterVec
+	trafficFlows    *prometheus.CounterVec
+	trafficProtocol *prometheus.CounterVec
+	trafficWindow   *trafficCollector
 }
 
 // HTTP buckets reach a minute because cold reads at large scale can take
@@ -126,6 +138,21 @@ func New(opts Options) *Metrics {
 		m.dbInitSeconds, m.countersReady, m.countersSeconds, m.collectErrors,
 		&pollerCollector{registry: opts.Registry, store: opts.Store, errors: m.collectErrors},
 	)
+	if opts.Traffic {
+		m.traffic = true
+		m.newTrafficCounters()
+	}
+	if opts.Traffic || opts.TopTalkers > 0 {
+		m.trafficWindow = &trafficCollector{
+			breakdowns: opts.Traffic,
+			topTalkers: opts.TopTalkers,
+			now:        time.Now,
+		}
+		if opts.Registry != nil {
+			m.trafficWindow.sources = registrySources(opts.Registry)
+		}
+		m.reg.MustRegister(m.trafficWindow)
+	}
 	return m
 }
 
@@ -141,7 +168,8 @@ func (m *Metrics) Handler() http.Handler {
 	})
 }
 
-// Instrument attaches the poll duration histogram to every poller.
+// Instrument attaches the poll duration histogram, and the traffic counters
+// when they are on, to every poller.
 func (m *Metrics) Instrument(reg *services.Registry) {
 	for _, entry := range reg.List() {
 		if entry == nil || entry.Poller == nil {
@@ -156,6 +184,9 @@ func (m *Metrics) Instrument(reg *services.Registry) {
 			}
 			ok.Observe(d.Seconds())
 		})
+		if m.traffic {
+			entry.Poller.SetIngestObserver(m.trafficObserver(entry.ID))
+		}
 	}
 }
 
