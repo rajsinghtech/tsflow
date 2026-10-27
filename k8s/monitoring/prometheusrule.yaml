@@ -1,0 +1,66 @@
+---
+# Generic alert examples for tsflow's /metrics (TSFLOW_METRICS_ADDR).
+# Tune the thresholds to your TSFLOW_POLL_INTERVAL and TSFLOW_POLL_DELAY.
+# Prometheus Operator may need a label like release: <your-release> here
+# to pick the rule up.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tsflow
+  labels:
+    app: tsflow
+spec:
+  groups:
+    - name: tsflow
+      rules:
+        - alert: TsflowPollerDown
+          expr: tsflow_poller_up == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: tsflow poller for {{ $labels.tailnet }} is not running
+        - alert: TsflowFlowLogsStale
+          # The newest minute normally trails now by TSFLOW_POLL_DELAY plus
+          # the poll interval, about 7 to 12 minutes with the defaults.
+          expr: time() - tsflow_flow_newest_timestamp_seconds > 1800
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: No new flow logs for {{ $labels.tailnet }} in 30 minutes
+        - alert: TsflowNoSuccessfulPoll
+          expr: time() - tsflow_poller_last_success_timestamp_seconds > 900 and tsflow_poller_last_success_timestamp_seconds > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: tsflow hasn't polled {{ $labels.tailnet }} successfully in 15 minutes
+        - alert: TsflowPollsFailing
+          expr: increase(tsflow_poller_errors_total[30m]) > 3
+          labels:
+            severity: warning
+          annotations:
+            summary: tsflow polls for {{ $labels.tailnet }} keep failing
+        - alert: TsflowHTTP5xx
+          expr: |
+            sum by (job, instance) (rate(tsflow_http_request_duration_seconds_count{code=~"5.."}[10m]))
+              / sum by (job, instance) (rate(tsflow_http_request_duration_seconds_count[10m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of tsflow requests are failing
+        - alert: TsflowMetricsReadErrors
+          expr: increase(tsflow_metrics_collect_errors_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: tsflow couldn't read some health values from its store while serving /metrics
+        - alert: TsflowCounterRebuildStuck
+          expr: tsflow_pair_row_counters_ready == 0 and (time() - process_start_time_seconds) > 3 * 3600
+          labels:
+            severity: info
+          annotations:
+            summary: tsflow's pair row counter rebuild has been running for over 3 hours

@@ -91,7 +91,41 @@ The top-N cutoffs keep the series count the same at 20 devices or 20,000: about 
 
 `TSFLOW_METRICS_TOP_TALKERS=20` adds `tsflow_top_talker_bytes{tailnet,node,node_id,direction}` for the 20 devices that moved the most bytes in the same window, up to 100. It's the only metric with a per-device label. Which devices are listed changes as traffic does, so read it as a current ranking, not a history per device.
 
+## Grafana dashboard
+
+[`k8s/monitoring/tsflow-dashboard.json`](../k8s/monitoring/tsflow-dashboard.json) covers all of the above. It works with Grafana 10 and 11 and a Prometheus data source.
+
+![tsflow Grafana dashboard](images/grafana-dashboard.png)
+
+- **Health:** poller up, flow log lag, time since the last good poll, poll duration p50/p95, poll errors, ingest rate, DB size, migration and row-counter rebuild status, HTTP p95 by route, status codes and 5xx share, and MCP calls and latency.
+- **Traffic:** bytes, packets and flows per second by traffic type and protocol. Top tags, users and ports as bar gauges and tables. Top talkers. Window freshness.
+- **Runtime:** CPU, memory, goroutines, GC, allocations and file descriptors.
+
+The variables at the top are the data source, `job`, `instance`, `tailnet` (multi-select) and a rate window. Counters move once per poll, so keep the window at two or three times `TSFLOW_POLL_INTERVAL`. The default is 15m. The traffic row needs `TSFLOW_METRICS_TRAFFIC=true`, the top talkers panels need `TSFLOW_METRICS_TOP_TALKERS`, and the MCP panels need `TSFLOW_MCP_ENABLED=true`. Panels for a feature that's off say so instead of showing an error.
+
+To import it by hand:
+
+1. In Grafana, go to **Dashboards → New → Import**.
+2. Upload `tsflow-dashboard.json` or paste its contents, then click **Import**.
+3. Pick your Prometheus data source from the **Data source** dropdown at the top of the dashboard. It starts on your default one. Nothing in the JSON hardcodes a data source.
+
+To provision it from a file, point a dashboard provider at the folder that holds the JSON:
+
+```yaml
+# grafana/provisioning/dashboards/tsflow.yaml
+apiVersion: 1
+providers:
+  - name: tsflow
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards/tsflow
+```
+
+On Kubernetes with the Grafana sidecar (kube-prometheus-stack or the grafana Helm chart), `kubectl apply -k k8s/monitoring` creates a `tsflow-grafana-dashboard` ConfigMap labeled `grafana_dashboard: "1"` along with the alert rules below. Apply it in a namespace the sidecar watches. It's separate from `k8s/kustomization.yaml`, so the main deploy doesn't need the Prometheus Operator CRDs.
+
 ## Alert examples
+
+[`k8s/monitoring/prometheusrule.yaml`](../k8s/monitoring/prometheusrule.yaml) has these and a few more as a `PrometheusRule`: poller down, stale flow logs, no successful poll, failing polls, 5xx share, metrics read errors and a stuck counter rebuild.
 
 ```yaml
 groups:

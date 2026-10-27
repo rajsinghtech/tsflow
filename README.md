@@ -556,6 +556,8 @@ Mount a volume to persist data: `-v tsflow_data:/app/data`
 
 `TSFLOW_METRICS_TRAFFIC=true` adds traffic: bytes, packets and flows by traffic type and protocol, plus the last 15 minutes by tag, user and port, each folded to the top 20 and `other`. `TSFLOW_METRICS_TOP_TALKERS=20` lists the top 20 devices. Both are off by default, and nothing is labeled per device unless you ask for top talkers, so the series count stays flat at 20,000 devices.
 
+There's a Grafana dashboard for all of it at [`k8s/monitoring/tsflow-dashboard.json`](k8s/monitoring/tsflow-dashboard.json), with a sidecar ConfigMap and example alert rules next to it. Import steps are in [docs/metrics.md](docs/metrics.md#grafana-dashboard).
+
 ### Upgrading from 1.6
 
 Your 1.6 config works as is. No variable was renamed or removed, no default changed, and nothing new is required. A table test in `backend/internal/config` runs every 1.6.2 config shape against the current loader to keep it that way. With no `TSFLOW_TAILNETS_FILE`, the single-tailnet variables work as before and the data is stored as tailnet `default`. MCP, access control, several tailnets and the health port stay off until you set them.
