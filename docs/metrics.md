@@ -55,6 +55,42 @@ Every `tailnet` label is the tailnet id from `TSFLOW_TAILNETS_FILE`, or `default
 
 A scrape reads poller state from memory, two single-row lookups per tailnet, and a file stat. It adds nothing to the poll or request path beyond one histogram observation.
 
+## Traffic metrics
+
+`TSFLOW_METRICS_TRAFFIC=true` adds traffic. It's off by default, separate from the health metrics above, and needs `TSFLOW_METRICS_ADDR`.
+
+### Counters
+
+Added once per poll from the aggregates the poller already built, so `rate()` works the usual way. Bytes are counted once, by the sender, like the rest of tsflow. They're counted when they're ingested, so a backfill after downtime shows up as a spike at ingest time, not spread over the hours it covers.
+
+| Metric | Labels | What it is |
+|--------|--------|------------|
+| `tsflow_traffic_bytes_total` | `tailnet`, `traffic_type` | Bytes. `traffic_type` is `virtual`, `subnet`, `exit` or `physical`. |
+| `tsflow_traffic_packets_total` | `tailnet`, `traffic_type` | Packets. |
+| `tsflow_traffic_flows_total` | `tailnet`, `traffic_type` | Flow records. |
+| `tsflow_traffic_protocol_bytes_total` | `tailnet`, `protocol` | Bytes by `tcp`, `udp` or `other`, not counting physical transport. |
+
+Physical traffic is the WireGuard transport underneath the other three, so add `traffic_type!="physical"` when you want what users sent.
+
+### Last 15 minutes
+
+Breakdowns are gauges over the last 15 minutes of ingested data, read from the in-memory cache on scrape and kept for 30 seconds. The newest minute is still being filled by later polls, so the window ends at its start. Physical transport is left out.
+
+| Metric | Labels | What it is |
+|--------|--------|------------|
+| `tsflow_tag_traffic_bytes`, `tsflow_tag_traffic_packets` | `tailnet`, `tag`, `direction` | Sent (`tx`) and received (`rx`) by devices with each tag. The top 20 tags, then `other`, plus `untagged` and `unknown` (addresses that aren't a tailnet device). A device with two tags counts in both. |
+| `tsflow_user_traffic_bytes`, `tsflow_user_traffic_packets` | `tailnet`, `user`, `direction` | The same by device owner. Tagged devices are owned by `tagged-devices`. |
+| `tsflow_port_traffic_bytes` | `tailnet`, `protocol`, `port` | The top 20 service ports, then `protocol="other",port="other"` for the rest. |
+| `tsflow_traffic_window_seconds` | `tailnet` | How much data is behind the gauges. Below 900 for the first 15 minutes after a start. |
+| `tsflow_traffic_window_end_timestamp_seconds` | `tailnet` | Where the window ends. |
+| `tsflow_traffic_window_compute_seconds` | | How long the last computation took. |
+
+The top-N cutoffs keep the series count the same at 20 devices or 20,000: about 200 traffic series per tailnet.
+
+### Top talkers
+
+`TSFLOW_METRICS_TOP_TALKERS=20` adds `tsflow_top_talker_bytes{tailnet,node,node_id,direction}` for the 20 devices that moved the most bytes in the same window, up to 100. It's the only metric with a per-device label. Which devices are listed changes as traffic does, so read it as a current ranking, not a history per device.
+
 ## Alert examples
 
 ```yaml

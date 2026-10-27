@@ -129,9 +129,11 @@ func main() {
 	var promMetrics *metrics.Metrics
 	if cfg.MetricsEnabled() {
 		promMetrics = metrics.New(metrics.Options{
-			Version:  Version,
-			Registry: registry,
-			Store:    metrics.SQLiteStore(store),
+			Version:    Version,
+			Registry:   registry,
+			Store:      metrics.SQLiteStore(store),
+			Traffic:    cfg.MetricsTraffic,
+			TopTalkers: cfg.MetricsTopTalkerCount(),
 		})
 		promMetrics.SetDBInitDuration(initDuration)
 		promMetrics.Instrument(registry)

@@ -84,6 +84,12 @@ type Config struct {
 	// MetricsAddr serves Prometheus metrics at /metrics on its own plain
 	// listener (TSFLOW_METRICS_ADDR, for example :9090). Empty means off.
 	MetricsAddr string
+	// MetricsTraffic adds traffic totals and window breakdowns by tag, user
+	// and port to /metrics (TSFLOW_METRICS_TRAFFIC). Off by default.
+	MetricsTraffic bool
+	// MetricsTopTalkers is how many top devices /metrics lists by bytes
+	// (TSFLOW_METRICS_TOP_TALKERS). Empty or 0 means none.
+	MetricsTopTalkers string
 	// Access is opt-in tailnet identity. The zero value leaves requests open.
 	Access Access
 }
@@ -137,6 +143,8 @@ func Load() *Config {
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
 		MetricsAddr:                strings.TrimSpace(os.Getenv("TSFLOW_METRICS_ADDR")),
+		MetricsTraffic:             parseBool(os.Getenv("TSFLOW_METRICS_TRAFFIC"), false),
+		MetricsTopTalkers:          strings.TrimSpace(os.Getenv("TSFLOW_METRICS_TOP_TALKERS")),
 	}
 	cfg.FlowObjectStoreWebIdentityTokenFile = strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE"))
 	cfg.Access = cfg.loadAccess()

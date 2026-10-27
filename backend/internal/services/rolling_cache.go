@@ -629,3 +629,70 @@ func mergePortJSON(existing, incoming string) string {
 	}
 	return string(encoded)
 }
+
+// WindowVisitor gets the rows of one cached window. Each callback may be nil.
+// Rows are pointers into the cache, valid only during the call.
+type WindowVisitor struct {
+	NodePair      func(*database.NodePairAggregate)
+	NodeBandwidth func(*database.NodeBandwidth)
+	TrafficStats  func(*database.TrafficStats)
+}
+
+// NewestBucket returns the newest minute bucket holding node pairs or
+// traffic stats.
+func (c *RollingWindowCache) NewestBucket() (int64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var newest int64
+	found := false
+	for bucket := range c.nodePairs {
+		if !found || bucket > newest {
+			newest, found = bucket, true
+		}
+	}
+	for bucket := range c.trafficStats {
+		if !found || bucket > newest {
+			newest, found = bucket, true
+		}
+	}
+	return newest, found
+}
+
+// VisitWindow calls v for every cached row with a bucket in [start, end)
+// under the read lock, without copying. It returns how many minute buckets
+// in the range hold traffic stats. The callbacks must not call the cache.
+func (c *RollingWindowCache) VisitWindow(start, end int64, v WindowVisitor) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if v.NodePair != nil {
+		for bucket, pairs := range c.nodePairs {
+			if bucket < start || bucket >= end {
+				continue
+			}
+			for i := range pairs {
+				v.NodePair(&pairs[i])
+			}
+		}
+	}
+	if v.NodeBandwidth != nil {
+		for bucket, nodes := range c.nodeBandwidth {
+			if bucket < start || bucket >= end {
+				continue
+			}
+			for _, nb := range nodes {
+				v.NodeBandwidth(nb)
+			}
+		}
+	}
+	buckets := 0
+	for bucket, ts := range c.trafficStats {
+		if bucket < start || bucket >= end {
+			continue
+		}
+		buckets++
+		if v.TrafficStats != nil {
+			v.TrafficStats(ts)
+		}
+	}
+	return buckets
+}
