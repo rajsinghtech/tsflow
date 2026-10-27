@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +34,9 @@ type Options struct {
 	// RateLimit, when set, runs before access checks on every /mcp request,
 	// as it does for /api. Tool calls run the same store queries as /api.
 	RateLimit gin.HandlerFunc
+	// ToolObserver, when set, gets each tools/call with its duration and
+	// whether it failed. A name no tool answered to is reported as unknown.
+	ToolObserver func(tool string, d time.Duration, failed bool)
 }
 
 // Viewer is the identity the access middleware attached to one HTTP request.
@@ -85,6 +89,8 @@ type Service struct {
 	version string
 	schemas *mcp.SchemaCache
 	http    http.Handler
+	// observe is Options.ToolObserver.
+	observe func(tool string, d time.Duration, failed bool)
 }
 
 // New builds the streamable HTTP handler. Each request gets the viewer
@@ -114,7 +120,34 @@ func (s *Service) serverFor(v Viewer) *mcp.Server {
 		SchemaCache:  s.schemas,
 	})
 	s.addTools(server, v)
+	if s.observe != nil {
+		server.AddReceivingMiddleware(s.toolMetrics)
+	}
 	return server
+}
+
+// toolMetrics reports tools/call requests to the observer. The SDK fails a
+// call to an unregistered tool with a protocol error and answers a known
+// tool's failure with IsError, so the tool label only ever carries
+// registered names or unknown.
+func (s *Service) toolMetrics(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		call, ok := req.(*mcp.CallToolRequest)
+		if !ok || call.Params == nil {
+			return next(ctx, method, req)
+		}
+		started := time.Now()
+		res, err := next(ctx, method, req)
+		tool := call.Params.Name
+		failed := err != nil
+		if err != nil {
+			tool = "unknown"
+		} else if r, ok := res.(*mcp.CallToolResult); ok && r != nil && r.IsError {
+			failed = true
+		}
+		s.observe(tool, time.Since(started), failed)
+		return res, err
+	}
 }
 
 // Mount registers POST, GET, and DELETE /mcp when opts.Enabled is set.
@@ -125,6 +158,7 @@ func Mount(router *gin.Engine, opts Options) {
 		return
 	}
 	svc := New(opts.Handlers, opts.Version)
+	svc.observe = opts.ToolObserver
 	handle := func(c *gin.Context) {
 		markReached(c)
 		viewer := Viewer{}

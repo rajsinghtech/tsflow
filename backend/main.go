@@ -21,6 +21,7 @@ import (
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
 	"github.com/rajsinghtech/tsflow/backend/internal/mcpserver"
+	"github.com/rajsinghtech/tsflow/backend/internal/metrics"
 	"github.com/rajsinghtech/tsflow/backend/internal/middleware"
 	"github.com/rajsinghtech/tsflow/backend/internal/services"
 	"github.com/rajsinghtech/tsflow/backend/internal/tsnetserve"
@@ -101,9 +102,11 @@ func main() {
 
 	// Initialize database schema
 	ctx := context.Background()
+	initStarted := time.Now()
 	if err := store.Init(ctx); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
+	initDuration := time.Since(initStarted)
 
 	// Create one service and poller per tailnet. Env-only configuration is a
 	// single entry with id default, which is what the current API reads.
@@ -121,14 +124,32 @@ func main() {
 	}
 	registry.LogConfigured()
 
+	// Metrics stay nil, and add nothing to any path, unless
+	// TSFLOW_METRICS_ADDR is set.
+	var promMetrics *metrics.Metrics
+	if cfg.MetricsEnabled() {
+		promMetrics = metrics.New(metrics.Options{
+			Version:  Version,
+			Registry: registry,
+			Store:    metrics.SQLiteStore(store),
+		})
+		promMetrics.SetDBInitDuration(initDuration)
+		promMetrics.Instrument(registry)
+	}
+
 	pollerCtx, pollerCancel := context.WithCancel(context.Background())
 	defer pollerCancel()
 	// Count pair rows stored before the per-minute counters existed. Until
 	// this finishes, the data range and poller status count node_pairs as
 	// before.
 	go func() {
-		if err := store.BuildPairRowCounts(pollerCtx); err != nil && pollerCtx.Err() == nil {
+		started := time.Now()
+		err := store.BuildPairRowCounts(pollerCtx)
+		if err != nil && pollerCtx.Err() == nil {
 			log.Printf("Warning: pair row counters not built, row counts will scan node_pairs: %v", err)
+		}
+		if promMetrics != nil {
+			promMetrics.PairRowCountersDone(time.Since(started), err)
 		}
 	}()
 	if err := registry.Start(pollerCtx); err != nil {
@@ -164,6 +185,9 @@ func main() {
 		router.Use(customLoggingMiddleware())
 	} else {
 		router = gin.Default()
+	}
+	if promMetrics != nil {
+		router.Use(promMetrics.Middleware())
 	}
 	trustedProxies, err := cfg.ClientIPTrustedProxies()
 	if err == nil {
@@ -241,6 +265,10 @@ func main() {
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
 	}
 
+	var mcpToolObserver func(string, time.Duration, bool)
+	if promMetrics != nil {
+		mcpToolObserver = promMetrics.ObserveMCPTool
+	}
 	mcpserver.Mount(router, mcpserver.Options{
 		Enabled:  cfg.MCPEnabled,
 		Access:   cfg.Access,
@@ -249,8 +277,28 @@ func main() {
 		Version:  Version,
 		// A separate budget from /api so MCP agents and the UI don't starve
 		// each other.
-		RateLimit: middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()),
+		RateLimit:    middleware.RateLimitMiddleware(middleware.DefaultRateLimitConfig()),
+		ToolObserver: mcpToolObserver,
 	})
+
+	// Metrics normally get their own listener. Pointing TSFLOW_METRICS_ADDR
+	// at PORT serves /metrics next to the UI instead, outside /api and its
+	// access checks.
+	var metricsSrv *http.Server
+	if promMetrics != nil {
+		if cfg.MetricsSharesMainPort() {
+			router.GET("/metrics", gin.WrapH(promMetrics.Handler()))
+			log.Printf("Metrics: /metrics on the main port %s", cfg.Port)
+		} else {
+			metricsSrv = newMetricsServer(cfg.MetricsListenAddr(), promMetrics.Handler())
+			go func() {
+				if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("FATAL metrics listener failed: %v", err)
+				}
+			}()
+			log.Printf("Metrics: http://%s/metrics", cfg.MetricsListenAddr())
+		}
+	}
 
 	// Register embedded frontend (must be after API routes)
 	if err := frontend.RegisterFrontend(router); err != nil {
@@ -423,6 +471,9 @@ func main() {
 		if healthSrv != nil {
 			healthSrv.Shutdown(shutdownCtx)
 		}
+		if metricsSrv != nil {
+			metricsSrv.Shutdown(shutdownCtx)
+		}
 		tsnetSrv.Close()
 	} else {
 		httpSrv := newHTTPServer("0.0.0.0:"+port, router)
@@ -437,6 +488,9 @@ func main() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("Error shutting down HTTP server: %v", err)
+		}
+		if metricsSrv != nil {
+			metricsSrv.Shutdown(shutdownCtx)
 		}
 		shutdownCancel()
 	}

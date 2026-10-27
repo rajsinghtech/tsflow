@@ -79,6 +79,11 @@ type Poller struct {
 	lastPollError      string
 	lastPollErrorTime  time.Time
 	cacheRefreshErrors int64
+	lastSuccessTime    time.Time
+
+	// pollObserver, when set, gets each finished poll's duration and error.
+	// The metrics endpoint uses it for the poll duration histogram.
+	pollObserver func(time.Duration, error)
 
 	// Device identities last written to node_metadata, by id, so a device
 	// refresh only writes rows that changed. See persistDeviceIdentities.
@@ -335,12 +340,16 @@ func (p *Poller) run(ctx context.Context, stopChan <-chan struct{}, doneChan cha
 // successful poll clears lastError, so a status that once failed does not
 // stay red after the source recovers. pollErrors keeps the history.
 func (p *Poller) pollAndRecord(ctx context.Context, label string) {
+	started := time.Now()
 	err := p.poll(ctx)
 	if ctx.Err() != nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.pollObserver != nil {
+		p.pollObserver(time.Since(started), err)
+	}
 	if err != nil {
 		log.Printf("%s failed: %v", label, err)
 		p.pollErrors++
@@ -349,6 +358,44 @@ func (p *Poller) pollAndRecord(ctx context.Context, label string) {
 		return
 	}
 	p.lastPollError = ""
+	p.lastSuccessTime = time.Now()
+}
+
+// SetPollObserver sets a function called after every poll with its
+// duration and error. Set it before Start.
+func (p *Poller) SetPollObserver(fn func(time.Duration, error)) {
+	p.mu.Lock()
+	p.pollObserver = fn
+	p.mu.Unlock()
+}
+
+// PollerMetrics is the poller state the metrics endpoint reads on scrape.
+type PollerMetrics struct {
+	Running         bool
+	LastSuccessTime time.Time
+	PollErrors      int64
+	TotalPolled     int64
+	LastPollCount   int
+	FlowBackend     string
+}
+
+// MetricsSnapshot returns the poller counters without building a map.
+func (p *Poller) MetricsSnapshot() PollerMetrics {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return PollerMetrics{
+		Running:         p.running,
+		LastSuccessTime: p.lastSuccessTime,
+		PollErrors:      p.pollErrors,
+		TotalPolled:     p.totalPolled,
+		LastPollCount:   p.lastPollCount,
+		FlowBackend:     p.config.FlowBackend,
+	}
+}
+
+// TailnetID is the tailnet this poller reads and writes.
+func (p *Poller) TailnetID() string {
+	return p.tailnetIDOrDefault()
 }
 
 func (p *Poller) tailnetIDOrDefault() string {

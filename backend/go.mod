@@ -18,6 +18,8 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.20.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.3
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.308.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -51,6 +53,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.5 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
@@ -90,6 +93,7 @@ require (
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
@@ -97,10 +101,13 @@ require (
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+	github.com/prometheus/common v0.71.0 // indirect
+	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.60.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
