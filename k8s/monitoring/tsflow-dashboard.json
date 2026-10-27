@@ -3153,6 +3153,18 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Port"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
           }
         ]
       },
@@ -3174,18 +3186,6 @@
         ]
       },
       "transformations": [
-        {
-          "id": "convertFieldType",
-          "options": {
-            "conversions": [
-              {
-                "targetField": "port",
-                "destinationType": "string"
-              }
-            ],
-            "fields": {}
-          }
-        },
         {
           "id": "merge",
           "options": {}
@@ -3870,7 +3870,7 @@
     {
       "type": "timeseries",
       "title": "Open file descriptors",
-      "description": "Open FDs against the process limit.",
+      "description": "Open file descriptors. The legend's max column is the process limit (process_max_fds) for comparison.",
       "id": 47,
       "datasource": {
         "type": "prometheus",
@@ -3900,7 +3900,7 @@
             "uid": "${datasource}"
           },
           "expr": "process_max_fds{job=~\"$job\",instance=~\"$instance\"}",
-          "legendFormat": "max {{instance}}",
+          "legendFormat": "limit {{instance}}",
           "refId": "B",
           "range": true,
           "instant": false
@@ -3938,25 +3938,16 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": "max.*"
+              "id": "byFrameRefID",
+              "options": "B"
             },
             "properties": [
               {
-                "id": "custom.lineStyle",
+                "id": "custom.hideFrom",
                 "value": {
-                  "fill": "dash",
-                  "dash": [
-                    10,
-                    10
-                  ]
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
                 }
               }
             ]
