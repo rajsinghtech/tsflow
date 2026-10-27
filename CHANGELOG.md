@@ -21,6 +21,7 @@ Upgrading from 1.6 needs no config changes. Read [Upgrading from 1.6](README.md#
 - MCP: relative time ranges like `now-2h` and `last 7d`, a `whoami` tool, week-long rankings that fit the query timeout at 20k devices, and setup docs for Claude Code, Claude Desktop and Cursor (#478, #479, #480, #481)
 - Opt-in Prometheus metrics at `/metrics` on their own listener with `TSFLOW_METRICS_ADDR`: poller freshness and errors, ingest, DB size, HTTP and MCP latency (#533)
 - Opt-in traffic metrics with `TSFLOW_METRICS_TRAFFIC`: counters by traffic type and protocol, top-20 tag, user and port breakdowns, and optional top talkers with `TSFLOW_METRICS_TOP_TALKERS` (#534)
+- Grafana dashboard for the Prometheus metrics, plus a sidecar ConfigMap and example alert rules in `k8s/monitoring` (#536)
 - `TSFLOW_HEALTH_PORT` for Kubernetes probes in tsnet mode (#399)
 - `TSFLOW_TRUSTED_PROXIES` to say which proxies may set the client address (#421)
 - Main-branch images at `ghcr.io/rajsinghtech/tsflow:main` (#394)

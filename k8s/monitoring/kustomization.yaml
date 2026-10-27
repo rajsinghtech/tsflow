@@ -1,0 +1,19 @@
+---
+# Optional monitoring extras, separate from ../kustomization.yaml:
+#   kubectl apply -k k8s/monitoring
+# The ConfigMap carries the label the Grafana sidecar (kube-prometheus-stack,
+# grafana helm chart) looks for. The PrometheusRule needs the Prometheus
+# Operator CRDs; drop it from resources if you don't run the operator.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - prometheusrule.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: tsflow-grafana-dashboard
+    files:
+      - tsflow-dashboard.json
+    options:
+      labels:
+        grafana_dashboard: "1"
