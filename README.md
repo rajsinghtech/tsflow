@@ -181,6 +181,7 @@ JSON uses the same fields:
 | `ALLOWED_CORS_ORIGINS` | Comma-separated origins allowed to call the API cross-origin. Unset, production allows none and development allows only loopback origins such as `http://localhost:3000` | unset |
 | `TSFLOW_TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the API rate limit (100 requests a minute) and appears in request logs. Unset means the TCP peer is used, so set this when tsflow runs behind a reverse proxy or ingress. Header access mode uses `TSFLOW_ACCESS_TRUSTED_PROXIES` when this is unset. | - |
 | `TSFLOW_MCP_ENABLED` | Serve a read-only MCP endpoint at `/mcp`. Off unless set to `true` or `1`. | `false` |
+| `TSFLOW_METRICS_ADDR` | Serve Prometheus metrics at `/metrics` on this address, for example `:9090`. Off unless set. See [Prometheus metrics](#prometheus-metrics). | - |
 | `TSFLOW_LOG_LEVEL` | `debug` logs every denied request instead of one line per peer and reason a minute. | - |
 
 #### tsnet Serve Mode
@@ -546,6 +547,10 @@ Things to ask once it's connected: "what were the top talkers in the last 2h?", 
 Raw flow-log endpoints are deprecated because raw events are not retained: use `/api/flow-logs/aggregated` for historical traffic. The legacy `/api/flow-logs` and `/api/devices/:deviceId/flows` routes return `410 Gone` with the replacement endpoint.
 
 Mount a volume to persist data: `-v tsflow_data:/app/data`
+
+### Prometheus metrics
+
+`TSFLOW_METRICS_ADDR=:9090` serves Prometheus metrics at `http://<host>:9090/metrics`. It's off unless set. The listener is separate from the UI and only answers `/metrics`, so it's never behind access control and never on the tailnet in tsnet mode. You get poller freshness and errors per tailnet, ingest counts, database size, startup and counter-rebuild timings, HTTP latency by route, MCP tool calls, and the Go runtime and process metrics. The full list and some alert examples are in [docs/metrics.md](docs/metrics.md).
 
 ### Upgrading from 1.6
 

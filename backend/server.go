@@ -21,3 +21,11 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 		IdleTimeout:       serverIdleTimeout,
 	}
 }
+
+// newMetricsServer serves only /metrics. Every other path is a 404, so the
+// metrics port never exposes a data route.
+func newMetricsServer(addr string, metrics http.Handler) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics)
+	return newHTTPServer(addr, mux)
+}

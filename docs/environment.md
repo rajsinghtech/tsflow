@@ -32,6 +32,7 @@ Any variable read through the config helpers also accepts a `VITE_` prefix, for 
 | `ALLOWED_CORS_ORIGINS` | - | Comma-separated. Unset, production allows none and development allows loopback origins only. |
 | `TSFLOW_TRUSTED_PROXIES` | - | Proxy IPs or CIDRs allowed to set the client address with `X-Forwarded-For`. That address keys the rate limit (100 requests a minute) and shows in request logs. Unset means the TCP peer. |
 | `TSFLOW_MCP_ENABLED` | `false` | Serve a read-only MCP endpoint at `/mcp`. |
+| `TSFLOW_METRICS_ADDR` | - | Serve Prometheus metrics at `/metrics` on this address, for example `:9090`. Its own plain listener, never behind access control. Set it to `PORT` to share the UI listener. See [Metrics](metrics.md). |
 | `TSFLOW_LOG_LEVEL` | - | `debug` logs every denied request instead of one per peer and reason a minute. |
 
 ## tsnet serve mode

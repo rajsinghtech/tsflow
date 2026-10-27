@@ -81,6 +81,9 @@ type Config struct {
 	// MCPEnabled serves a read-only Model Context Protocol endpoint at /mcp.
 	// It stays off unless TSFLOW_MCP_ENABLED is set.
 	MCPEnabled bool
+	// MetricsAddr serves Prometheus metrics at /metrics on its own plain
+	// listener (TSFLOW_METRICS_ADDR, for example :9090). Empty means off.
+	MetricsAddr string
 	// Access is opt-in tailnet identity. The zero value leaves requests open.
 	Access Access
 }
@@ -133,6 +136,7 @@ func Load() *Config {
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
+		MetricsAddr:                strings.TrimSpace(os.Getenv("TSFLOW_METRICS_ADDR")),
 	}
 	cfg.FlowObjectStoreWebIdentityTokenFile = strings.TrimSpace(getEnvWithFallback("TSFLOW_S3_WEB_IDENTITY_TOKEN_FILE"))
 	cfg.Access = cfg.loadAccess()
@@ -227,6 +231,10 @@ func (c *Config) Validate() error {
 		if err != nil || hp < 1 || hp > 65535 {
 			return errors.New("TSFLOW_HEALTH_PORT must be a number between 1 and 65535")
 		}
+	}
+
+	if err := c.validateMetrics(); err != nil {
+		return err
 	}
 
 	if c.TsnetServe {
