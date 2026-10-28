@@ -2,7 +2,7 @@
 # Produces a single binary with embedded SvelteKit frontend
 
 # Frontend build stage
-FROM node:25-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
