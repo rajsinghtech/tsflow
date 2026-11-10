@@ -109,10 +109,14 @@ func (s *SQLiteStore) ListNewPairs(ctx context.Context, tailnetID string, start,
 	if windowSource == "" {
 		return nil, false, nil
 	}
+	// A prior pair only matters when it matches a window pair, and a window
+	// pair touches one of the viewer's nodes, so the prior scan can keep the
+	// same node filter. Without it a viewer's /me reads every pair in the
+	// tailnet across the whole lookback.
 	priorSource, priorArgs := priorPlan.unionPairRows(tailnetID,
 		"src_node_id, dst_node_id",
 		"src_node_id, dst_node_id",
-		clause, typeArgs,
+		clause+idClause, append(append([]any{}, typeArgs...), idArgs...),
 	)
 	priorSQL := ""
 	args := append([]any{}, windowArgs...)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -55,7 +56,14 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, las
 			return err
 		}
 	}
-	return s.commitWrite(tx, tailnetID)
+	committing := time.Now()
+	if err := s.commitWrite(tx, tailnetID); err != nil {
+		return err
+	}
+	if took := time.Since(committing); took >= time.Second {
+		log.Printf("Poll cursor commit tailnet=%s took=%s", tailnetID, took.Round(time.Millisecond))
+	}
+	return nil
 }
 
 type sqlExecer interface {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -107,6 +108,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 	if err := checkTailnetID(tailnetID); err != nil {
 		return err
 	}
+	started := time.Now()
 	unlock := s.lockTailnet(tailnetID)
 	defer unlock()
 
@@ -115,6 +117,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	began := time.Now()
 
 	const sqliteFormat = "2006-01-02 15:04:05"
 	insertRes, err := tx.ExecContext(ctx, `
@@ -157,6 +160,7 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 	if err := upsertTrafficStatsTx(ctx, tx, tailnetID, result.TrafficStats); err != nil {
 		return err
 	}
+	upserted := time.Now()
 	if !result.PollEnd.IsZero() {
 		if err := rollClosedMinutes(ctx, tx, tailnetID, result.PollEnd.UTC().Unix()); err != nil {
 			return err
@@ -171,8 +175,17 @@ func (s *SQLiteStore) CommitObjectIngest(ctx context.Context, tailnetID string, 
 			return err
 		}
 	}
+	rolled := time.Now()
 
-	return s.commitWriteTouching(tx, tailnetID, touches)
+	if err := s.commitWriteTouching(tx, tailnetID, touches); err != nil {
+		return err
+	}
+	done := time.Now()
+	log.Printf("Object ingest tailnet=%s key=%s node_pairs=%d bandwidth=%d node_bandwidth=%d traffic_stats=%d nodes=%d wait=%s upsert=%s rollup=%s commit=%s",
+		tailnetID, result.Key, len(result.NodePairs), len(result.Bandwidth), len(result.NodeBandwidth), len(result.TrafficStats), len(result.NodeMetadata),
+		began.Sub(started).Round(time.Millisecond), upserted.Sub(began).Round(time.Millisecond),
+		rolled.Sub(upserted).Round(time.Millisecond), done.Sub(rolled).Round(time.Millisecond))
+	return nil
 }
 
 func nodeMetadataIDs(nodes []NodeMetadata) []string {

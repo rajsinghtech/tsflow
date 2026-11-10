@@ -82,6 +82,8 @@ Off unless you set it. See [Internal access control](../README.md#internal-acces
 | `TSFLOW_INITIAL_BACKFILL` | `6h` | |
 | `TSFLOW_POLL_DELAY` | `2m` | API backend only. Polls stop this far behind now. `0` polls up to now. |
 | `TSFLOW_GRAPH_CACHE_MB` | `256` | Cache of closed hours for the graph. `0` turns it off. |
+| `TSFLOW_SQLITE_CACHE_MB` | `1024` | SQLite page cache of the writer connection. Read connections keep about 40 MiB each. |
+| `TSFLOW_SQLITE_MMAP_MB` | `1024` | SQLite `mmap_size` for every connection. `0` turns mmap off. |
 | `TSFLOW_RETENTION` | `720h` (API), off (S3, GCS) | `0` turns cleanup off. |
 
 ## Flow backend and buckets

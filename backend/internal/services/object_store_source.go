@@ -376,6 +376,7 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 	}
 
 	for _, obj := range selected {
+		objStarted := time.Now()
 		flows, nodeMetadata, err := s.readFlowLogs(ctx, p, obj.key)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -414,7 +415,9 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		if len(nodeMetadata) > 0 {
 			p.deviceCache.UpsertNodeMetadata(nodeMetadata)
 		}
+		readDone := time.Now()
 		nodePairs, totalBandwidth, nodeBandwidth, trafficStats := p.aggregate(flows)
+		aggregated := time.Now()
 		pollEnd := obj.logTime
 		if pollEnd.IsZero() {
 			pollEnd = end
@@ -432,6 +435,11 @@ func (s *ObjectStoreSource) Poll(ctx context.Context, p *Poller, start, end time
 		}); err != nil {
 			return processedObjects, processedFlows, lastProcessed, err
 		}
+		committed := time.Now()
+		log.Printf("Object %s: flows=%d node_pairs=%d read=%s aggregate=%s store=%s total=%s",
+			obj.key, len(flows), len(nodePairs),
+			readDone.Sub(objStarted).Round(time.Millisecond), aggregated.Sub(readDone).Round(time.Millisecond),
+			committed.Sub(aggregated).Round(time.Millisecond), committed.Sub(objStarted).Round(time.Millisecond))
 
 		p.rollingCache.Update(nodePairs, totalBandwidth, nodeBandwidth, trafficStats)
 		p.observeIngest(nodePairs, trafficStats)
@@ -550,11 +558,13 @@ func (s *ObjectStoreSource) listObjects(ctx context.Context, start, end time.Tim
 }
 
 func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key string) ([]database.FlowLog, []database.NodeMetadata, error) {
+	started := time.Now()
 	body, err := s.blobs.Open(ctx, key)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer body.Close()
+	opened := time.Now()
 
 	var reader io.Reader = body
 	var zstdReader *zstd.Decoder
@@ -607,7 +617,10 @@ func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key str
 		}
 		return nil, nil, objectContentError{err}
 	}
-	log.Printf("Read %d flow rows from %s", len(flows), key)
+	// The body streams through decompression and parsing, so download and
+	// parse time are one number after the open.
+	log.Printf("Read %d flow rows from %s (open=%s download+parse=%s)", len(flows), key,
+		opened.Sub(started).Round(time.Millisecond), time.Since(opened).Round(time.Millisecond))
 	nodes := make([]database.NodeMetadata, 0, len(nodeMetadata))
 	for _, node := range nodeMetadata {
 		nodes = append(nodes, node)
