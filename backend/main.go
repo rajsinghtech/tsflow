@@ -84,10 +84,22 @@ func main() {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	store, err := database.NewSQLiteStore(dbPath)
+	sqliteCache, err := cfg.SQLiteCacheBytes()
+	if err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	sqliteMmap, err := cfg.SQLiteMmapBytes()
+	if err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	store, err := database.NewSQLiteStoreWithOptions(dbPath, database.SQLiteOptions{
+		WriterCacheBytes: sqliteCache,
+		MmapBytes:        sqliteMmap,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create database store: %v", err)
 	}
+	log.Printf("SQLite: writer cache %d MiB, mmap %d MiB", sqliteCache>>20, sqliteMmap>>20)
 
 	cacheBytes, err := cfg.GraphCacheBytes()
 	if err != nil {

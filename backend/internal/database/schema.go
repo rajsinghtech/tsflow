@@ -83,15 +83,50 @@ type SQLiteStore struct {
 	closedHourSem  chan struct{}
 }
 
-// NewSQLiteStore creates a new SQLite store.
+// readerCacheKiB is the page cache of each read connection, about the
+// 10000 pages (4 KiB each) every connection was meant to have before. Reads
+// share the OS page cache and mmap, so they do not need a large private cache.
+const readerCacheKiB = 40000
+
+// SQLiteOptions sizes SQLite's memory use.
+type SQLiteOptions struct {
+	// WriterCacheBytes is the page cache of the single writer connection.
+	// Upserts walk the node_pairs indexes, so a large db needs a cache that
+	// holds their hot pages or every row is a disk read.
+	WriterCacheBytes int64
+	// MmapBytes is mmap_size for every connection. 0 turns mmap off. Mapped
+	// pages are the OS page cache, shared by all connections.
+	MmapBytes int64
+}
+
+// DefaultSQLiteOptions matches the TSFLOW_SQLITE_CACHE_MB and
+// TSFLOW_SQLITE_MMAP_MB defaults.
+func DefaultSQLiteOptions() SQLiteOptions {
+	return SQLiteOptions{WriterCacheBytes: 1024 << 20, MmapBytes: 1024 << 20}
+}
+
+// NewSQLiteStore creates a new SQLite store with DefaultSQLiteOptions.
+func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
+	return NewSQLiteStoreWithOptions(dbPath, DefaultSQLiteOptions())
+}
+
+// NewSQLiteStoreWithOptions creates a new SQLite store.
 // The read pool and the writer connection are separate so a long query does
 // not occupy the connection a poll commit needs.
-func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
-	reader, err := openSQLite(dbPath, 10, 5)
+func NewSQLiteStoreWithOptions(dbPath string, opts SQLiteOptions) (*SQLiteStore, error) {
+	writerCacheKiB := opts.WriterCacheBytes >> 10
+	if writerCacheKiB < readerCacheKiB {
+		writerCacheKiB = readerCacheKiB
+	}
+	mmapBytes := opts.MmapBytes
+	if mmapBytes < 0 {
+		mmapBytes = 0
+	}
+	reader, err := openSQLite(dbPath, 10, 5, readerCacheKiB, mmapBytes)
 	if err != nil {
 		return nil, err
 	}
-	writer, err := openSQLite(dbPath, 1, 1)
+	writer, err := openSQLite(dbPath, 1, 1, writerCacheKiB, mmapBytes)
 	if err != nil {
 		reader.Close()
 		return nil, err
@@ -99,8 +134,13 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	return &SQLiteStore{db: reader, writer: writer, dbPath: dbPath}, nil
 }
 
-func openSQLite(dbPath string, maxOpen, maxIdle int) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=10000", dbPath)
+// openSQLite opens a pool whose every connection gets the same pragmas.
+// modernc.org/sqlite has no _cache_size DSN key, so cache_size and mmap_size
+// go through _pragma. Before, cache_size was set once with Exec and reached
+// only the first connection; one recycled by ConnMaxLifetime (the writer,
+// hourly) fell back to SQLite's 2 MiB default.
+func openSQLite(dbPath string, maxOpen, maxIdle int, cacheKiB, mmapBytes int64) (*sql.DB, error) {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_pragma=cache_size(-%d)&_pragma=mmap_size(%d)", dbPath, cacheKiB, mmapBytes)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -111,13 +151,14 @@ func openSQLite(dbPath string, maxOpen, maxIdle int) (*sql.DB, error) {
 	db.SetMaxIdleConns(maxIdle)
 	db.SetConnMaxLifetime(time.Hour)
 
-	// DSN pragmas are applied to each new connection. Running them once also
-	// creates the file before any query.
+	// The DSN applies these to each new connection. Running them once also
+	// creates the file before any query and surfaces a bad value here.
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
 		"PRAGMA synchronous=NORMAL",
-		"PRAGMA cache_size=10000",
+		fmt.Sprintf("PRAGMA cache_size=-%d", cacheKiB),
+		fmt.Sprintf("PRAGMA mmap_size=%d", mmapBytes),
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()

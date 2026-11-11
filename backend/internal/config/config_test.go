@@ -152,6 +152,8 @@ func TestValidateRejectsUnsafeDurationsAndObjectStoreValues(t *testing.T) {
 		{name: "negative graph cache", mutate: func(c *Config) { c.GraphCacheMB = "-1" }, want: "TSFLOW_GRAPH_CACHE_MB"},
 		{name: "fractional graph cache", mutate: func(c *Config) { c.GraphCacheMB = "1.5" }, want: "TSFLOW_GRAPH_CACHE_MB"},
 		{name: "huge graph cache", mutate: func(c *Config) { c.GraphCacheMB = "99999999" }, want: "TSFLOW_GRAPH_CACHE_MB"},
+		{name: "negative sqlite cache", mutate: func(c *Config) { c.SQLiteCacheMB = "-1" }, want: "TSFLOW_SQLITE_CACHE_MB"},
+		{name: "fractional sqlite mmap", mutate: func(c *Config) { c.SQLiteMmapMB = "0.5" }, want: "TSFLOW_SQLITE_MMAP_MB"},
 		{name: "negative poll delay", mutate: func(c *Config) { c.PollDelay = "-1m" }, want: "TSFLOW_POLL_DELAY"},
 		{name: "invalid poll delay", mutate: func(c *Config) { c.PollDelay = "later" }, want: "TSFLOW_POLL_DELAY"},
 		{name: "invalid S3 lookback", mutate: func(c *Config) { objectStoreConfig(c); c.FlowBackend = "s3"; c.FlowObjectStoreLookback = "nope" }, want: "TSFLOW_S3_LOOKBACK"},
@@ -206,6 +208,26 @@ func TestPollDelayDefaultsAndAllowsZero(t *testing.T) {
 	cfg.PollDelay = "0"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("TSFLOW_POLL_DELAY=0 rejected: %v", err)
+	}
+}
+
+func TestSQLiteBytes(t *testing.T) {
+	t.Setenv("TSFLOW_SQLITE_CACHE_MB", "")
+	t.Setenv("TSFLOW_SQLITE_MMAP_MB", "")
+	cfg := Load()
+	if cfg.SQLiteCacheMB != "1024" || cfg.SQLiteMmapMB != "1024" {
+		t.Fatalf("defaults = %q, %q; want 1024, 1024", cfg.SQLiteCacheMB, cfg.SQLiteMmapMB)
+	}
+	for raw, want := range map[string]int64{"": 1024 << 20, "2048": 2048 << 20, "0": 0, " 64 ": 64 << 20} {
+		cfg.SQLiteCacheMB, cfg.SQLiteMmapMB = raw, raw
+		cache, err := cfg.SQLiteCacheBytes()
+		if err != nil || cache != want {
+			t.Fatalf("SQLiteCacheBytes(%q) = %d, %v; want %d", raw, cache, err, want)
+		}
+		mmap, err := cfg.SQLiteMmapBytes()
+		if err != nil || mmap != want {
+			t.Fatalf("SQLiteMmapBytes(%q) = %d, %v; want %d", raw, mmap, err, want)
+		}
 	}
 }
 

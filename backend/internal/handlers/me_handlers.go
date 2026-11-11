@@ -94,7 +94,7 @@ func (h *Handlers) GetViewerSummary(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), DefaultQueryTimeout)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), AggregationQueryTimeout)
 	defer cancel()
 	devices, err := h.store.ListViewerDevices(ctx, tn.id, login, startTime, endTime, trafficTypes)
 	if err != nil {

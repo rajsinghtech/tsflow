@@ -319,13 +319,24 @@ func (s *SQLiteStore) backfillHourRollupTailnet(ctx context.Context, tailnetID s
 // rollClosedMinutes merges minute rows older than closedThrough into the
 // hourly rollup. closedThrough is exclusive and should be minute-aligned.
 // The open minute at the cursor stays in node_pairs.
+// A pass that merged rows logs its row count and duration.
 func rollClosedMinutes(ctx context.Context, tx *sql.Tx, tailnetID string, closedThrough int64) error {
+	started := time.Now()
+	var rows int64
+	chunks := 0
 	for {
-		_, done, err := rollNextHourChunk(ctx, tx, tailnetID, closedThrough)
+		n, done, err := rollNextHourChunk(ctx, tx, tailnetID, closedThrough)
 		if err != nil {
 			return err
 		}
+		rows += n
+		if n > 0 {
+			chunks++
+		}
 		if done {
+			if rows > 0 {
+				log.Printf("Hour rollup tailnet=%s rows=%d chunks=%d took=%s", tailnetID, rows, chunks, time.Since(started).Round(time.Millisecond))
+			}
 			return nil
 		}
 	}

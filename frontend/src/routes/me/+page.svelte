@@ -64,7 +64,7 @@
 		loading = true;
 		error = null;
 		try {
-			const response = await tailscaleService.getViewerSummary(start, end, { trafficTypes: types, lookback: '7d' });
+			const response = await tailscaleService.getViewerSummary(start, end, { trafficTypes: types, lookback: '24h' });
 			if (token !== loadToken) return;
 			login = response.login;
 			devices = response.devices || [];

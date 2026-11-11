@@ -74,6 +74,12 @@ type Config struct {
 	// GraphCacheMB caps the in-memory cache of closed hours used by the
 	// graph read, in MiB (TSFLOW_GRAPH_CACHE_MB). 0 disables it.
 	GraphCacheMB string
+	// SQLiteCacheMB is the SQLite page cache of the writer connection, in
+	// MiB (TSFLOW_SQLITE_CACHE_MB).
+	SQLiteCacheMB string
+	// SQLiteMmapMB is SQLite mmap_size, in MiB (TSFLOW_SQLITE_MMAP_MB).
+	// 0 turns mmap off.
+	SQLiteMmapMB string
 	Retention    string
 	// TailnetsFile is an optional YAML or JSON list of tailnets. When it is
 	// empty, the single-tailnet environment variables are used as id default.
@@ -139,6 +145,8 @@ func Load() *Config {
 		InitialBackfill:            getEnvWithDefault("TSFLOW_INITIAL_BACKFILL", "6h"),
 		PollDelay:                  getEnvWithDefault("TSFLOW_POLL_DELAY", "2m"),
 		GraphCacheMB:               getEnvWithDefault("TSFLOW_GRAPH_CACHE_MB", "256"),
+		SQLiteCacheMB:              getEnvWithDefault("TSFLOW_SQLITE_CACHE_MB", "1024"),
+		SQLiteMmapMB:               getEnvWithDefault("TSFLOW_SQLITE_MMAP_MB", "1024"),
 		Retention:                  getEnvWithFallback("TSFLOW_RETENTION"),
 		TailnetsFile:               strings.TrimSpace(os.Getenv("TSFLOW_TAILNETS_FILE")),
 		MCPEnabled:                 parseBool(os.Getenv("TSFLOW_MCP_ENABLED"), false),
@@ -195,6 +203,12 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if _, err := c.GraphCacheBytes(); err != nil {
+		return err
+	}
+	if _, err := c.SQLiteCacheBytes(); err != nil {
+		return err
+	}
+	if _, err := c.SQLiteMmapBytes(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.PollDelay) != "" {
@@ -418,6 +432,33 @@ func (c *Config) GraphCacheBytes() (int64, error) {
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n < 0 || n > maxGraphCacheMB {
 		return 0, fmt.Errorf("TSFLOW_GRAPH_CACHE_MB must be a whole number of MiB from 0 to %d", maxGraphCacheMB)
+	}
+	return n << 20, nil
+}
+
+// maxSQLiteMB bounds TSFLOW_SQLITE_CACHE_MB and TSFLOW_SQLITE_MMAP_MB at 64 GiB.
+const maxSQLiteMB = 64 << 10
+
+// SQLiteCacheBytes returns the writer's SQLite page cache in bytes. Empty
+// means the 1024 MiB default.
+func (c *Config) SQLiteCacheBytes() (int64, error) {
+	return parseMiB("TSFLOW_SQLITE_CACHE_MB", c.SQLiteCacheMB, 1024, maxSQLiteMB)
+}
+
+// SQLiteMmapBytes returns SQLite mmap_size in bytes. Empty means the
+// 1024 MiB default; 0 turns mmap off.
+func (c *Config) SQLiteMmapBytes() (int64, error) {
+	return parseMiB("TSFLOW_SQLITE_MMAP_MB", c.SQLiteMmapMB, 1024, maxSQLiteMB)
+}
+
+func parseMiB(name, raw string, def, max int64) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def << 20, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 || n > max {
+		return 0, fmt.Errorf("%s must be a whole number of MiB from 0 to %d", name, max)
 	}
 	return n << 20, nil
 }
