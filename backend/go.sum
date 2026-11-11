@@ -683,6 +683,8 @@ github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 h1:l10Gi6w9jxvinoiq15
 github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6/go.mod h1:ZXRML051h7o4OcI0d3AaILDIad/Xw0IkXaHM17dic1Y=
 github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226 h1:v3Lpj2iHPWQDqeCwemQPz4fWweIEMLqBkwJqCjRyJQc=
 github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226/go.mod h1:rUelGmuK4UnSJYM5gl5Mknp6YbwwcL8+VAPMhNYe+jg=
+github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca h1:m34ObTyPjPiDaSFWeMk7FBQR8my9wpT98t1EXp5c5X0=
+github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca/go.mod h1:rUelGmuK4UnSJYM5gl5Mknp6YbwwcL8+VAPMhNYe+jg=
 github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e h1:zOGKqN5D5hHhiYUp091JqK7DPCqSARyUfduhGUY8Bek=
 github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e/go.mod h1:orPd6JZXXRyuDusYilywte7k094d7dycXXU5YnWsrwg=
 github.com/tc-hib/winres v0.3.1 h1:CwRjEGrKdbi5CvZ4ID+iyVhgyfatxFoizjPhzez9Io4=
@@ -924,6 +926,8 @@ tailscale.com v1.104.4 h1:3UXjZjDdD3o3FTYcdFARD1ZLyHOHdhQYqdYOjvbHSpk=
 tailscale.com v1.104.4/go.mod h1:Hq4zB8UpaxMW1fvqO30CLVQo3A7Ith0t9MnvEyiuoSA=
 tailscale.com v1.104.5 h1:TLemRww20+bcQ0FEVTTZ7yMtVDZ4pOpSCL86Oo9g3mA=
 tailscale.com v1.104.5/go.mod h1:Hq4zB8UpaxMW1fvqO30CLVQo3A7Ith0t9MnvEyiuoSA=
+tailscale.com v1.104.6 h1:VjIuSsyFQ2Bp+HOtgbZCCJ7ZFTL+fULop5gmUF2bBIA=
+tailscale.com v1.104.6/go.mod h1:RROMXOJKiSHdVBeNtruULbCtqamzizsDgqQRYlCHclM=
 tailscale.com/client/tailscale/v2 v2.11.0 h1:pBWzbKzVzjIMFj0Kmn1ZXDjBJ7cHSyl9xHn+iai69z4=
 tailscale.com/client/tailscale/v2 v2.11.0/go.mod h1:FGjvGT3ThHelqo0gfdK3IN3k1dwNbRzYbQh2XO3C47U=
 tailscale.com/client/tailscale/v2 v2.12.0 h1:v7oMM/u0/vuchgLTwCdT0nJ6PyD0Mlpm2mWnoUKVyBo=
