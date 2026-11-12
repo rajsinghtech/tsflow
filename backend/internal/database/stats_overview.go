@@ -106,12 +106,18 @@ func missingAggregatedRanges(primary []TrafficStats, start, end time.Time) [][2]
 	return ranges
 }
 
-func bucketRangePredicate(column string, ranges [][2]int64) (string, []any) {
+// Keep the tailnet equality inside each OR branch. Factoring it out lets
+// SQLite scan the entire tailnet instead of seeking the two minute edges
+// around an hourly rollup.
+func tailnetBucketRangePredicate(tailnetID, alias string, ranges [][2]int64) (string, []any) {
+	if alias != "" {
+		alias += "."
+	}
 	parts := make([]string, len(ranges))
-	args := make([]any, 0, len(ranges)*2)
+	args := make([]any, 0, len(ranges)*3)
 	for i, r := range ranges {
-		parts[i] = fmt.Sprintf("(%s >= ? AND %s < ?)", column, column)
-		args = append(args, r[0], r[1])
+		parts[i] = fmt.Sprintf("(%stailnet_id = ? AND %sbucket >= ? AND %sbucket < ?)", alias, alias, alias)
+		args = append(args, tailnetID, r[0], r[1])
 	}
 	if len(parts) == 1 {
 		return parts[0], args
