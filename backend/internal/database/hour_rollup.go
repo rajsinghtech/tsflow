@@ -692,16 +692,14 @@ func (p hourPlan) unionPairRows(tailnetID, minuteCols, hourCols, extra string, e
 	var parts []string
 	var args []any
 	if len(p.minutes) > 0 {
-		pred, predArgs := bucketRangePredicate("bucket", p.minutes)
-		parts = append(parts, fmt.Sprintf("SELECT %s FROM node_pairs WHERE tailnet_id = ? AND %s%s", minuteCols, pred, extra))
-		args = append(args, tailnetID)
+		pred, predArgs := tailnetBucketRangePredicate(tailnetID, "", p.minutes)
+		parts = append(parts, fmt.Sprintf("SELECT %s FROM node_pairs WHERE %s%s", minuteCols, pred, extra))
 		args = append(args, predArgs...)
 		args = append(args, extraArgs...)
 	}
 	if len(p.hours) > 0 {
-		pred, predArgs := bucketRangePredicate("bucket", p.hours)
-		parts = append(parts, fmt.Sprintf("SELECT %s FROM node_pair_hours WHERE tailnet_id = ? AND %s%s", hourCols, pred, extra))
-		args = append(args, tailnetID)
+		pred, predArgs := tailnetBucketRangePredicate(tailnetID, "", p.hours)
+		parts = append(parts, fmt.Sprintf("SELECT %s FROM node_pair_hours WHERE %s%s", hourCols, pred, extra))
 		args = append(args, predArgs...)
 		args = append(args, extraArgs...)
 	}

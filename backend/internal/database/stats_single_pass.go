@@ -304,9 +304,9 @@ func (p *statsPass) results() ([]TrafficStats, error) {
 // singlePassMinuteStats is the minute-row read of queryTrafficStatsFromNodePairs.
 func singlePassMinuteStats(ctx context.Context, q queryRower, tailnetID string, bs int64, ranges [][2]int64, trafficTypes []string) ([]TrafficStats, error) {
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
-	rangeSQL, rangeArgs := bucketRangePredicate("bucket", ranges)
-	query := fmt.Sprintf("SELECT bucket, %s FROM node_pairs WHERE tailnet_id = ? AND %s%s", statsSinglePassCols, rangeSQL, typeClause)
-	args := append([]any{tailnetID}, rangeArgs...)
+	rangeSQL, rangeArgs := tailnetBucketRangePredicate(tailnetID, "", ranges)
+	query := fmt.Sprintf("SELECT bucket, %s FROM node_pairs WHERE %s%s", statsSinglePassCols, rangeSQL, typeClause)
+	args := append([]any(nil), rangeArgs...)
 	args = append(args, typeArgs...)
 	pass := newStatsPass(bs, trafficTypes)
 	if err := pass.read(ctx, q, query, args, false); err != nil {
@@ -324,19 +324,19 @@ func singlePassRollupStats(ctx context.Context, q queryRower, tailnetID string, 
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	pass := newStatsPass(bs, trafficTypes)
 	if len(plan.minutes) > 0 {
-		pred, predArgs := bucketRangePredicate("bucket", plan.minutes)
-		args := append([]any{tailnetID}, predArgs...)
+		pred, predArgs := tailnetBucketRangePredicate(tailnetID, "", plan.minutes)
+		args := append([]any(nil), predArgs...)
 		args = append(args, typeArgs...)
-		query := fmt.Sprintf("SELECT bucket, %s FROM node_pairs WHERE tailnet_id = ? AND %s%s", statsSinglePassCols, pred, typeClause)
+		query := fmt.Sprintf("SELECT bucket, %s FROM node_pairs WHERE %s%s", statsSinglePassCols, pred, typeClause)
 		if err := pass.read(ctx, q, query, args, false); err != nil {
 			return nil, err
 		}
 	}
 	if len(plan.hours) > 0 {
-		pred, predArgs := bucketRangePredicate("bucket", plan.hours)
-		args := append([]any{tailnetID}, predArgs...)
+		pred, predArgs := tailnetBucketRangePredicate(tailnetID, "", plan.hours)
+		args := append([]any(nil), predArgs...)
 		args = append(args, typeArgs...)
-		query := fmt.Sprintf("SELECT min_bucket, %s FROM node_pair_hours WHERE tailnet_id = ? AND %s%s", statsSinglePassCols, pred, typeClause)
+		query := fmt.Sprintf("SELECT min_bucket, %s FROM node_pair_hours WHERE %s%s", statsSinglePassCols, pred, typeClause)
 		if err := pass.read(ctx, q, query, args, true); err != nil {
 			return nil, err
 		}

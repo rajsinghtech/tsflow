@@ -1027,7 +1027,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	typeClause, typeArgs := trafficTypeWhereClause(trafficTypes)
 	protoClause, protoTypeArgs := countedTrafficClause(trafficTypes)
 	portClause, portTypeArgs := portAccountingClause(trafficTypes)
-	rangeSQL, rangeArgs := bucketRangePredicate("bucket", ranges)
+	rangeSQL, rangeArgs := tailnetBucketRangePredicate(tailnetID, "", ranges)
 	query := fmt.Sprintf(`
 		WITH filtered_pairs AS (
 			SELECT (bucket / %d) * %d AS b,
@@ -1038,7 +1038,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 			       rx_bytes,
 			       flow_count
 			FROM node_pairs
-			WHERE tailnet_id = ? AND %s%s
+			WHERE %s%s
 		), traffic_totals AS (
 			SELECT b,
 			       SUM(CASE WHEN traffic_type = 'virtual'
@@ -1072,7 +1072,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		ORDER BY t.b ASC
 	`, bs, bs, rangeSQL, typeClause)
 
-	args := append([]any{tailnetID}, rangeArgs...)
+	args := append([]any(nil), rangeArgs...)
 	args = append(args, typeArgs...)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1109,7 +1109,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 	// Derive protocol breakdown from persisted protocol byte totals. The
 	// fallback branch keeps pre-migration rows useful if they are inserted by
 	// an older writer after startup.
-	protoRangeSQL, protoRangeArgs := bucketRangePredicate("np.bucket", ranges)
+	protoRangeSQL, protoRangeArgs := tailnetBucketRangePredicate(tailnetID, "np", ranges)
 	protoQuery := fmt.Sprintf(`
 		WITH protocol_values AS (
 			SELECT (np.bucket / %d) * %d AS b,
@@ -1118,7 +1118,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocol_bytes) AND np.protocol_bytes != '{}'
 				     THEN np.protocol_bytes ELSE '{}' END) AS j
-			WHERE np.tailnet_id = ? AND %s%s
+			WHERE %s%s
 			  AND j.key IS NOT NULL -- a bare number has no protocol
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
@@ -1130,7 +1130,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 				         ELSE 0 END AS bytes
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
-			WHERE np.tailnet_id = ? AND %s%s
+			WHERE %s%s
 			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
 			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
@@ -1139,9 +1139,8 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		FROM protocol_values
 		GROUP BY b, proto
 	`, bs, bs, protoRangeSQL, protoClause, bs, bs, protoRangeSQL, protoClause)
-	protoArgs := append([]any{tailnetID}, protoRangeArgs...)
+	protoArgs := append([]any(nil), protoRangeArgs...)
 	protoArgs = append(protoArgs, protoTypeArgs...)
-	protoArgs = append(protoArgs, tailnetID)
 	protoArgs = append(protoArgs, protoRangeArgs...)
 	protoArgs = append(protoArgs, protoTypeArgs...)
 	protoRows, err := tx.QueryContext(ctx, protoQuery, protoArgs...)
@@ -1188,7 +1187,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 			       SUM(CAST(json_extract(p.value, '$.bytes') AS INTEGER)) AS bytes
 			FROM node_pairs, json_each(
 				CASE WHEN json_valid(ports) THEN ports ELSE '[]' END) AS p
-			WHERE tailnet_id = ? AND %s%s
+			WHERE %s%s
 			  AND ports != '[]'
 			GROUP BY b, proto, port
 		),
@@ -1202,7 +1201,7 @@ func (s *SQLiteStore) queryTrafficStatsFromNodePairs(ctx context.Context, tailne
 		WHERE rn <= 20
 			ORDER BY b ASC, bytes DESC, proto ASC, port ASC
 	`, bs, bs, rangeSQL, portClause)
-	portArgs := append([]any{tailnetID}, rangeArgs...)
+	portArgs := append([]any(nil), rangeArgs...)
 	portArgs = append(portArgs, portTypeArgs...)
 	portRows, err := tx.QueryContext(ctx, portQuery, portArgs...)
 	if err != nil {
@@ -1329,7 +1328,7 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 	var fallbackSQL string
 	var fallbackArgs []any
 	if len(fallback) > 0 {
-		fallbackPred, fallbackPredArgs := bucketRangePredicate("np.bucket", fallback)
+		fallbackPred, fallbackPredArgs := tailnetBucketRangePredicate(tailnetID, "np", fallback)
 		fallbackSQL = fmt.Sprintf(`
 			UNION ALL
 			SELECT (np.bucket / %d) * %d AS b,
@@ -1341,12 +1340,12 @@ func queryTrafficStatsFromRollup(ctx context.Context, q queryRower, tailnetID st
 				         ELSE 0 END AS bytes
 			FROM node_pairs np, json_each(
 				CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) AS j
-			WHERE np.tailnet_id = ? AND %s%s
+			WHERE %s%s
 			  AND (np.protocol_bytes IS NULL OR np.protocol_bytes = '' OR np.protocol_bytes = '{}'
 			       OR NOT json_valid(np.protocol_bytes))
 			  AND json_array_length(CASE WHEN json_valid(np.protocols) THEN np.protocols ELSE '[]' END) > 0
 		`, bs, bs, fallbackPred, protoClause)
-		fallbackArgs = append([]any{tailnetID}, fallbackPredArgs...)
+		fallbackArgs = append([]any(nil), fallbackPredArgs...)
 		fallbackArgs = append(fallbackArgs, protoTypeArgs...)
 	}
 	protoQuery := fmt.Sprintf(`
