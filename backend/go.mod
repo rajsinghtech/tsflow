@@ -21,7 +21,7 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	golang.org/x/oauth2 v0.38.0
-	google.golang.org/api v0.313.0
+	google.golang.org/api v0.314.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 	tailscale.com v1.104.7
