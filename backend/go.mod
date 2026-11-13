@@ -1,6 +1,6 @@
 module github.com/rajsinghtech/tsflow/backend
 
-go 1.27.3
+go 1.27.4
 
 require (
 	cloud.google.com/go/auth v0.24.4
@@ -24,7 +24,7 @@ require (
 	google.golang.org/api v0.313.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
-	tailscale.com v1.104.6
+	tailscale.com v1.104.7
 	tailscale.com/client/tailscale/v2 v2.12.0
 )
 
