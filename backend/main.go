@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rajsinghtech/tsflow/backend/frontend"
 	"github.com/rajsinghtech/tsflow/backend/internal/access"
+	"github.com/rajsinghtech/tsflow/backend/internal/audit"
 	"github.com/rajsinghtech/tsflow/backend/internal/config"
 	"github.com/rajsinghtech/tsflow/backend/internal/database"
 	"github.com/rajsinghtech/tsflow/backend/internal/handlers"
@@ -185,6 +186,15 @@ func main() {
 	handlerService := handlers.NewHandlers(tailscaleService, store, poller, Version)
 	handlerService.UseRegistry(registry)
 
+	// Configuration audit logs are off unless TSFLOW_AUDIT_ENABLED is set.
+	// They live in their own SQLite file so they never wait on flow writes.
+	auditCfg, err := config.LoadAudit(dbPath)
+	if err != nil {
+		log.Fatalf("Configuration error: %v", err)
+	}
+	auditMgr := startAudit(ctx, pollerCtx, auditCfg, tailnets, registry)
+	handlerService.UseAudit(auditMgr, handlers.NewAuditGate(auditMgr != nil, auditCfg.Viewers))
+
 	requestWhoIs, lazyWhoIs := openAccessWhoIs(cfg)
 
 	// Configure Gin logging
@@ -277,6 +287,19 @@ func main() {
 		api.GET("/tailnets", noCache, handlerService.ListTailnets)
 		api.GET("/poller/status", noCache, handlerService.GetPollerStatus)
 		api.POST("/poller/trigger", handlerService.TriggerPoll)
+
+		// Configuration audit logs. Every route answers 404 when audit is
+		// off and 403 for a viewer outside TSFLOW_AUDIT_VIEWERS.
+		auditRoutes := api.Group("/audit")
+		{
+			auditRoutes.GET("/status", noCache, handlerService.GetAuditStatus)
+			auditRoutes.GET("/events", noCache, handlerService.GetAuditEvents)
+			auditRoutes.GET("/events/:id", noCache, handlerService.GetAuditEvent)
+			auditRoutes.GET("/groups/:groupId", noCache, handlerService.GetAuditGroup)
+			auditRoutes.GET("/facets", noCache, handlerService.GetAuditFacets)
+			auditRoutes.GET("/users/:login", noCache, handlerService.GetAuditUser)
+			auditRoutes.GET("/nodes/:nodeId", noCache, handlerService.GetAuditNode)
+		}
 	}
 
 	var mcpToolObserver func(string, time.Duration, bool)
@@ -512,6 +535,12 @@ func main() {
 	// Stop the pollers gracefully. Each poller cancels its own requests.
 	pollerCancel()
 	registry.Stop()
+	if auditMgr != nil {
+		auditMgr.Stop()
+		if err := auditMgr.Store().Close(); err != nil {
+			log.Printf("Error closing audit database: %v", err)
+		}
+	}
 
 	// Close database connection
 	if err := store.Close(); err != nil {
@@ -548,4 +577,34 @@ func openAccessWhoIs(cfg *config.Config) (access.WhoIsClient, *access.LazyWhoIs)
 		return lazy, lazy
 	}
 	return nil, nil
+}
+
+// startAudit opens audit.db and starts one audit poller per tailnet. It
+// returns nil when audit is off or cannot start; a broken audit setup logs
+// and leaves the flow viewer running.
+func startAudit(initCtx, runCtx context.Context, cfg config.Audit, tailnets []config.TailnetSpec, registry *services.Registry) *services.AuditManager {
+	if !cfg.Enabled {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
+		log.Printf("ERROR audit logs disabled: %v", err)
+		return nil
+	}
+	auditStore, err := audit.Open(cfg.DBPath)
+	if err == nil {
+		err = auditStore.Init(initCtx)
+	}
+	if err != nil {
+		log.Printf("ERROR audit logs disabled: %v", err)
+		return nil
+	}
+	mgr, err := services.NewAuditManager(initCtx, cfg, tailnets, registry, auditStore)
+	if err != nil {
+		auditStore.Close()
+		log.Printf("ERROR audit logs disabled: %v", err)
+		return nil
+	}
+	mgr.Start(runCtx)
+	log.Printf("Audit logs: %s, retention %s, %d viewers listed", cfg.DBPath, config.FormatLongDuration(cfg.Retention), len(cfg.Viewers))
+	return mgr
 }

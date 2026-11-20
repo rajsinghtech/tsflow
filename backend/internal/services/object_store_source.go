@@ -566,28 +566,11 @@ func (s *ObjectStoreSource) readFlowLogs(ctx context.Context, p *Poller, key str
 	defer body.Close()
 	opened := time.Now()
 
-	var reader io.Reader = body
-	var zstdReader *zstd.Decoder
-	var gzipReader *gzip.Reader
-	switch {
-	case strings.HasSuffix(key, ".zst") || strings.HasSuffix(key, ".zstd"):
-		zstdReader, err = zstd.NewReader(body)
-		if err != nil {
-			return nil, nil, objectContentError{fmt.Errorf("failed to create zstd reader: %w", err)}
-		}
-		defer zstdReader.Close()
-		reader = zstdReader
-	case strings.HasSuffix(key, ".gz") || strings.HasSuffix(key, ".gzip"):
-		gzipReader, err = gzip.NewReader(body)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return nil, nil, objectContentError{fmt.Errorf("failed to create gzip reader: %w", err)}
-		}
-		defer gzipReader.Close()
-		reader = gzipReader
+	reader, closeReader, err := decodeObjectBody(ctx, key, body)
+	if err != nil {
+		return nil, nil, err
 	}
+	defer closeReader()
 
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 256*1024), 32*1024*1024)
@@ -684,6 +667,30 @@ func stringSlice(raw any) []string {
 		}
 	}
 	return result
+}
+
+// decodeObjectBody wraps body in a zstd or gzip reader chosen by the key's
+// extension. A plain key returns body unchanged. The returned func closes the
+// decoder, not body.
+func decodeObjectBody(ctx context.Context, key string, body io.Reader) (io.Reader, func(), error) {
+	switch {
+	case strings.HasSuffix(key, ".zst") || strings.HasSuffix(key, ".zstd"):
+		zstdReader, err := zstd.NewReader(body)
+		if err != nil {
+			return nil, nil, objectContentError{fmt.Errorf("failed to create zstd reader: %w", err)}
+		}
+		return zstdReader, zstdReader.Close, nil
+	case strings.HasSuffix(key, ".gz") || strings.HasSuffix(key, ".gzip"):
+		gzipReader, err := gzip.NewReader(body)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return nil, nil, objectContentError{fmt.Errorf("failed to create gzip reader: %w", err)}
+		}
+		return gzipReader, func() { gzipReader.Close() }, nil
+	}
+	return body, func() {}, nil
 }
 
 func dayPrefixes(basePrefix string, start, end time.Time) []string {

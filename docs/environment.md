@@ -86,6 +86,28 @@ Off unless you set it. See [Internal access control](../README.md#internal-acces
 | `TSFLOW_SQLITE_MMAP_MB` | `1024` | SQLite `mmap_size` for every connection. `0` turns mmap off. |
 | `TSFLOW_RETENTION` | `720h` (API), off (S3, GCS) | `0` turns cleanup off. |
 
+## Configuration audit logs
+
+Off unless `TSFLOW_AUDIT_ENABLED` is true. See [audit-logs.md](audit-logs.md).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `TSFLOW_AUDIT_ENABLED` | `false` | Turns on audit ingest, the `/api/audit` routes, the Audit tab, and the MCP audit tools. |
+| `TSFLOW_AUDIT_VIEWERS` | empty | Logins or groups (comma separated) who may read audit data when access control is on. Empty allows nobody. With access control off, everyone who can reach tsflow may read it. |
+| `TSFLOW_AUDIT_DB_PATH` | `audit.db` next to `TSFLOW_DB_PATH` | A separate SQLite file, so audit writes never wait on flow writes. |
+| `TSFLOW_AUDIT_RETENTION` | `400d` | Accepts Go durations or whole days (`90d`). `0` turns cleanup off. |
+| `TSFLOW_AUDIT_POLL_INTERVAL` | `2m` | At least `10s`. |
+| `TSFLOW_AUDIT_BACKFILL` | `90d` | How far back the first poll reads. |
+| `TSFLOW_AUDIT_MAX_OBJECTS_PER_POLL` | `500` | Objects read per poll for the object-store backends. |
+| `TSFLOW_AUDIT_BACKEND` | off | `gcs`, `s3`, `api`, or `off`. Used by a single-tailnet setup, and as the default for tailnet entries with an `audit:` block. |
+| `TSFLOW_AUDIT_BUCKET` | empty | Bucket holding streamed configuration logs. |
+| `TSFLOW_AUDIT_PREFIX` | `configuration/` | Key prefix the stream writes under. |
+| `TSFLOW_AUDIT_REGION` | empty | S3 region. |
+| `TSFLOW_AUDIT_ENDPOINT` | empty | S3-compatible endpoint. |
+| `TSFLOW_AUDIT_AUTH` | `gcs_adc` (GCS) | Same values as `TSFLOW_S3_AUTH`. |
+| `TSFLOW_AUDIT_ROLE_ARN` | empty | Role to assume with `aws_default`. |
+| `TSFLOW_AUDIT_WEB_IDENTITY_TOKEN_FILE` | empty | Web identity token for that role. |
+
 ## Flow backend and buckets
 
 | Variable | Default | Notes |

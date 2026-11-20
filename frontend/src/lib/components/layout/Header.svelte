@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ListFilter, Logs, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, User, MoreHorizontal } from 'lucide-svelte';
+	import { ListFilter, Logs, Sun, Moon, Monitor, Network, Link, Activity, BarChart3, Shield, ExternalLink, User, MoreHorizontal, ScrollText } from 'lucide-svelte';
 	import { rememberTab, showMeTab } from '#lib/analytics/landing';
 	import TailnetSwitcher from './TailnetSwitcher.svelte';
 	import TimeControls from '#lib/components/timeline/TimeControls.svelte';
@@ -7,7 +7,7 @@
 	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
-	import { uiStore, networkStats, filteredNodes, lastUpdated, themeStore, statsSummary, viewerStore } from '#lib/stores';
+	import { uiStore, networkStats, filteredNodes, lastUpdated, themeStore, statsSummary, viewerStore, auditAllowed } from '#lib/stores';
 	import { policyGraph } from '#lib/stores/policy-store';
 	import { formatBytes, formatDuration, averageBytesPerNode, headerLinkLabel, headerNodeCount, headerShowsStats, headerStat } from '#lib/utils';
 	import type { ThemeMode } from '#lib/stores';
@@ -68,9 +68,14 @@
 		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
 		{ href: '/policy', label: 'Policy', icon: Shield }
 	];
-	const primaryNav = $derived(
-		showMeTab($viewerStore?.login) ? [{ href: '/me', label: 'Me', icon: User }, ...baseNav] : baseNav
-	);
+	const auditNav = { href: '/audit', label: 'Audit', icon: ScrollText };
+	const primaryNav = $derived([
+		...(showMeTab($viewerStore?.login) ? [{ href: '/me', label: 'Me', icon: User }] : []),
+		...baseNav,
+		...($auditAllowed ? [auditNav] : [])
+	]);
+	// The audit pages pick their own window; the flow time controls don't apply.
+	const isAuditPage = $derived(currentPath === '/audit' || currentPath.startsWith('/audit/'));
 
 	// Traffic view uses the graph, which includes every node in that window.
 	// Analytics uses the overview active-node count once stats are loaded.
@@ -205,7 +210,7 @@
 		<nav class="hidden shrink-0 items-center rounded-md border border-border bg-muted/30 p-0.5 sm:flex" aria-label="Primary">
 			{#each primaryNav as item}
 				{@const Icon = item.icon}
-				{@const active = currentPath === item.href}
+				{@const active = currentPath === item.href || (item.href === '/audit' && isAuditPage)}
 				<a
 					href={hrefWithTailnet(item.href, $selectedTailnetId)}
 					onclick={() => rememberTab(item.href)}
@@ -395,7 +400,7 @@
 <nav class="grid border-t border-border sm:hidden" style="grid-template-columns: repeat({primaryNav.length}, minmax(0, 1fr))" aria-label="Primary">
 	{#each primaryNav as item}
 		{@const Icon = item.icon}
-		{@const active = currentPath === item.href}
+		{@const active = currentPath === item.href || (item.href === '/audit' && isAuditPage)}
 		<a
 			href={hrefWithTailnet(item.href, $selectedTailnetId)}
 			onclick={() => rememberTab(item.href)}
@@ -411,7 +416,7 @@
 		</a>
 	{/each}
 </nav>
-{#if currentPath !== '/policy'}
+{#if currentPath !== '/policy' && !isAuditPage}
 	<TimeControls />
 {/if}
 </div>

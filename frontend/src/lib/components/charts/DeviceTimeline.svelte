@@ -8,6 +8,9 @@
 	import { tailscaleService } from '#lib/services';
 	import { columnGap, selectedDeviceId, timelineColumns, type TimelineColumn } from '#lib/analytics/device-timeline';
 	import { formatBytes } from '#lib/utils';
+	import { auditAllowed } from '#lib/stores/viewer-store';
+	import { hrefWithTailnet } from '#lib/services/tailnet-query';
+	import { selectedTailnetId } from '#lib/stores/tailnet-store';
 
 	let { nodeId = null, scoped = false }: { nodeId?: string | null; scoped?: boolean } = $props();
 
@@ -101,9 +104,20 @@
 						<span class="text-primary">{hostname || deviceId}</span>
 						<span class="text-muted-foreground"> bytes over time</span>
 					</h2>
-					{#if loading}
-						<Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-					{/if}
+					<span class="flex shrink-0 items-center gap-2">
+						{#if loading}
+							<Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+						{/if}
+						{#if $auditAllowed}
+							<a
+								class="text-xs text-primary hover:underline"
+								href={hrefWithTailnet(`/audit?targetId=${encodeURIComponent(deviceId)}&since=400d`, $selectedTailnetId)}
+								title="Logins, approvals, tag and route changes for this device"
+							>
+								Audit history
+							</a>
+						{/if}
+					</span>
 				</div>
 				{#if error}
 					<p class="py-4 text-sm text-destructive">{error}</p>
