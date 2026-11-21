@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 )
@@ -316,16 +317,34 @@ func (s *SQLiteStore) backfillHourRollupTailnet(ctx context.Context, tailnetID s
 	return nil
 }
 
-// rollClosedMinutes merges minute rows older than closedThrough into the
-// hourly rollup. closedThrough is exclusive and should be minute-aligned.
-// The open minute at the cursor stays in node_pairs.
-// A pass that merged rows logs its row count and duration.
-func rollClosedMinutes(ctx context.Context, tx *sql.Tx, tailnetID string, closedThrough int64) error {
+// rollHoursAfterCommit rolls complete hours after a data commit. The data is
+// already stored, so a failure is logged and retried by the next poll instead
+// of failing a commit that must not be applied twice.
+func (s *SQLiteStore) rollHoursAfterCommit(ctx context.Context, tailnetID string, closedThrough int64) {
+	if err := s.rollClosedHours(ctx, tailnetID, closedThrough); err != nil {
+		log.Printf("Hour rollup tailnet=%s failed, will retry on the next poll: %v", tailnetID, err)
+	}
+}
+
+// rollClosedHours merges every complete hour before closedThrough into the
+// hourly rollup. Each hour is its own write transaction, and the tailnet lock
+// is released between hours, so ingest commits interleave with a long
+// catch-up instead of waiting behind it.
+//
+// Only complete hours roll. A partial hour used to be re-read and rewritten
+// on every poll, about twelve times an hour; now the current hour stays in
+// the minute table, which readers already scan for minutes past the mark, and
+// is rolled once when the hour closes.
+func (s *SQLiteStore) rollClosedHours(ctx context.Context, tailnetID string, closedThrough int64) error {
+	if err := checkTailnetID(tailnetID); err != nil {
+		return err
+	}
+	closedThrough = (floorMinute(closedThrough) / hourSeconds) * hourSeconds
 	started := time.Now()
 	var rows int64
 	chunks := 0
 	for {
-		n, done, err := rollNextHourChunk(ctx, tx, tailnetID, closedThrough)
+		n, done, err := s.rollOneChunk(ctx, tailnetID, closedThrough)
 		if err != nil {
 			return err
 		}
@@ -335,11 +354,29 @@ func rollClosedMinutes(ctx context.Context, tx *sql.Tx, tailnetID string, closed
 		}
 		if done {
 			if rows > 0 {
-				log.Printf("Hour rollup tailnet=%s rows=%d chunks=%d took=%s", tailnetID, rows, chunks, time.Since(started).Round(time.Millisecond))
+				log.Printf("Hour rollup tailnet=%s rows=%d hours=%d took=%s", tailnetID, rows, chunks, time.Since(started).Round(time.Millisecond))
 			}
 			return nil
 		}
 	}
+}
+
+func (s *SQLiteStore) rollOneChunk(ctx context.Context, tailnetID string, closedThrough int64) (int64, bool, error) {
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
+	tx, err := s.beginWrite(ctx, tailnetID)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to begin hourly rollup: %w", err)
+	}
+	defer tx.Rollback()
+	n, done, err := rollNextHourChunk(ctx, tx, tailnetID, closedThrough)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := s.commitWrite(tx, tailnetID); err != nil {
+		return 0, false, fmt.Errorf("failed to commit hourly rollup: %w", err)
+	}
+	return n, done, nil
 }
 
 func rollNextHourChunk(ctx context.Context, tx *sql.Tx, tailnetID string, closedThrough int64) (int64, bool, error) {
@@ -536,9 +573,30 @@ func writeDirtyHourGroups(ctx context.Context, tx *sql.Tx, tailnetID string, hou
 		return 0, fmt.Errorf("failed to prepare hourly node pair upsert: %w", err)
 	}
 	defer stmt.Close()
-	var wrote int64
+	// Key order is primary key order, so the rows are appended to the b-tree
+	// instead of landing on random pages.
+	keys := make([]pairGroupKey, 0, dirty)
 	for key, group := range grouped {
-		if !group.dirty {
+		if group.dirty {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.src != b.src {
+			return a.src < b.src
+		}
+		if a.dst != b.dst {
+			return a.dst < b.dst
+		}
+		return a.traffic < b.traffic
+	})
+	var wrote int64
+	var fresh []pairGroupKey
+	for _, key := range keys {
+		group := grouped[key]
+		if !group.stored {
+			fresh = append(fresh, key)
 			continue
 		}
 		if err := execHourGroup(ctx, stmt, tailnetID, hour, key, group); err != nil {
@@ -546,8 +604,56 @@ func writeDirtyHourGroups(ctx context.Context, tx *sql.Tx, tailnetID string, hou
 		}
 		wrote++
 	}
+	// New keys have no row to conflict with, so they go in as multi-row
+	// INSERTs, in key order.
+	for start := 0; start < len(fresh); start += pairBatchRows {
+		end := start + pairBatchRows
+		if end > len(fresh) {
+			end = len(fresh)
+		}
+		if err := insertHourGroups(ctx, tx, tailnetID, hour, fresh[start:end], grouped); err != nil {
+			return 0, err
+		}
+		wrote += int64(end - start)
+	}
 	return wrote, nil
 }
+
+func insertHourGroups(ctx context.Context, tx *sql.Tx, tailnetID string, hour int64, keys []pairGroupKey, grouped map[pairGroupKey]*pairGroup) error {
+	var sb strings.Builder
+	sb.WriteString(hourInsertPrefix)
+	args := make([]any, 0, len(keys)*19)
+	for i, key := range keys {
+		group := grouped[key]
+		if !group.hasBucket {
+			return fmt.Errorf("hourly rollup for %s -> %s has no minute bucket", key.src, key.dst)
+		}
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args,
+			tailnetID, hour, key.src, key.dst, key.traffic,
+			sumArg(group.tx), sumArg(group.rx), sumArg(group.txPkts), sumArg(group.rxPkts), sumArg(group.flows),
+			formatProtocols(group.protocols), formatHourProtocolBytes(group.protocols), formatPortsLimit(group.ports, 0),
+			formatPortsLimit(group.txPorts, 0), formatPortsLimit(group.rxPorts, 0),
+			formatHourProtocolBytes(group.txProto), formatHourProtocolBytes(group.rxProto),
+			group.directional, group.bucket,
+		)
+	}
+	if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("failed to write hourly node pairs: %w", err)
+	}
+	return nil
+}
+
+const hourInsertPrefix = `INSERT INTO node_pair_hours (
+	tailnet_id, bucket, src_node_id, dst_node_id, traffic_type,
+	tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count,
+	protocols, protocol_bytes, ports,
+	tx_ports, rx_ports, tx_protocol_bytes, rx_protocol_bytes,
+	directional_ports, min_bucket
+) VALUES `
 
 func execHourGroup(ctx context.Context, stmt *sql.Stmt, tailnetID string, hour int64, key pairGroupKey, group *pairGroup) error {
 	if !group.hasBucket {
@@ -574,13 +680,26 @@ func sumArg(state sumState) any {
 	return state.n
 }
 
-// mergeHourDelta adds one already-written minute delta onto the hourly row.
-// The minute bucket is at or behind the high-water mark, so the rollup would
-// otherwise miss it.
-func mergeHourDelta(ctx context.Context, tx *sql.Tx, tailnetID string, minuteBucket int64, values hourDelta) error {
-	hour := (minuteBucket / hourSeconds) * hourSeconds
-	grouped := make(map[pairGroupKey]*pairGroup)
-	rows, err := tx.QueryContext(ctx, `
+// mergeHourDeltas adds minute deltas to the hourly rows of minutes the rollup
+// already covers. The minute bucket is at or behind the high-water mark, so the
+// rollup would otherwise miss it. Deltas are grouped by hour, each affected
+// hourly row is read once, and the changed rows are written in key order.
+func mergeHourDeltas(ctx context.Context, tx *sql.Tx, tailnetID string, deltas []hourDelta) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+	byHour := make(map[int64][]hourDelta)
+	for _, d := range deltas {
+		hour := (d.bucket / hourSeconds) * hourSeconds
+		byHour[hour] = append(byHour[hour], d)
+	}
+	hours := make([]int64, 0, len(byHour))
+	for h := range byHour {
+		hours = append(hours, h)
+	}
+	sort.Slice(hours, func(i, j int) bool { return hours[i] < hours[j] })
+
+	stmt, err := tx.PrepareContext(ctx, `
 		SELECT min_bucket, src_node_id, dst_node_id, traffic_type,
 		       tx_bytes, rx_bytes, tx_pkts, rx_pkts, flow_count,
 		       protocol_bytes, ports,
@@ -589,40 +708,56 @@ func mergeHourDelta(ctx context.Context, tx *sql.Tx, tailnetID string, minuteBuc
 		       directional_ports
 		FROM node_pair_hours
 		WHERE tailnet_id = ? AND bucket = ? AND src_node_id = ? AND dst_node_id = ? AND traffic_type = ?
-	`, tailnetID, hour, values.src, values.dst, values.traffic)
+	`)
 	if err != nil {
 		return err
 	}
-	if err := readHourPairRows(rows, grouped); err != nil {
-		return err
-	}
-	key := pairGroupKey{src: values.src, dst: values.dst, traffic: values.traffic}
-	group := grouped[key]
-	if group == nil {
-		group = newPairGroup()
-		grouped[key] = group
-	}
-	if err := group.add(
-		sql.NullInt64{Int64: minuteBucket, Valid: true},
-		nullInt(values.tx), nullInt(values.rx), nullInt(values.txPkts), nullInt(values.rxPkts), nullInt(values.flows),
-		sql.NullInt64{Int64: values.directional, Valid: true},
-		nullText(values.protocolBytes), nullText(values.ports),
-		nullText(values.txProto), nullText(values.rxProto),
-		nullText(values.txPorts), nullText(values.rxPorts),
-	); err != nil {
-		return err
-	}
-	group.dirty = true
-	if rowNeedsProtocolFallback(nullText(values.protocolBytes), nullText(values.protocols)) {
-		if err := setHourLegacy(ctx, tx, tailnetID); err != nil {
+	defer stmt.Close()
+
+	for _, hour := range hours {
+		grouped := make(map[pairGroupKey]*pairGroup)
+		for _, values := range byHour[hour] {
+			key := pairGroupKey{src: values.src, dst: values.dst, traffic: values.traffic}
+			if _, loaded := grouped[key]; !loaded {
+				rows, err := stmt.QueryContext(ctx, tailnetID, hour, values.src, values.dst, values.traffic)
+				if err != nil {
+					return err
+				}
+				if err := readHourPairRows(rows, grouped); err != nil {
+					return err
+				}
+			}
+			group := grouped[key]
+			if group == nil {
+				group = newPairGroup()
+				grouped[key] = group
+			}
+			if err := group.add(
+				sql.NullInt64{Int64: values.bucket, Valid: true},
+				nullInt(values.tx), nullInt(values.rx), nullInt(values.txPkts), nullInt(values.rxPkts), nullInt(values.flows),
+				sql.NullInt64{Int64: values.directional, Valid: true},
+				nullText(values.protocolBytes), nullText(values.ports),
+				nullText(values.txProto), nullText(values.rxProto),
+				nullText(values.txPorts), nullText(values.rxPorts),
+			); err != nil {
+				return err
+			}
+			group.dirty = true
+			if rowNeedsProtocolFallback(nullText(values.protocolBytes), nullText(values.protocols)) {
+				if err := setHourLegacy(ctx, tx, tailnetID); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := writeDirtyHourGroups(ctx, tx, tailnetID, hour, grouped); err != nil {
 			return err
 		}
 	}
-	_, err = writeDirtyHourGroups(ctx, tx, tailnetID, hour, grouped)
-	return err
+	return nil
 }
 
 type hourDelta struct {
+	bucket                                     int64
 	src, dst, traffic                          string
 	tx, rx, txPkts, rxPkts, flows, directional int64
 	protocols, protocolBytes, ports            string

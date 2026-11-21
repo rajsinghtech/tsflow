@@ -192,6 +192,9 @@ func scanPairRows(rows *sql.Rows, grouped map[pairGroupKey]*pairGroup, dirty, ho
 		if err := group.addRow(hourRows, bucket, tx, rx, txPkts, rxPkts, flows, directional, protocolBytes, ports, txProto, rxProto, txPorts, rxPorts); err != nil {
 			return fmt.Errorf("failed to scan node pair: %w", err)
 		}
+		if hourRows {
+			group.stored = true
+		}
 		if dirty {
 			group.dirty = true
 		}
@@ -368,6 +371,9 @@ type pairGroup struct {
 	// dirty marks a group that absorbed a minute row during an hourly merge.
 	// Seeded hourly rows stay clean so an untouched pair is not rewritten.
 	dirty bool
+	// stored marks a group seeded from an existing node_pair_hours row, so a
+	// rewrite must update that row; every other group is a new key.
+	stored bool
 }
 
 func newPairGroup() *pairGroup {

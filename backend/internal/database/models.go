@@ -262,26 +262,37 @@ type FlowLog struct {
 	RxPkts      int64     `json:"rxPkts"`
 }
 
-// Store defines the interface for flow log storage.
-// Data methods take a tailnet id and never read or write another tailnet's rows.
-type Store interface {
+// Lifecycle opens and closes a backend.
+type Lifecycle interface {
 	Init(ctx context.Context) error
 	Close() error
+}
 
-	// Pre-aggregated data operations
+// IngestStore is the write side used by the pollers: one call per object or poll,
+// each atomic, so a backend maps it to one transaction.
+type IngestStore interface {
 	UpsertNodePairAggregates(ctx context.Context, tailnetID string, aggregates []NodePairAggregate) error
-	GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error)
-
-	// Bandwidth operations
 	UpsertBandwidth(ctx context.Context, tailnetID string, buckets []BandwidthBucket) error
 	UpsertNodeBandwidth(ctx context.Context, tailnetID string, buckets []NodeBandwidth) error
+	UpsertTrafficStats(ctx context.Context, tailnetID string, stats []TrafficStats) error
+	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error
+	CommitObjectIngest(ctx context.Context, tailnetID string, result ObjectIngestResult) error
+	IsObjectIngested(ctx context.Context, tailnetID string, key string) (bool, error)
+	GetObjectsNeedingMetadata(ctx context.Context, tailnetID string, limit int) ([]string, error)
+	MarkObjectMetadataHydrated(ctx context.Context, tailnetID string, key string, nodeIDs []string) error
+	UpsertNodeMetadata(ctx context.Context, tailnetID string, nodes []NodeMetadata) error
+	UpdatePollState(ctx context.Context, tailnetID string, lastPollEnd time.Time) error
+}
+
+// ReadStore is everything the API, the UI handlers, the MCP server and the metrics
+// exporter read. Data methods take a tailnet id and never read another
+// tailnet's rows.
+type ReadStore interface {
+	GetNodePairAggregates(ctx context.Context, tailnetID string, start, end time.Time) ([]NodePairAggregate, error)
 	GetBandwidth(ctx context.Context, tailnetID string, start, end time.Time) ([]BandwidthBucket, error)
 	GetBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]BandwidthBucket, error)
 	GetNodeBandwidth(ctx context.Context, tailnetID string, start, end time.Time, nodeID string) ([]BandwidthBucket, error)
 	GetNodeBandwidthByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, nodeID string, trafficTypes []string) ([]BandwidthBucket, error)
-
-	// Traffic stats operations
-	UpsertTrafficStats(ctx context.Context, tailnetID string, stats []TrafficStats) error
 	GetTrafficStats(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
 	GetTrafficStatsFromNodePairs(ctx context.Context, tailnetID string, start, end time.Time) ([]TrafficStats, error)
 	GetTrafficStatsFromNodePairsByTrafficTypes(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([]TrafficStats, error)
@@ -330,22 +341,25 @@ type Store interface {
 	// trafficTypes list leaves out physical rows. Ids are as stored, so
 	// callers resolve aliases before counting pairs.
 	DistinctPairs(ctx context.Context, tailnetID string, start, end time.Time, trafficTypes []string) ([][2]string, error)
-
-	// Atomic poll commit
-	CommitPollResults(ctx context.Context, tailnetID string, results PollResults) error
-	CommitObjectIngest(ctx context.Context, tailnetID string, result ObjectIngestResult) error
-	IsObjectIngested(ctx context.Context, tailnetID string, key string) (bool, error)
-	GetObjectsNeedingMetadata(ctx context.Context, tailnetID string, limit int) ([]string, error)
-	MarkObjectMetadataHydrated(ctx context.Context, tailnetID string, key string, nodeIDs []string) error
-	UpsertNodeMetadata(ctx context.Context, tailnetID string, nodes []NodeMetadata) error
 	GetNodeMetadata(ctx context.Context, tailnetID string) ([]NodeMetadata, error)
-
-	// State operations
 	GetPollState(ctx context.Context, tailnetID string) (*PollState, error)
-	UpdatePollState(ctx context.Context, tailnetID string, lastPollEnd time.Time) error
 	GetDataRange(ctx context.Context, tailnetID string) (*DataRange, error)
+}
 
-	// Maintenance
+// MaintenanceStore is retention and housekeeping.
+type MaintenanceStore interface {
 	Cleanup(ctx context.Context, tailnetID string, retention time.Duration) (int64, error)
 	GetStats(ctx context.Context, tailnetID string) (map[string]any, error)
 }
+
+// Store defines the interface for flow log storage. A backend implements the
+// four parts below; callers that need only one part should take that part.
+// Data methods take a tailnet id and never read or write another tailnet's rows.
+type Store interface {
+	Lifecycle
+	IngestStore
+	ReadStore
+	MaintenanceStore
+}
+
+var _ Store = (*SQLiteStore)(nil)
