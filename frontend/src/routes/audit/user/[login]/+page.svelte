@@ -4,7 +4,7 @@
 	import Header from '#lib/components/layout/Header.svelte';
 	import AuditChange from '#lib/components/audit/AuditChange.svelte';
 	import AuditUnavailable from '#lib/components/audit/AuditUnavailable.svelte';
-	import { auditService } from '#lib/audit/audit-service';
+	import { auditService, loadCatalog } from '#lib/audit/audit-service';
 	import { auditTime, shortHost, eventLabel, eventTone, flowLink, hasChange, isNodeTarget, relativeTime, targetLabel, actorLabel, TONE_CLASSES } from '#lib/audit/format';
 	import type { AuditEvent, AuditLiveDevice, AuditLoginRef, AuditNodeRef, AuditUserResponse } from '#lib/audit/types';
 	import { APIError } from '#lib/services/api-service';
@@ -27,7 +27,7 @@
 		loading = true;
 		unavailable = null;
 		try {
-			const res = await auditService.user(who);
+			const [res] = await Promise.all([auditService.user(who), loadCatalog()]);
 			if (mine !== token) return;
 			data = res;
 			timeline = res.timeline.events ?? [];

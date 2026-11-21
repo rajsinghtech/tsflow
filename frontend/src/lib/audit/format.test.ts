@@ -99,3 +99,29 @@ describe('links and times', () => {
 		expect(relativeTime(undefined, now)).toBe('never');
 	});
 });
+
+describe('catalog labels', () => {
+	it('uses the server catalog and falls back for unknown events', async () => {
+		const { setCatalog, eventLabel, categoryLabel, eventCategory, originLabel, actorTypeLabel, keyKindLabel, isZeroTime } = await import('./format');
+		expect(eventLabel('NODE.APPROVE')).toBe('Device approved');
+		setCatalog({
+			categories: [{ id: 'keys', label: 'Keys' }],
+			events: [{ event: 'API_KEY.EXPIRED', label: 'Key expired after its lifetime', category: 'keys' }]
+		});
+		expect(eventLabel('API_KEY.EXPIRED')).toBe('Key expired after its lifetime');
+		expect(eventCategory('API_KEY.EXPIRED')).toBe('keys');
+		expect(categoryLabel('keys')).toBe('Keys');
+		expect(categoryLabel('tailnet_lock')).toBe('Tailnet lock');
+		expect(eventLabel('WIDGET.UPDATE.COLOR')).toBe('Widget update color');
+		expect(originLabel('CONFIG_API')).toBe('API');
+		expect(actorTypeLabel('AUTOMATED_WORKER')).toBe('Tailscale service');
+		expect(keyKindLabel('oauth_client')).toBe('OAuth client');
+		expect(isZeroTime('0001-01-01T00:00:00Z')).toBe(true);
+		expect(isZeroTime('2026-01-01T00:00:00Z')).toBe(false);
+	});
+	it('treats failed requests as errors', async () => {
+		const { eventTone } = await import('./format');
+		expect(eventTone({ event: 'FAILED_REQUEST.UPDATE', action: 'UPDATE' })).toBe('error');
+		expect(eventTone({ event: 'API_KEY.EXPIRED', action: 'EXPIRED' })).toBe('delete');
+	});
+});

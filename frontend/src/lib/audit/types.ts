@@ -31,6 +31,9 @@ export interface AuditEvent {
 	new?: unknown;
 	actionDetails?: string;
 	error?: string;
+	// deferredAt is set when Tailscale's rate limiter delayed the record.
+	deferredAt?: string;
+	category?: string;
 }
 
 export interface AuditPage {
@@ -48,11 +51,132 @@ export interface AuditCount {
 }
 
 export interface AuditFacets {
+	categories: AuditCount[];
 	events: AuditCount[];
 	actors: AuditCount[];
+	actorTypes: AuditCount[];
+	targets: AuditCount[];
 	targetTypes: AuditCount[];
 	origins: AuditCount[];
+	failed: number;
+	ephemeral: number;
 	total: number;
+}
+
+export interface AuditCategory {
+	id: string;
+	label: string;
+}
+
+export interface AuditCatalogEntry {
+	event: string;
+	label: string;
+	category: string;
+}
+
+export interface AuditCatalog {
+	categories: AuditCategory[];
+	events: AuditCatalogEntry[];
+}
+
+export interface AuditHistogramBucket {
+	start: string;
+	total: number;
+	failed: number;
+	categories: Record<string, number>;
+}
+
+export interface AuditHistogram {
+	bucket: 'hour' | 'day' | string;
+	buckets: AuditHistogramBucket[];
+}
+
+// AuditWho is who did something and when, pointing at the event.
+export interface AuditWho {
+	at: string;
+	actor?: string;
+	actorType?: string;
+	eventId: number;
+}
+
+export interface AuditKey {
+	id: string;
+	name?: string;
+	kind?: 'auth_key' | 'oauth_client' | 'federated_identity' | 'api_access_token' | string;
+	status: 'active' | 'revoked' | 'expired' | 'unknown' | string;
+	created?: AuditWho;
+	revoked?: AuditWho;
+	expired?: AuditWho;
+	updates: number;
+	lastEvent: string;
+	expires?: string;
+	tags?: string[];
+	scopes?: string[];
+	reusable?: boolean;
+	ephemeral?: boolean;
+	preauthorized?: boolean;
+	description?: string;
+	firstSeen?: string;
+}
+
+export interface AuditSetting {
+	event: string;
+	label: string;
+	property: string;
+	state: string;
+	changes: number;
+	last?: AuditWho;
+	category: string;
+	at: string;
+}
+
+export interface AuditPolicyChange {
+	eventId: number;
+	at: string;
+	actor: string;
+	origin?: string;
+	added: number;
+	removed: number;
+	error?: string;
+	details?: string;
+}
+
+export interface AuditInsights {
+	histogram: AuditHistogram;
+	policy: AuditPolicyChange[];
+	keys: AuditKey[];
+	settings: AuditSetting[];
+}
+
+export interface AuditNodeSummary {
+	id: string;
+	name?: string;
+	ephemeral: boolean;
+	created?: AuditWho;
+	approved?: AuditWho;
+	deleted?: AuditWho;
+	lastLogin?: AuditWho;
+	lastLogout?: AuditWho;
+	keyExpiry?: string;
+	keyExpiryDisabled?: boolean;
+	keyExpired?: AuditWho;
+	tags?: unknown;
+	tagsChanged?: AuditWho;
+	routes?: unknown;
+	autoApprovedRoutes?: unknown;
+	exitNode?: unknown;
+	tailnetLockSigned?: AuditWho;
+	postureChanges: number;
+	renames: number;
+	events: number;
+	actors: string[];
+}
+
+export interface AuditNodeResponse {
+	nodeId: string;
+	summary: AuditNodeSummary | null;
+	events: AuditEvent[];
+	nextCursor?: string;
 }
 
 export interface AuditSourceStatus {
@@ -163,6 +287,9 @@ export interface AuditQuery {
 	event?: string[];
 	origin?: string[];
 	targetType?: string[];
+	category?: string[];
+	actorType?: string[];
+	ephemeral?: boolean;
 	failed?: boolean;
 	q?: string;
 	cursor?: string;

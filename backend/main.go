@@ -299,6 +299,9 @@ func main() {
 			auditRoutes.GET("/facets", noCache, handlerService.GetAuditFacets)
 			auditRoutes.GET("/users/:login", noCache, handlerService.GetAuditUser)
 			auditRoutes.GET("/nodes/:nodeId", noCache, handlerService.GetAuditNode)
+			auditRoutes.GET("/catalog", handlerService.GetAuditCatalog)
+			auditRoutes.GET("/insights", noCache, handlerService.GetAuditInsights)
+			auditRoutes.GET("/export", noCache, handlerService.GetAuditExport)
 		}
 	}
 

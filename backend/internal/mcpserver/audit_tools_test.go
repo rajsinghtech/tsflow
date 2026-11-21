@@ -35,7 +35,7 @@ func auditToolNames(t *testing.T, h *handlers.Handlers) map[string]bool {
 
 func TestAuditToolsHiddenWhenAuditIsOff(t *testing.T) {
 	names := auditToolNames(t, handlers.NewHandlers(nil, nil, nil, "test"))
-	if names["audit_search"] || names["user_last_login"] {
+	if names["audit_search"] || names["user_last_login"] || names["audit_overview"] || names["device_audit"] {
 		t.Fatalf("audit tools listed while audit is off: %v", names)
 	}
 }
@@ -65,7 +65,7 @@ func TestAuditToolsListedAndSearch(t *testing.T) {
 	h.UseAudit(mgr, handlers.NewAuditGate(true, nil))
 
 	names := auditToolNames(t, h)
-	if !names["audit_search"] || !names["user_last_login"] {
+	if !names["audit_search"] || !names["user_last_login"] || !names["audit_overview"] || !names["device_audit"] {
 		t.Fatalf("audit tools missing: %v", names)
 	}
 
@@ -77,7 +77,22 @@ func TestAuditToolsListedAndSearch(t *testing.T) {
 	defer session.Close()
 	var out auditSearchOut
 	callTool(t, session, "audit_search", map[string]any{"event": []string{"NODE.LOGIN"}}, &out)
-	if len(out.Events) != 1 || out.Events[0].Actor != "ada@example.com" || out.Events[0].Event != "NODE.LOGIN" {
+	if len(out.Events) != 1 || out.Events[0].Actor != "ada@example.com" || out.Events[0].Event != "NODE.LOGIN" || out.Events[0].Category != "logins" || out.Events[0].Label != "Device login" {
 		t.Fatalf("audit_search = %+v", out)
+	}
+	var byCat auditSearchOut
+	callTool(t, session, "audit_search", map[string]any{"category": []string{"keys"}}, &byCat)
+	if len(byCat.Events) != 0 {
+		t.Fatalf("category filter = %+v", byCat)
+	}
+	var dev deviceAuditOut
+	callTool(t, session, "device_audit", map[string]any{"nodeId": "nAAA"}, &dev)
+	if dev.Summary == nil || dev.Summary.LastLogin == nil || len(dev.Events) != 1 {
+		t.Fatalf("device_audit = %+v", dev)
+	}
+	var ov auditOverviewOut
+	callTool(t, session, "audit_overview", map[string]any{}, &ov)
+	if ov.Totals["logins"] != 1 || len(ov.Busiest) != 1 {
+		t.Fatalf("audit_overview = %+v", ov)
 	}
 }

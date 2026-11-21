@@ -3,11 +3,15 @@
 	import { auditService } from '#lib/audit/audit-service';
 	import {
 		actorLabel,
+		actorTypeLabel,
 		auditTime,
+		categoryLabel,
 		eventLabel,
 		eventTone,
 		flowLink,
 		isNodeTarget,
+		isZeroTime,
+		originLabel,
 		relativeTime,
 		targetLabel,
 		TONE_CLASSES,
@@ -51,7 +55,7 @@
 <div class="space-y-4 text-sm">
 	<div>
 		<span class="inline-flex rounded px-1.5 py-0.5 text-xs font-medium {TONE_CLASSES[tone]}">{eventLabel(event.event)}</span>
-		<div class="mt-1 font-mono text-[11px] text-muted-foreground">{event.event}</div>
+		<div class="mt-1 font-mono text-[11px] text-muted-foreground">{event.event}{#if event.category} · <span class="font-sans">{categoryLabel(event.category)}</span>{/if}</div>
 		<div class="mt-1 text-xs text-muted-foreground">{auditTime(event.eventTime)} · {relativeTime(event.eventTime)}</div>
 	</div>
 
@@ -63,24 +67,47 @@
 		<dt class="text-muted-foreground">Who</dt>
 		<dd class="min-w-0">
 			<div class="truncate font-medium">{actorLabel(event)}</div>
-			{#if event.actor.displayName && event.actor.displayName !== event.actor.loginName}
+			{#if event.actor.displayName && event.actor.displayName !== actorLabel(event)}
 				<div class="truncate text-muted-foreground">{event.actor.displayName}</div>
 			{/if}
-			{#if event.actor.type}<div class="text-muted-foreground">{event.actor.type.toLowerCase()}</div>{/if}
+			{#if event.actor.type && actorTypeLabel(event.actor.type) !== actorLabel(event)}<div class="text-muted-foreground">{actorTypeLabel(event.actor.type)}</div>{/if}
+			{#if event.actor.tags?.length}
+				<div class="mt-0.5 flex flex-wrap gap-1">
+					{#each event.actor.tags as tag}<span class="rounded bg-secondary px-1 font-mono text-[10px]">{tag}</span>{/each}
+				</div>
+			{/if}
+			{#if event.actor.id && event.actor.id !== event.actor.loginName}
+				<div class="truncate font-mono text-[11px] text-muted-foreground" title="Actor ID">{event.actor.id}</div>
+			{/if}
 		</dd>
 		<dt class="text-muted-foreground">What</dt>
 		<dd class="min-w-0">
 			<div class="truncate font-medium">{targetLabel(event) || '—'}</div>
 			<div class="text-muted-foreground">
-				{(event.target.type ?? '').toLowerCase()}{event.target.property ? ` · ${event.target.property.toLowerCase()}` : ''}{event.target.isEphemeral ? ' · ephemeral' : ''}
+				{(event.target.type ?? '').toLowerCase().replace(/_/g, ' ')}{event.target.property ? ` · ${event.target.property.toLowerCase().replace(/_/g, ' ')}` : ''}
 			</div>
+			{#if event.target.isEphemeral}
+				<span class="mt-0.5 inline-flex rounded bg-violet-500/15 px-1 text-[10px] font-medium text-violet-700 dark:text-violet-300">ephemeral device</span>
+			{/if}
 			{#if event.target.id && event.target.id !== event.target.name}
 				<div class="truncate font-mono text-[11px] text-muted-foreground">{event.target.id}</div>
 			{/if}
 		</dd>
 		{#if event.origin}
-			<dt class="text-muted-foreground">From</dt>
-			<dd>{event.origin.toLowerCase().replace(/_/g, ' ')}</dd>
+			<dt class="text-muted-foreground">Via</dt>
+			<dd title={event.origin}>{originLabel(event.origin)}</dd>
+		{/if}
+		<dt class="text-muted-foreground">Logged</dt>
+		<dd>
+			{#if event.deferredAt && !isZeroTime(event.deferredAt)}
+				<span class="text-amber-700 dark:text-amber-400" title="Tailscale's rate limiter delayed this record">delayed until {auditTime(event.deferredAt)}</span>
+			{:else}
+				<span class="text-muted-foreground">at the time of the change</span>
+			{/if}
+		</dd>
+		{#if event.eventGroupID}
+			<dt class="text-muted-foreground">Operation</dt>
+			<dd class="truncate font-mono text-[11px] text-muted-foreground" title="Events from one operation share this ID">{event.eventGroupID}</dd>
 		{/if}
 		{#if event.actionDetails}
 			<dt class="text-muted-foreground">Details</dt>
@@ -109,7 +136,7 @@
 				class="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-secondary"
 				href={hrefWithTailnet(`/audit?targetId=${encodeURIComponent(event.target.id ?? '')}&since=400d`, $selectedTailnetId)}
 			>
-				<History class="h-3.5 w-3.5" /> Device audit history
+				<History class="h-3.5 w-3.5" /> Device history
 			</a>
 		{/if}
 	</div>

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ func auditRouter(h *Handlers, ident *access.Identity) *gin.Engine {
 	a.GET("/facets", h.GetAuditFacets)
 	a.GET("/users/:login", h.GetAuditUser)
 	a.GET("/nodes/:nodeId", h.GetAuditNode)
+	a.GET("/catalog", h.GetAuditCatalog)
+	a.GET("/insights", h.GetAuditInsights)
+	a.GET("/export", h.GetAuditExport)
 	return router
 }
 
@@ -206,6 +210,71 @@ func TestAuditRoutesOpenServer(t *testing.T) {
 	}
 }
 
+func TestAuditDerivedRoutes(t *testing.T) {
+	h, _ := auditTestHandlers(t)
+	router := auditRouter(h, nil)
+
+	code, body := serve(router, http.MethodGet, "/api/audit/catalog")
+	var cat struct {
+		Categories []audit.CategoryInfo `json:"categories"`
+		Events     []audit.CatalogEntry `json:"events"`
+	}
+	decode(t, body, &cat)
+	if code != http.StatusOK || len(cat.Events) < 100 || len(cat.Categories) == 0 {
+		t.Fatalf("catalog: %d %d", code, len(cat.Events))
+	}
+
+	code, body = serve(router, http.MethodGet, "/api/audit/insights?tailnet=alpha&since=2d&tzOffset=-21600")
+	var ins AuditInsights
+	decode(t, body, &ins)
+	if code != http.StatusOK || ins.Histogram.Bucket == "" || len(ins.Policy) != 4 || len(ins.Histogram.Buckets) == 0 {
+		t.Fatalf("insights: %d %s", code, body)
+	}
+	var total int64
+	for _, b := range ins.Histogram.Buckets {
+		total += b.Total
+	}
+	if total != 12 {
+		t.Fatalf("histogram total %d", total)
+	}
+
+	code, _ = serve(router, http.MethodGet, "/api/audit/events?tailnet=alpha&category=nope")
+	if code != http.StatusBadRequest {
+		t.Fatalf("unknown category: %d", code)
+	}
+	code, body = serve(router, http.MethodGet, "/api/audit/events?tailnet=alpha&category=logins")
+	var page struct{ Events []audit.Event }
+	decode(t, body, &page)
+	if code != http.StatusOK || len(page.Events) != 8 || page.Events[0].Category != audit.CategoryLogins {
+		t.Fatalf("category filter: %d %d", code, len(page.Events))
+	}
+
+	code, body = serve(router, http.MethodGet, "/api/audit/nodes/nAAA?tailnet=alpha")
+	var node struct {
+		Summary *audit.NodeSummary `json:"summary"`
+	}
+	decode(t, body, &node)
+	if code != http.StatusOK || node.Summary == nil || node.Summary.LastLogin == nil || node.Summary.Events != 4 {
+		t.Fatalf("node summary: %d %s", code, body)
+	}
+
+	code, body = serve(router, http.MethodGet, "/api/audit/export?tailnet=alpha&format=csv&event=ADMIN_CONSOLE.LOGIN")
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if code != http.StatusOK || len(lines) != 5 || !strings.HasPrefix(lines[0], "event_time,event,label,category") || !strings.Contains(lines[1], "Admin console login") {
+		t.Fatalf("csv export: %d %q", code, body)
+	}
+	code, body = serve(router, http.MethodGet, "/api/audit/export?tailnet=alpha&format=ndjson")
+	lines = strings.Split(strings.TrimSpace(string(body)), "\n")
+	var first map[string]any
+	if code != http.StatusOK || len(lines) != 12 || json.Unmarshal([]byte(lines[0]), &first) != nil || first["type"] != "CONFIG" {
+		t.Fatalf("ndjson export: %d %d", code, len(lines))
+	}
+	code, _ = serve(router, http.MethodGet, "/api/audit/export?tailnet=alpha&format=xml")
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad format: %d", code)
+	}
+}
+
 func TestAuditRoutesNeedViewerPermission(t *testing.T) {
 	h, _ := auditTestHandlers(t)
 	outsider := access.Identity{Login: "eve@example.com", Allow: access.Allow{All: true}}
@@ -213,6 +282,11 @@ func TestAuditRoutesNeedViewerPermission(t *testing.T) {
 	code, _ := serve(router, http.MethodGet, "/api/audit/events?tailnet=alpha")
 	if code != http.StatusForbidden {
 		t.Fatalf("outsider: %d", code)
+	}
+	for _, path := range []string{"/api/audit/export?tailnet=alpha", "/api/audit/insights?tailnet=alpha", "/api/audit/catalog"} {
+		if code, _ := serve(router, http.MethodGet, path); code != http.StatusForbidden {
+			t.Fatalf("outsider %s: %d", path, code)
+		}
 	}
 	_, body := serve(router, http.MethodGet, "/api/audit/status")
 	var status struct{ Enabled, Permitted bool }

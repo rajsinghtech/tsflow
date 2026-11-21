@@ -41,13 +41,18 @@ type Target struct {
 // record) is what makes ingest idempotent. ID is the local row id and is only
 // stable within one database.
 type Event struct {
-	ID            int64           `json:"id"`
-	TailnetID     string          `json:"tailnet"`
-	EventTime     time.Time       `json:"eventTime"`
-	EventGroupID  string          `json:"eventGroupID,omitempty"`
-	Origin        string          `json:"origin,omitempty"`
-	Action        string          `json:"action"`
-	Event         string          `json:"event"`
+	ID           int64     `json:"id"`
+	TailnetID    string    `json:"tailnet"`
+	EventTime    time.Time `json:"eventTime"`
+	EventGroupID string    `json:"eventGroupID,omitempty"`
+	// DeferredAt is set when Tailscale's audit rate limiter queued the
+	// record to be written later. It is nil for the usual zero value.
+	DeferredAt *time.Time `json:"deferredAt,omitempty"`
+	Origin     string     `json:"origin,omitempty"`
+	Action     string     `json:"action"`
+	Event      string     `json:"event"`
+	// Category groups the event for filters (logins, policy, devices...).
+	Category      Category        `json:"category"`
 	Actor         Actor           `json:"actor"`
 	Target        Target          `json:"target"`
 	Old           json.RawMessage `json:"old,omitempty"`
@@ -100,6 +105,7 @@ type rawRecord struct {
 	EventTime     string          `json:"eventTime"`
 	Type          string          `json:"type"`
 	EventGroupID  string          `json:"eventGroupID"`
+	DeferredAt    string          `json:"deferredAt"`
 	Origin        string          `json:"origin"`
 	Actor         Actor           `json:"actor"`
 	Target        Target          `json:"target"`
@@ -181,12 +187,15 @@ func ParseRecord(raw []byte) (Event, error) {
 		return Event{}, err
 	}
 	sum := sha256.Sum256(canonical)
+	key := EventKey(rec.Target.Type, rec.Action, rec.Target.Property)
 	return Event{
 		EventTime:     when.UTC(),
 		EventGroupID:  rec.EventGroupID,
+		DeferredAt:    nonZeroTime(rec.DeferredAt),
 		Origin:        rec.Origin,
 		Action:        strings.ToUpper(rec.Action),
-		Event:         EventKey(rec.Target.Type, rec.Action, rec.Target.Property),
+		Event:         key,
+		Category:      CategoryOf(key),
 		Actor:         rec.Actor,
 		Target:        rec.Target,
 		Old:           nullable(rec.Old),
@@ -216,4 +225,18 @@ func nullable(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return trimmed
+}
+
+// nonZeroTime parses an RFC3339 time and drops Go's zero time
+// (0001-01-01T00:00:00Z), which Tailscale sends for "not set".
+func nonZeroTime(raw string) *time.Time {
+	if raw == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || t.IsZero() || t.Year() <= 1 {
+		return nil
+	}
+	t = t.UTC()
+	return &t
 }

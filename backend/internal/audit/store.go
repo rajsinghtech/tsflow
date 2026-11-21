@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 	tailnet_id       TEXT NOT NULL,
 	event_time       INTEGER NOT NULL,
 	event_group_id   TEXT NOT NULL DEFAULT '',
+	deferred_at      INTEGER NOT NULL DEFAULT 0,
 	origin           TEXT NOT NULL DEFAULT '',
 	action           TEXT NOT NULL,
 	event_key        TEXT NOT NULL,
@@ -156,11 +157,11 @@ func (s *Store) Insert(ctx context.Context, tailnetID, source string, events []E
 	}
 	defer tx.Rollback() //nolint:errcheck
 	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO audit_events (
-		tailnet_id, event_time, event_group_id, origin, action, event_key,
+		tailnet_id, event_time, event_group_id, deferred_at, origin, action, event_key,
 		actor_id, actor_type, actor_login, actor_display, actor_tags,
 		target_id, target_name, target_type, target_property, target_ephemeral,
 		old_json, new_json, action_details, error, raw_json, source, hash
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -173,7 +174,7 @@ func (s *Store) Insert(ctx context.Context, tailnetID, source string, events []E
 			tags = string(b)
 		}
 		res, err := stmt.ExecContext(ctx,
-			tailnetID, e.EventTime.UnixNano(), e.EventGroupID, e.Origin, e.Action, e.Event,
+			tailnetID, e.EventTime.UnixNano(), e.EventGroupID, timeNanos(e.DeferredAt), e.Origin, e.Action, e.Event,
 			e.Actor.ID, e.Actor.Type, e.Actor.LoginName, e.Actor.DisplayName, tags,
 			e.Target.ID, e.Target.Name, e.Target.Type, e.Target.Property, boolInt(e.Target.IsEphemeral),
 			nullString(e.Old), nullString(e.New), e.ActionDetails, e.Error, string(e.Raw), source, e.Hash,
@@ -304,11 +305,22 @@ type Filter struct {
 	Actions     []string
 	TargetTypes []string
 	Origins     []string
-	FailedOnly  bool
+	// Categories match catalog categories (logins, policy, devices...).
+	Categories []string
+	// ActorTypes match actor.type (USER, NODE, AUTOMATED_WORKER, ...).
+	ActorTypes []string
+	// EphemeralOnly keeps events whose target is an ephemeral node.
+	EphemeralOnly bool
+	FailedOnly    bool
 	// Query is free text matched against actor, target, event and details.
 	Query  string
 	Cursor string
 	Limit  int
+
+	// categoryKeys are the stored event names in Categories, filled by
+	// Store.resolve before where() runs.
+	categoryKeys     []string
+	categoryResolved bool
 }
 
 // Page is one page of events, newest first.
@@ -322,7 +334,7 @@ const (
 	MaxPageSize     = 1000
 )
 
-const eventColumns = `id, tailnet_id, event_time, event_group_id, origin, action, event_key,
+const eventColumns = `id, tailnet_id, event_time, event_group_id, deferred_at, origin, action, event_key,
 	actor_id, actor_type, actor_login, actor_display, actor_tags,
 	target_id, target_name, target_type, target_property, target_ephemeral,
 	old_json, new_json, action_details, error`
@@ -343,8 +355,8 @@ func (f Filter) where() (string, []any, error) {
 		for _, v := range vals {
 			if strings.HasPrefix(v, "~") {
 				like := "%" + escapeLike(strings.TrimPrefix(v, "~")) + "%"
-				ors = append(ors, `(actor_login LIKE ? ESCAPE '\' OR actor_display LIKE ? ESCAPE '\')`)
-				args = append(args, like, like)
+				ors = append(ors, `(actor_login LIKE ? ESCAPE '\' OR actor_display LIKE ? ESCAPE '\' OR actor_id = ? OR actor_type = ?)`)
+				args = append(args, like, like, strings.TrimPrefix(v, "~"), strings.TrimPrefix(v, "~"))
 				continue
 			}
 			ors = append(ors, "(actor_login = ? OR actor_id = ?)")
@@ -387,7 +399,7 @@ func (f Filter) where() (string, []any, error) {
 	for _, set := range []struct {
 		col  string
 		vals []string
-	}{{"action", f.Actions}, {"target_type", f.TargetTypes}, {"origin", f.Origins}} {
+	}{{"action", f.Actions}, {"target_type", f.TargetTypes}, {"origin", f.Origins}, {"actor_type", f.ActorTypes}} {
 		vals := clean(set.vals)
 		if len(vals) == 0 {
 			continue
@@ -398,7 +410,23 @@ func (f Filter) where() (string, []any, error) {
 		}
 	}
 	if f.FailedOnly {
-		clauses = append(clauses, "error != ''")
+		clauses = append(clauses, "(error != '' OR target_type = 'FAILED_REQUEST')")
+	}
+	if f.EphemeralOnly {
+		clauses = append(clauses, "target_ephemeral = 1")
+	}
+	if len(clean(f.Categories)) > 0 {
+		if !f.categoryResolved {
+			return "", nil, errors.New("audit: category filter used before resolve")
+		}
+		if len(f.categoryKeys) == 0 {
+			clauses = append(clauses, "0")
+		} else {
+			clauses = append(clauses, "event_key IN ("+placeholders(len(f.categoryKeys))+")")
+			for _, k := range f.categoryKeys {
+				args = append(args, k)
+			}
+		}
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like := "%" + escapeLike(q) + "%"
@@ -426,6 +454,9 @@ func (s *Store) Query(ctx context.Context, f Filter) (Page, error) {
 	}
 	if limit > MaxPageSize {
 		limit = MaxPageSize
+	}
+	if err := s.resolve(ctx, &f); err != nil {
+		return Page{}, err
 	}
 	where, args, err := f.where()
 	if err != nil {
@@ -497,10 +528,15 @@ type Count struct {
 
 // Facets are value counts for the filter menus.
 type Facets struct {
+	Categories  []Count `json:"categories"`
 	Events      []Count `json:"events"`
 	Actors      []Count `json:"actors"`
+	ActorTypes  []Count `json:"actorTypes"`
+	Targets     []Count `json:"targets"`
 	TargetTypes []Count `json:"targetTypes"`
 	Origins     []Count `json:"origins"`
+	Failed      int64   `json:"failed"`
+	Ephemeral   int64   `json:"ephemeral"`
 	Total       int64   `json:"total"`
 }
 
@@ -510,12 +546,18 @@ type Facets struct {
 // ignored.
 func (s *Store) Facets(ctx context.Context, f Filter) (Facets, error) {
 	f.Cursor, f.Limit = "", 0
+	if err := s.resolve(ctx, &f); err != nil {
+		return Facets{}, err
+	}
 	var out Facets
 	where, args, err := f.where()
 	if err != nil {
 		return out, err
 	}
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_events WHERE "+where, args...).Scan(&out.Total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN error != '' OR target_type = 'FAILED_REQUEST' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(target_ephemeral), 0)
+		FROM audit_events WHERE `+where, args...).Scan(&out.Total, &out.Failed, &out.Ephemeral); err != nil {
 		return out, err
 	}
 	facet := func(scope Filter, expr, label string, limit int) ([]Count, error) {
@@ -548,10 +590,35 @@ func (s *Store) Facets(ctx context.Context, f Filter) (Facets, error) {
 		clear(&g)
 		return g
 	}
+	// Categories ignore both the category and the event filter, so the
+	// category menu always shows every category in the window.
+	byEvent, err := facet(without(func(g *Filter) { g.Events, g.Categories, g.categoryKeys = nil, nil, nil }), "event_key", "event_key", 1000)
+	if err != nil {
+		return out, err
+	}
+	sums := map[Category]int64{}
+	for _, c := range byEvent {
+		sums[CategoryOf(c.Value)] += c.Count
+	}
+	out.Categories = []Count{}
+	for _, info := range Categories {
+		if n := sums[info.ID]; n > 0 {
+			out.Categories = append(out.Categories, Count{Value: string(info.ID), Label: info.Label, Count: n})
+		}
+	}
 	if out.Events, err = facet(without(func(g *Filter) { g.Events = nil }), "event_key", "event_key", 200); err != nil {
 		return out, err
 	}
-	if out.Actors, err = facet(without(func(g *Filter) { g.Actors = nil }), "CASE WHEN actor_login != '' THEN actor_login ELSE actor_type END", "MAX(actor_display)", 100); err != nil {
+	for i := range out.Events {
+		out.Events[i].Label = Describe(out.Events[i].Value).Label
+	}
+	if out.Actors, err = facet(without(func(g *Filter) { g.Actors = nil }), "CASE WHEN actor_login != '' THEN actor_login WHEN actor_id != '' THEN actor_id WHEN actor_display != '' THEN actor_display ELSE actor_type END", "MAX(actor_display)", 100); err != nil {
+		return out, err
+	}
+	if out.ActorTypes, err = facet(without(func(g *Filter) { g.ActorTypes = nil }), "actor_type", "actor_type", 20); err != nil {
+		return out, err
+	}
+	if out.Targets, err = facet(without(func(g *Filter) { g.Targets, g.TargetIDs = nil, nil }), "CASE WHEN target_id != '' THEN target_id ELSE target_type END", "MAX(target_name)", 50); err != nil {
 		return out, err
 	}
 	if out.TargetTypes, err = facet(without(func(g *Filter) { g.TargetTypes = nil }), "target_type", "target_type", 50); err != nil {
@@ -681,18 +748,32 @@ func (s *Store) UserSummary(ctx context.Context, tailnetID, login string) (UserS
 func scanEvents(rows *sql.Rows) ([]Event, error) {
 	var out []Event
 	for rows.Next() {
-		var e Event
-		var ns int64
-		var tags string
-		var eph int
-		var oldJSON, newJSON sql.NullString
-		if err := rows.Scan(&e.ID, &e.TailnetID, &ns, &e.EventGroupID, &e.Origin, &e.Action, &e.Event,
-			&e.Actor.ID, &e.Actor.Type, &e.Actor.LoginName, &e.Actor.DisplayName, &tags,
-			&e.Target.ID, &e.Target.Name, &e.Target.Type, &e.Target.Property, &eph,
-			&oldJSON, &newJSON, &e.ActionDetails, &e.Error); err != nil {
+		e, ptrs, finish := eventScanTargets()
+		if err := rows.Scan(ptrs...); err != nil {
 			return nil, err
 		}
+		finish()
+		out = append(out, *e)
+	}
+	return out, rows.Err()
+}
+
+// eventScanTargets returns scan destinations for eventColumns and a finish
+// func that fills in the derived fields after Scan.
+func eventScanTargets() (*Event, []any, func()) {
+	e := &Event{}
+	var ns, deferred int64
+	var tags string
+	var eph int
+	var oldJSON, newJSON sql.NullString
+	ptrs := []any{&e.ID, &e.TailnetID, &ns, &e.EventGroupID, &deferred, &e.Origin, &e.Action, &e.Event,
+		&e.Actor.ID, &e.Actor.Type, &e.Actor.LoginName, &e.Actor.DisplayName, &tags,
+		&e.Target.ID, &e.Target.Name, &e.Target.Type, &e.Target.Property, &eph,
+		&oldJSON, &newJSON, &e.ActionDetails, &e.Error}
+	finish := func() {
 		e.EventTime = time.Unix(0, ns).UTC()
+		e.DeferredAt = nsPtr(sql.NullInt64{Int64: deferred, Valid: true})
+		e.Category = CategoryOf(e.Event)
 		e.Target.IsEphemeral = eph != 0
 		if tags != "" {
 			_ = json.Unmarshal([]byte(tags), &e.Actor.Tags)
@@ -703,9 +784,8 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 		if newJSON.Valid {
 			e.New = json.RawMessage(newJSON.String)
 		}
-		out = append(out, e)
 	}
-	return out, rows.Err()
+	return e, ptrs, finish
 }
 
 // FormatCursor encodes a keyset position.
@@ -771,4 +851,11 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func timeNanos(t *time.Time) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.UnixNano()
 }

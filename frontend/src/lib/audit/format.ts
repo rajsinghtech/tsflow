@@ -1,42 +1,116 @@
-import type { AuditEvent } from './types';
+import type { AuditCatalog, AuditEvent } from './types';
 
-// Friendly names for the events people look for most. Anything else falls
-// back to a readable form of TARGET.ACTION.PROPERTY.
-const EVENT_LABELS: Record<string, string> = {
+// Friendly names for common events, used until the full catalog arrives from
+// /api/audit/catalog (which labels every event in Tailscale's API spec).
+// Anything unknown falls back to a readable form of TARGET.ACTION.PROPERTY.
+const DEFAULT_LABELS: Record<string, string> = {
 	'NODE.LOGIN': 'Device login',
 	'NODE.LOGOUT': 'Device logout',
 	'NODE.CREATE': 'Device added',
 	'NODE.DELETE': 'Device removed',
-	'NODE.UPDATE.APPROVAL': 'Device approved',
+	'NODE.APPROVE': 'Device approved',
 	'NODE.UPDATE.ACL_TAGS': 'Device tags changed',
-	'NODE.UPDATE.ADVERTISED_ROUTES': 'Advertised routes changed',
-	'NODE.UPDATE.APPROVED_ROUTES': 'Routes approved',
-	'NODE.UPDATE.KEY_EXPIRY_DISABLED': 'Key expiry changed',
-	'NODE.UPDATE.KEY_EXPIRY_TIME': 'Key expiry changed',
+	'NODE.UPDATE.ALLOWED_IPS': 'Subnet routes changed',
+	'NODE.UPDATE.KEY_EXPIRY_TIME': 'Device key expiry set',
+	'NODE.DISABLE.KEY_EXPIRY': 'Device key expiry disabled',
+	'NODE.ENABLE.KEY_EXPIRY': 'Device key expiry enabled',
 	'NODE.UPDATE.MACHINE_NAME': 'Device renamed',
-	'NODE.UPDATE.EXIT_NODE': 'Exit node changed',
 	'ADMIN_CONSOLE.LOGIN': 'Admin console login',
 	'ADMIN_CONSOLE.LOGOUT': 'Admin console logout',
 	'WEB_INTERFACE.LOGIN': 'Web interface login',
 	'TAILNET.UPDATE.ACL': 'Policy file changed',
-	'TAILNET.UPDATE.POLICY': 'Policy file changed',
 	'USER.CREATE': 'User added',
 	'USER.DELETE': 'User removed',
 	'USER.SUSPEND': 'User suspended',
 	'USER.RESTORE': 'User restored',
-	'USER.UPDATE.ROLE': 'User role changed',
+	'USER.UPDATE.USER_ROLE': 'User role changed',
 	'USER.APPROVE': 'User approved',
-	'API_KEY.CREATE': 'API key created',
-	'API_KEY.DELETE': 'API key revoked',
-	'AUTH_KEY.CREATE': 'Auth key created',
-	'AUTH_KEY.DELETE': 'Auth key revoked',
-	'OAUTH_CLIENT.CREATE': 'OAuth client created',
-	'OAUTH_CLIENT.DELETE': 'OAuth client deleted',
-	'INVITE.CREATE': 'Invite sent',
-	'TAILNET.UPDATE.DNS_NAMESERVERS': 'DNS nameservers changed',
-	'TAILNET.UPDATE.DNS_SEARCH_PATHS': 'DNS search paths changed',
-	'TAILNET.UPDATE.MAGIC_DNS': 'MagicDNS changed'
+	'API_KEY.CREATE': 'Key created',
+	'API_KEY.REVOKE': 'Key revoked',
+	'API_KEY.EXPIRED': 'Key expired',
+	'INVITE.CREATE': 'Invite created'
 };
+
+let labels: Record<string, string> = { ...DEFAULT_LABELS };
+let categoryLabels: Record<string, string> = {};
+let eventCategories: Record<string, string> = {};
+
+// setCatalog loads the server's event catalog so every event has a label
+// and a category.
+export function setCatalog(catalog: AuditCatalog | null | undefined) {
+	if (!catalog) return;
+	labels = { ...DEFAULT_LABELS };
+	eventCategories = {};
+	for (const entry of catalog.events ?? []) {
+		labels[entry.event] = entry.label;
+		eventCategories[entry.event] = entry.category;
+	}
+	categoryLabels = Object.fromEntries((catalog.categories ?? []).map((c) => [c.id, c.label]));
+}
+
+export function categoryLabel(id: string): string {
+	return categoryLabels[id] ?? titleCase(id);
+}
+
+export function eventCategory(key: string): string | undefined {
+	return eventCategories[key];
+}
+
+const ORIGIN_LABELS: Record<string, string> = {
+	ADMIN_CONSOLE: 'Admin console',
+	ADMIN_UI: 'Admin console',
+	CONFIG_API: 'API',
+	CONTROL: 'Tailscale (automatic)',
+	IDENTITY_PROVIDER: 'Identity provider',
+	NODE: 'Device',
+	SUPPORT_REQUEST: 'Support request',
+	STRIPE: 'Billing (Stripe)',
+	SECURITY_NOTIFICATION: 'Security notification',
+	LEGAL_NOTIFICATION: 'Legal notification',
+	BORDER0_API: 'Border0 API'
+};
+
+export function originLabel(origin: string | undefined): string {
+	if (!origin) return '—';
+	return ORIGIN_LABELS[origin.toUpperCase()] ?? titleCase(origin);
+}
+
+const ACTOR_TYPE_LABELS: Record<string, string> = {
+	USER: 'User',
+	NODE: 'Device',
+	AUTOMATED_WORKER: 'Tailscale service',
+	OAUTH_CLIENT: 'OAuth client',
+	SCIM: 'SCIM',
+	MULLVAD: 'Mullvad',
+	LOGSTREAM: 'Log streaming',
+	SECRET_SCANNER: 'Secret scanner',
+	PAM_CONNECTOR: 'PAM connector',
+	PAM_SERVICE_ACCOUNT: 'PAM service account'
+};
+
+export function actorTypeLabel(type: string | undefined): string {
+	if (!type) return '—';
+	return ACTOR_TYPE_LABELS[type.toUpperCase()] ?? titleCase(type);
+}
+
+const KEY_KIND_LABELS: Record<string, string> = {
+	auth_key: 'Auth key',
+	oauth_client: 'OAuth client',
+	federated_identity: 'Federated identity',
+	api_access_token: 'API access token'
+};
+
+export function keyKindLabel(kind: string | undefined): string {
+	if (!kind) return 'Key';
+	return KEY_KIND_LABELS[kind] ?? titleCase(kind);
+}
+
+// isZeroTime is true for Go's zero time, which Tailscale sends for unset
+// timestamps such as deferredAt or a device's first key expiry.
+export function isZeroTime(value: string | undefined | null): boolean {
+	if (!value) return true;
+	return value.startsWith('0001-01-01');
+}
 
 function titleCase(text: string): string {
 	return text
@@ -48,7 +122,7 @@ function titleCase(text: string): string {
 }
 
 export function eventLabel(key: string): string {
-	if (EVENT_LABELS[key]) return EVENT_LABELS[key];
+	if (labels[key]) return labels[key];
 	const [target = '', action = '', ...property] = key.split('.');
 	const parts = [titleCase(target), action.toLowerCase().replace(/_/g, ' ')];
 	if (property.length) parts.push(property.join('.').toLowerCase().replace(/_/g, ' '));
@@ -58,12 +132,12 @@ export function eventLabel(key: string): string {
 export type EventTone = 'login' | 'create' | 'delete' | 'update' | 'error' | 'other';
 
 export function eventTone(event: Pick<AuditEvent, 'event' | 'action' | 'error'>): EventTone {
-	if (event.error) return 'error';
+	if (event.error || event.event.startsWith('FAILED_REQUEST')) return 'error';
 	const action = event.action.toUpperCase();
 	if (action === 'LOGIN' || action === 'LOGOUT') return 'login';
-	if (action === 'CREATE' || action === 'APPROVE' || action === 'RESTORE') return 'create';
-	if (action === 'DELETE' || action === 'SUSPEND' || action === 'REVOKE') return 'delete';
-	if (action === 'UPDATE') return 'update';
+	if (['CREATE', 'APPROVE', 'RESTORE', 'ACCEPT', 'JOIN', 'INVITE', 'ENABLE'].includes(action)) return 'create';
+	if (['DELETE', 'SUSPEND', 'REVOKE', 'EXPIRED', 'CANCEL', 'LEAVE', 'DISABLE'].includes(action)) return 'delete';
+	if (action === 'UPDATE' || action === 'PUSH_USER' || action === 'PUSH_GROUP') return 'update';
 	return 'other';
 }
 
@@ -98,7 +172,7 @@ export function shortHost(name: string): string {
 // new values are the whole file as text.
 export function isPolicyEvent(event: Pick<AuditEvent, 'event' | 'target'>): boolean {
 	const prop = (event.target?.property ?? '').toUpperCase();
-	return event.event.startsWith('TAILNET.UPDATE') && (prop === 'ACL' || prop === 'POLICY' || prop === 'POLICY_FILE');
+	return event.event.startsWith('TAILNET.UPDATE') && prop === 'ACL';
 }
 
 // valueText renders an old or new value for display. Strings show as is so
