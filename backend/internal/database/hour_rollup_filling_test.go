@@ -111,6 +111,7 @@ func TestGraphReadMatchesMinuteScanWithFillingHour(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	rollThrough(t, store, DefaultTailnetID, base+140*60)
 	mark, err := readHourMark(ctx, store.db, DefaultTailnetID)
 	if err != nil {
 		t.Fatal(err)

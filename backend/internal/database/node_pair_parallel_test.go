@@ -343,6 +343,7 @@ func TestParallelReadAcrossAConcurrentCommit(t *testing.T) {
 		}); err != nil {
 			t.Error(err)
 		}
+		rollThrough(t, store, DefaultTailnetID, mark+6*minuteSeconds)
 	}
 	store.closedReadHook = pollHook
 	// With the open part on the planning snapshot, the poll is not seen.

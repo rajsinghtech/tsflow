@@ -34,6 +34,19 @@ func (s *SQLiteStore) GetPollState(ctx context.Context, tailnetID string) (*Poll
 }
 
 func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, lastPollEnd time.Time) error {
+	if err := s.updatePollCursor(ctx, tailnetID, lastPollEnd); err != nil {
+		return err
+	}
+	// Object-store polls commit each object without a poll end, then move the
+	// cursor once the batch has been examined. Rolling complete hours here
+	// brings that tailnet's pairs up to the same cursor the API poll uses.
+	if !lastPollEnd.IsZero() {
+		return s.rollClosedHours(ctx, tailnetID, lastPollEnd.UTC().Unix())
+	}
+	return nil
+}
+
+func (s *SQLiteStore) updatePollCursor(ctx context.Context, tailnetID string, lastPollEnd time.Time) error {
 	if err := checkTailnetID(tailnetID); err != nil {
 		return err
 	}
@@ -47,14 +60,6 @@ func (s *SQLiteStore) UpdatePollState(ctx context.Context, tailnetID string, las
 	defer tx.Rollback()
 	if err := upsertPollCursor(ctx, tx, tailnetID, lastPollEnd); err != nil {
 		return err
-	}
-	// Object-store polls commit each object without a poll end, then move the
-	// cursor once the batch has been examined. Closing minutes here rolls that
-	// tailnet's pairs up to the same cursor the API poll uses.
-	if !lastPollEnd.IsZero() {
-		if err := rollClosedMinutes(ctx, tx, tailnetID, lastPollEnd.UTC().Unix()); err != nil {
-			return err
-		}
 	}
 	committing := time.Now()
 	if err := s.commitWrite(tx, tailnetID); err != nil {
@@ -339,6 +344,13 @@ func (s *SQLiteStore) GetDataRange(ctx context.Context, tailnetID string) (*Data
 	return readDataRange(ctx, tx, tailnetID)
 }
 
+// cleanupSliceSeconds is how much minute data one retention transaction
+// deletes. Retention used to remove everything older than the cutoff in one
+// transaction, which on a large tailnet held the writer for minutes and
+// stalled ingest. Slices keep each hold short, and a restart resumes where
+// the last slice ended.
+var cleanupSliceSeconds int64 = 300
+
 // Cleanup deletes rows older than retention from all four data tables, and
 // drops ingest bookkeeping and node metadata that retention no longer needs.
 func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention time.Duration) (int64, error) {
@@ -348,18 +360,29 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 	if retention <= 0 {
 		return 0, nil
 	}
+	cutoff := time.Now().UTC().Unix() - int64(retention.Seconds())
+	var total int64
+	for {
+		n, done, err := s.cleanupSlice(ctx, tailnetID, cutoff)
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if done {
+			break
+		}
+	}
 
 	unlock := s.lockTailnet(tailnetID)
 	defer unlock()
-
 	tx, err := s.beginWrite(ctx, tailnetID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin cleanup transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	cutoff := time.Now().UTC().Unix() - int64(retention.Seconds())
-	var total int64
+	// Anything the slices left behind (rows in the small tables, or rows
+	// written while the slices ran).
 	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"} {
 		result, err := tx.ExecContext(ctx,
 			fmt.Sprintf("DELETE FROM %s WHERE tailnet_id = ? AND bucket < ?", table), tailnetID, cutoff,
@@ -424,6 +447,51 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, tailnetID string, retention t
 	// rebuilt that hour.
 	s.hourCache.invalidateBelow(tailnetID, (cutoff/hourSeconds)*hourSeconds+hourSeconds)
 	return total, nil
+}
+
+// cleanupSlice deletes the oldest slice of minute rows before cutoff, in its
+// own transaction. done is true once nothing older than cutoff is left in
+// node_pairs.
+func (s *SQLiteStore) cleanupSlice(ctx context.Context, tailnetID string, cutoff int64) (int64, bool, error) {
+	unlock := s.lockTailnet(tailnetID)
+	defer unlock()
+	tx, err := s.beginWrite(ctx, tailnetID)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to begin cleanup transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var oldest sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MIN(bucket) FROM node_pairs WHERE tailnet_id = ? AND bucket < ?`, tailnetID, cutoff,
+	).Scan(&oldest); err != nil {
+		return 0, false, fmt.Errorf("failed to find oldest node pair: %w", err)
+	}
+	if !oldest.Valid {
+		return 0, true, nil
+	}
+	upTo := oldest.Int64 + cleanupSliceSeconds
+	if upTo > cutoff {
+		upTo = cutoff
+	}
+	var total int64
+	for _, table := range []string{"node_pairs", "bandwidth", "bandwidth_by_node", "traffic_stats"} {
+		result, err := tx.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE tailnet_id = ? AND bucket < ?", table), tailnetID, upTo,
+		)
+		if err != nil {
+			return 0, false, fmt.Errorf("failed to cleanup %s: %w", table, err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return 0, false, fmt.Errorf("failed to count cleanup rows for %s: %w", table, err)
+		}
+		total += n
+	}
+	if err := s.commitWrite(tx, tailnetID); err != nil {
+		return 0, false, fmt.Errorf("failed to commit cleanup: %w", err)
+	}
+	return total, upTo >= cutoff, nil
 }
 
 // GetStats returns row counts, database size, and data range.

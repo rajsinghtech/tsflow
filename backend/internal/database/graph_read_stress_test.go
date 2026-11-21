@@ -49,6 +49,12 @@ func runGraphReadStress(t *testing.T, cacheBytes int64) {
 	prev := maxClosedHourReaders
 	maxClosedHourReaders = 4
 	t.Cleanup(func() { maxClosedHourReaders = prev })
+	// This test compares every read with a state recorded after a whole
+	// write. Sliced retention passes through states in between, so it runs
+	// as one slice here; TestCleanupSlicesMatchOnePass covers slicing.
+	prevSlice := cleanupSliceSeconds
+	cleanupSliceSeconds = 1 << 40
+	t.Cleanup(func() { cleanupSliceSeconds = prevSlice })
 	ctx := context.Background()
 	store, mark := buildManyHourStore(t)
 	store.SetClosedHourCacheBytes(cacheBytes)
