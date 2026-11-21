@@ -434,6 +434,10 @@ Physical traffic is left out unless `trafficTypes` includes `physical`. A DERP a
 
 `GET /api/analytics/me` is the signed-in viewer's devices, traffic, per-device timelines, top peers, and new connections. The login is the request identity from WhoIs or the trusted proxy headers. No request parameter sets it. `me=1` on the talker, pair, new-pair, and device-timeline routes uses that same login and compares it in full, including a tagged device's creator login. On the talker and pair routes, `q` then narrows the viewer's own devices. Devices are listed busiest first. Top peers leave out the viewer's own devices and peers with no bytes. New connections leave out a device talking to itself, but keep one between two of the viewer's devices. The response `metadata` carries the same `lookbackStart`, `dataStart`, and `lookbackComplete` fields as `/api/analytics/new-pairs` for `newPairs`. Without a login the route is unauthorized, and the Me tab is not shown. When a login is known, `/` opens Me unless the address has query parameters or the viewer already chose another tab. That choice is stored in `tsflow-last-tab`.
 
+### Configuration audit logs
+
+Off by default. `TSFLOW_AUDIT_ENABLED=true` keeps a searchable copy of Tailscale's configuration audit log (logins, device approvals, tag and route changes, policy file edits, keys, settings) from a log-streaming bucket or the API. It adds an Audit tab with category filters, an activity chart, policy file diffs, key and settings overviews, device summaries, CSV and NDJSON export, a per-user page that answers "when did this person last log in?", links between audit events and flows, and the MCP tools `audit_search`, `audit_overview`, `device_audit` and `user_last_login`. Only logins and groups in `TSFLOW_AUDIT_VIEWERS` can read it when access control is on. See [docs/audit-logs.md](docs/audit-logs.md).
+
 ### MCP server
 
 `TSFLOW_MCP_ENABLED=true` serves a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` on the same HTTP server as the UI, so Claude, Cursor and other MCP clients can ask questions about your flow data. The route is absent when the variable is unset. It uses streamable HTTP and the same access middleware as `/api`: trusted-proxy and WhoIs identity, then the capability or group grant and its optional tailnet allowlist. A viewer cannot query a tailnet outside that allowlist. There is no separate MCP credential.
@@ -530,6 +534,10 @@ Claude's "Add custom connector" setting connects from Anthropic's cloud rather t
 | `device_timeline` | One device's bytes over time, split by traffic type |
 | `new_connections` | Pairs first seen in the window and absent from the lookback before it |
 | `stats_overview` | Network-wide protocol, traffic-type, flow, and pair totals |
+| `audit_search` | Configuration audit log search (only with audit logs on and for audit viewers) |
+| `audit_overview` | Audit totals by category, busiest times, policy edits, keys and settings (same condition) |
+| `device_audit` | One device's audit summary and recent events (same condition) |
+| `user_last_login` | A user's last device, console and web logins (same condition) |
 
 Every tool is marked read-only and reads stored rollups. `start` and `end` take RFC3339 (`2026-01-02T15:04:05Z`) or a time relative to now (`now-2h`, `2h ago`, `last 24h`, `last week`). Windows default to the last hour and stop at 7 days. `lookback` takes durations like `24h`, `3d`, or `1w`, up to 7 days. Lists default to 20 rows, stop at 100 per page, and page with `offset` up to 1000. Physical transport is excluded unless `trafficTypes` includes `physical`. DERP relays are labeled `DERP relay`. Pass `tailnet` when more than one tailnet is configured.
 

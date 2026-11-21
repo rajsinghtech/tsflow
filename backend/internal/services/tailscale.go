@@ -881,3 +881,17 @@ func (ts *TailscaleService) GetStaticRecords(ctx context.Context) (map[string]St
 
 	return response.Records, nil
 }
+
+// GetConfigurationAuditLogs returns the raw configuration audit log
+// response for [start, end]. It needs the logs:configuration:read scope.
+// The API has no paging, so callers should keep windows short (a day).
+func (ts *TailscaleService) GetConfigurationAuditLogs(ctx context.Context, start, end time.Time) ([]byte, error) {
+	if ts == nil {
+		return nil, fmt.Errorf("tailscale service is not configured")
+	}
+	endpoint := fmt.Sprintf("/tailnet/%s/logging/configuration?start=%s&end=%s",
+		url.PathEscape(ts.tailnet),
+		url.QueryEscape(start.UTC().Format(time.RFC3339Nano)),
+		url.QueryEscape(end.UTC().Format(time.RFC3339Nano)))
+	return ts.makeRequest(ctx, endpoint)
+}

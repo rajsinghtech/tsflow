@@ -10,12 +10,17 @@ export interface ViewerIdentity {
 	tailnets?: string[];
 	autoscope?: string;
 	deviceScope?: DeviceScope | null;
+	// audit is true when this viewer may read configuration audit logs.
+	audit?: boolean;
 }
 
 export const viewerStore = writable<ViewerIdentity | null>(null);
 // viewerReady is true after the whoami lookup finishes, including when
 // there is no login. The traffic page waits for it before choosing a landing tab.
 export const viewerReady = writable(false);
+// auditAllowed is set from whoami. It is separate from viewerStore because an
+// open server has no login but may still have audit logs turned on.
+export const auditAllowed = writable(false);
 
 // whenViewerReady resolves once whoami has answered, or after timeoutMs so a
 // slow lookup cannot hold up the page that waits on it.
@@ -42,6 +47,7 @@ export async function loadViewerIdentity(): Promise<void> {
 		const response = await fetch('/api/whoami');
 		if (!response.ok) return;
 		const data = (await response.json()) as ViewerIdentity;
+		auditAllowed.set(data.audit === true);
 		if (data.login || data.name || data.node) {
 			viewerStore.set(data);
 		} else {

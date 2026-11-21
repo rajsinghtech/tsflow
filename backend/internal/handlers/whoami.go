@@ -16,6 +16,8 @@ type whoAmIResponse struct {
 	Tailnets    []string            `json:"tailnets,omitempty"`
 	Autoscope   string              `json:"autoscope"`
 	DeviceScope *access.DeviceScope `json:"deviceScope,omitempty"`
+	// Audit is true when this viewer may open the audit log pages.
+	Audit bool `json:"audit,omitempty"`
 }
 
 // WhoAmI reports the viewer when access control identified one.
@@ -24,7 +26,7 @@ type whoAmIResponse struct {
 func (h *Handlers) WhoAmI(c *gin.Context) {
 	ident, ok := access.FromGin(c)
 	if !ok {
-		c.JSON(http.StatusOK, whoAmIResponse{Autoscope: config.AccessAutoscopeOff})
+		c.JSON(http.StatusOK, whoAmIResponse{Autoscope: config.AccessAutoscopeOff, Audit: h.AuditAllowed(false, access.Identity{})})
 		return
 	}
 	autoscope := ident.Autoscope
@@ -39,5 +41,6 @@ func (h *Handlers) WhoAmI(c *gin.Context) {
 		Tailnets:    ident.Allow.TailnetIDs(),
 		Autoscope:   autoscope,
 		DeviceScope: ident.DeviceScope,
+		Audit:       h.AuditAllowed(true, ident),
 	})
 }

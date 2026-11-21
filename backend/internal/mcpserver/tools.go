@@ -415,4 +415,5 @@ func (s *Service) addTools(server *mcp.Server, v Viewer) {
 		out, err := s.statsOverview(ctx, v, in)
 		return nil, out, err
 	})
+	s.addAuditTools(server, v)
 }

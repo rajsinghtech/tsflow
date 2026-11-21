@@ -51,6 +51,9 @@ type TailnetSpec struct {
 	ObjectStoreAuth      string
 	RoleARN              string
 	WebIdentityTokenFile string
+	// Audit is the optional audit block from the tailnets file. Nil means
+	// the entry has none. Use ResolveAudit for the effective source.
+	Audit *AuditSource
 }
 
 // ServiceConfig returns the Tailscale client settings for this tailnet.
@@ -198,6 +201,7 @@ type tailnetFileEntry struct {
 	RoleARN               string
 	WebIdentityTokenFile  string
 	Auth                  *tailnetAuthBlock
+	Audit                 *AuditSource
 }
 
 type tailnetAuthBlock struct {
@@ -445,6 +449,7 @@ func (e tailnetFileEntry) finish(where string, spec TailnetSpec, global *Config)
 	spec.ObjectStoreAuth = strings.ToLower(strings.TrimSpace(e.ObjectStoreAuth))
 	spec.RoleARN = strings.TrimSpace(e.RoleARN)
 	spec.WebIdentityTokenFile = strings.TrimSpace(e.WebIdentityTokenFile)
+	spec.Audit = e.Audit
 	if err := validateTailnetFlow(where, spec, global); err != nil {
 		return TailnetSpec{}, err
 	}
@@ -513,6 +518,7 @@ var tailnetEntryFields = map[string]struct{}{
 	"role_arn":                 {},
 	"web_identity_token_file":  {},
 	"auth":                     {},
+	"audit":                    {},
 }
 
 var tailnetAuthFields = map[string]struct{}{
@@ -691,6 +697,13 @@ func entryFromMap(fields map[string]any, index int) (tailnetFileEntry, error) {
 			return tailnetFileEntry{}, err
 		}
 		entry.Auth = &block
+	}
+	if raw, ok := fields["audit"]; ok && raw != nil {
+		block, err := parseAuditBlock(raw, where)
+		if err != nil {
+			return tailnetFileEntry{}, err
+		}
+		entry.Audit = block
 	}
 	return entry, nil
 }

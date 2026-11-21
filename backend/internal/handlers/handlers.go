@@ -71,6 +71,8 @@ type Handlers struct {
 	store            database.Store
 	poller           *services.Poller
 	registry         *services.Registry
+	audit            *services.AuditManager
+	auditGate        AuditGate
 	startTime        time.Time
 	version          string
 }
